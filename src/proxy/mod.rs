@@ -249,9 +249,14 @@ async fn proxy_handler(
 
     // Parse request for tool results if this is a messages endpoint
     if is_messages_endpoint && method == "POST" {
-        if let Ok(events) = state.parser.parse_request(&body_bytes).await {
-            for event in events {
-                state.send_event(event).await;
+        match state.parser.parse_request(&body_bytes).await {
+            Ok(events) => {
+                for event in events {
+                    state.send_event(event).await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to parse request for tool results: {}", e);
             }
         }
     }
@@ -375,6 +380,8 @@ async fn handle_streaming_response(
         let mut accumulated = Vec::new();
         let mut byte_stream = response.bytes_stream();
         let mut total_bytes = 0usize;
+        // Buffer for incomplete SSE lines across chunks
+        let mut line_buffer = String::new();
 
         // Stream chunks to client while accumulating
         while let Some(chunk_result) = byte_stream.next().await {
@@ -382,6 +389,23 @@ async fn handle_streaming_response(
                 Ok(chunk) => {
                     total_bytes += chunk.len();
                     accumulated.extend_from_slice(&chunk);
+
+                    // CRITICAL: Register tool_use IDs immediately as we see them
+                    // This fixes the race condition where the next request arrives
+                    // before we finish parsing the stream
+                    if is_messages_endpoint {
+                        if let Ok(chunk_str) = std::str::from_utf8(&chunk) {
+                            line_buffer.push_str(chunk_str);
+                            // Process complete lines
+                            while let Some(newline_pos) = line_buffer.find('\n') {
+                                let line = line_buffer[..newline_pos].trim();
+                                if let Some(tool_info) = extract_tool_use_from_sse_line(line) {
+                                    parser.register_pending_tool(tool_info.0, tool_info.1).await;
+                                }
+                                line_buffer = line_buffer[newline_pos + 1..].to_string();
+                            }
+                        }
+                    }
 
                     // Forward chunk to client immediately
                     if tx.send(Ok(chunk)).await.is_err() {
@@ -393,6 +417,12 @@ async fn handle_streaming_response(
                     tracing::error!("Error reading stream chunk: {}", e);
                     break;
                 }
+            }
+        }
+        // Process any remaining data in line buffer
+        if is_messages_endpoint && !line_buffer.is_empty() {
+            if let Some(tool_info) = extract_tool_use_from_sse_line(line_buffer.trim()) {
+                parser.register_pending_tool(tool_info.0, tool_info.1).await;
             }
         }
 
@@ -605,6 +635,43 @@ fn extract_response_headers(headers: &reqwest::header::HeaderMap) -> CapturedHea
     }
 
     captured
+}
+
+/// Extract tool_use ID and name from an SSE data line if it's a content_block_start for tool_use
+///
+/// This is used during streaming to register tool_use IDs immediately, before the stream
+/// completes. This prevents a race condition where the next request (with tool_result)
+/// arrives before we've finished parsing the response.
+///
+/// Returns Some((id, name)) if this line starts a tool_use block, None otherwise.
+fn extract_tool_use_from_sse_line(line: &str) -> Option<(String, String)> {
+    // Only process "data:" lines
+    let json_str = line.strip_prefix("data:")?.trim();
+    if json_str.is_empty() || json_str == "[DONE]" {
+        return None;
+    }
+
+    // Parse the JSON
+    let data: serde_json::Value = serde_json::from_str(json_str).ok()?;
+
+    // Check if this is a content_block_start event
+    let event_type = data.get("type")?.as_str()?;
+    if event_type != "content_block_start" {
+        return None;
+    }
+
+    // Check if the content_block is a tool_use
+    let content_block = data.get("content_block")?;
+    let block_type = content_block.get("type")?.as_str()?;
+    if block_type != "tool_use" {
+        return None;
+    }
+
+    // Extract ID and name
+    let id = content_block.get("id")?.as_str()?.to_string();
+    let name = content_block.get("name")?.as_str()?.to_string();
+
+    Some((id, name))
 }
 
 /// Errors that can occur during proxying

@@ -16,8 +16,9 @@ pub struct ApiRequest {
     pub messages: Vec<Message>,
 
     // Optional fields that affect behavior
+    // Note: system can be a string OR an array of content blocks
     #[serde(default)]
-    pub system: Option<String>,
+    pub system: Option<serde_json::Value>,
     #[serde(default)]
     pub temperature: Option<f32>,
     #[serde(default)]

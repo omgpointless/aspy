@@ -34,26 +34,60 @@ impl Parser {
         }
     }
 
+    /// Register a tool_use ID for correlation with future tool_results
+    ///
+    /// This is called during SSE streaming when we see a content_block_start
+    /// with type "tool_use". We register immediately so the pending_calls map
+    /// is populated before the next request arrives with the tool_result.
+    ///
+    /// This fixes a race condition where the streaming response task hadn't
+    /// finished parsing before Claude Code sent the next request.
+    pub async fn register_pending_tool(&self, id: String, name: String) {
+        tracing::debug!("REGISTERING pending tool: {} ({})", &id, &name);
+        let mut pending = self.pending_calls.lock().await;
+        pending.insert(id, (name, Utc::now()));
+        tracing::debug!("pending_calls now has {} entries", pending.len());
+    }
+
     /// Parse an API request looking for tool results
     ///
     /// Tool results represent Claude Code's responses to previous tool calls.
     /// We correlate them with the original call to calculate duration.
     pub async fn parse_request(&self, body: &[u8]) -> Result<Vec<ProxyEvent>> {
-        let request: ApiRequest =
-            serde_json::from_slice(body).context("Failed to parse API request")?;
+        let request: ApiRequest = match serde_json::from_slice(body) {
+            Ok(req) => req,
+            Err(e) => {
+                // Log the actual error for debugging
+                tracing::debug!("Serde error: {} at line {} col {}", e, e.line(), e.column());
+                return Err(anyhow::anyhow!("Failed to parse API request: {}", e));
+            }
+        };
 
         let mut events = Vec::new();
         let tool_results = request.tool_results();
 
         let mut pending = self.pending_calls.lock().await;
 
+        tracing::debug!(
+            "parse_request: found {} tool_results, pending_calls has {} entries",
+            tool_results.len(),
+            pending.len()
+        );
+
         for (tool_use_id, content, is_error) in tool_results {
+            tracing::debug!("Looking for tool_use_id {} in pending_calls", &tool_use_id);
             // Look up the original tool call to get its name and start time
             if let Some((tool_name, start_time)) = pending.remove(&tool_use_id) {
                 let duration = Utc::now()
                     .signed_duration_since(start_time)
                     .to_std()
                     .unwrap_or_default();
+
+                tracing::debug!(
+                    "MATCH! Emitting ToolResult for {} ({})",
+                    &tool_use_id,
+                    &tool_name
+                );
 
                 events.push(ProxyEvent::ToolResult {
                     id: tool_use_id,
@@ -63,6 +97,11 @@ impl Parser {
                     duration,
                     success: !is_error,
                 });
+            } else {
+                tracing::debug!(
+                    "NO MATCH for tool_use_id {} - not in pending_calls",
+                    &tool_use_id
+                );
             }
         }
 
@@ -448,6 +487,56 @@ mod tests {
                 assert_eq!(tool_name, "Read");
             }
             _ => panic!("Expected ToolCall event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_tool_result_with_cache_control() {
+        // Test that tool_result blocks with cache_control field parse correctly
+        let parser = Parser::new();
+
+        // First, register a pending tool call (simulating what happens during streaming)
+        parser
+            .register_pending_tool(
+                "toolu_01ASGBmB2GxUaBj6UsJ9fhZE".to_string(),
+                "Glob".to_string(),
+            )
+            .await;
+
+        // This is the actual structure from Claude Code logs
+        let request_json = r#"{
+            "model": "claude-3-opus-20240229",
+            "max_tokens": 8096,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_01ASGBmB2GxUaBj6UsJ9fhZE",
+                            "cache_control": {"type": "ephemeral"},
+                            "content": "file1.txt\nfile2.txt"
+                        }
+                    ]
+                }
+            ]
+        }"#;
+
+        let events = parser.parse_request(request_json.as_bytes()).await.unwrap();
+
+        assert_eq!(events.len(), 1, "Expected 1 ToolResult event");
+        match &events[0] {
+            ProxyEvent::ToolResult {
+                id,
+                tool_name,
+                success,
+                ..
+            } => {
+                assert_eq!(id, "toolu_01ASGBmB2GxUaBj6UsJ9fhZE");
+                assert_eq!(tool_name, "Glob");
+                assert!(*success);
+            }
+            other => panic!("Expected ToolResult event, got {:?}", other),
         }
     }
 }

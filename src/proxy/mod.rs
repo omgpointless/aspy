@@ -3,6 +3,10 @@
 // This module implements a transparent HTTP proxy using Axum. It intercepts
 // requests to the Anthropic API, forwards them unchanged, and emits events
 // based on the request/response content.
+//
+// STREAMING: For SSE responses, we stream chunks directly to the client
+// while accumulating a copy for parsing. This ensures low latency for
+// Claude Code while maintaining full observability.
 
 pub mod interceptor;
 
@@ -19,11 +23,18 @@ use axum::{
     routing::any,
     Router,
 };
+use bytes::Bytes;
 use chrono::Utc;
+use futures::StreamExt;
 use sha2::{Digest, Sha256};
+use std::convert::Infallible;
 use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+
+/// Maximum request body size (50MB) - prevents DoS via huge uploads
+const MAX_REQUEST_BODY_SIZE: usize = 50 * 1024 * 1024;
 
 /// Shared state for the proxy server
 #[derive(Clone)]
@@ -80,8 +91,6 @@ pub async fn start_proxy(
     tracing::info!("Proxy listening on {}", bind_addr);
 
     // Start serving requests with graceful shutdown
-    // When shutdown_rx receives a signal, the server will stop accepting new connections
-    // and gracefully finish processing existing requests
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             shutdown_rx.await.ok();
@@ -102,6 +111,15 @@ impl ProxyState {
     }
 }
 
+/// Check if response is SSE based on content-type header
+fn is_sse_response(headers: &reqwest::header::HeaderMap) -> bool {
+    headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.contains("text/event-stream"))
+        .unwrap_or(false)
+}
+
 /// Parse SSE response into a JSON representation for display
 fn parse_sse_to_json(body: &str) -> Option<serde_json::Value> {
     use serde_json::json;
@@ -111,7 +129,6 @@ fn parse_sse_to_json(body: &str) -> Option<serde_json::Value> {
     let mut stop_reason: Option<String> = None;
     let mut usage_data: Option<serde_json::Value> = None;
 
-    // Parse SSE line by line
     for line in body.lines() {
         let line = line.trim();
 
@@ -142,7 +159,6 @@ fn parse_sse_to_json(body: &str) -> Option<serde_json::Value> {
                     }
                     "content_block_delta" => {
                         if let Some(delta) = data.get("delta") {
-                            // Append text deltas to the last content block
                             if let Some(last_block) = content_blocks.last_mut() {
                                 if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
                                     if let Some(existing_text) = last_block.get_mut("text") {
@@ -173,7 +189,6 @@ fn parse_sse_to_json(body: &str) -> Option<serde_json::Value> {
         }
     }
 
-    // Build a JSON representation similar to non-streaming response
     if !content_blocks.is_empty() || !model.is_empty() {
         Some(json!({
             "model": model,
@@ -188,6 +203,11 @@ fn parse_sse_to_json(body: &str) -> Option<serde_json::Value> {
 }
 
 /// Main proxy handler - intercepts and forwards all requests
+///
+/// For SSE (streaming) responses: Streams chunks directly to client while
+/// accumulating for parsing. This gives Claude Code low-latency token delivery.
+///
+/// For JSON responses: Buffers the (small) response for parsing before forwarding.
 async fn proxy_handler(
     State(state): State<ProxyState>,
     req: Request<Body>,
@@ -199,16 +219,17 @@ async fn proxy_handler(
     let method = req.method().clone();
     let uri = req.uri().clone();
     let headers = req.headers().clone();
+    let is_messages_endpoint = uri.path().contains("/messages");
 
     tracing::debug!("Proxying {} {}", method, uri);
 
-    // Read the request body
-    let body_bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
+    // Read the request body (with size limit)
+    let body_bytes = axum::body::to_bytes(req.into_body(), MAX_REQUEST_BODY_SIZE)
         .await
-        .map_err(|e| ProxyError::BodyRead(e.to_string()))?;
+        .map_err(|e| ProxyError::BodyRead(format!("Failed to read request body: {}", e)))?;
 
     // Try to parse request body as JSON for display
-    let request_body = if uri.path().contains("/messages") {
+    let request_body = if is_messages_endpoint {
         serde_json::from_slice::<serde_json::Value>(&body_bytes).ok()
     } else {
         None
@@ -227,7 +248,7 @@ async fn proxy_handler(
         .await;
 
     // Parse request for tool results if this is a messages endpoint
-    if uri.path().contains("/messages") && method == "POST" {
+    if is_messages_endpoint && method == "POST" {
         if let Ok(events) = state.parser.parse_request(&body_bytes).await {
             for event in events {
                 state.send_event(event).await;
@@ -245,24 +266,18 @@ async fn proxy_handler(
     };
 
     // Build the forwarded request
-    // Convert axum's Method (http v1.0) to reqwest's Method (http v0.2) via string
-    let forward_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
-        .map_err(|e| ProxyError::Upstream(format!("Invalid HTTP method: {}", e)))?;
-
+    // With reqwest 0.12, Method types align with axum (both use http 1.0 crate)
     let mut forward_req = state
         .client
-        .request(forward_method, &forward_url)
+        .request(method, &forward_url)
         .body(body_bytes.to_vec());
 
-    // Copy relevant headers
-    // Convert from axum's http v1.0 types to reqwest's http v0.2 types
+    // Copy relevant headers (types align between axum and reqwest 0.12)
     for (key, value) in headers.iter() {
-        // Skip hop-by-hop headers
         if key == "host" || key == "connection" || key == "transfer-encoding" {
             continue;
         }
-        // Convert header value from bytes slice to Vec<u8> for reqwest
-        forward_req = forward_req.header(key.as_str(), value.as_bytes().to_vec());
+        forward_req = forward_req.header(key, value);
     }
 
     // Send the request to Anthropic
@@ -273,6 +288,193 @@ async fn proxy_handler(
 
     let status = response.status();
     let response_headers = response.headers().clone();
+
+    // Extract headers before consuming response
+    let req_headers = extract_request_headers(&headers);
+    let resp_headers = extract_response_headers(&response_headers);
+    let combined_headers = merge_headers(req_headers, resp_headers);
+
+    // Emit headers captured event early (we have them now)
+    state
+        .send_event(ProxyEvent::HeadersCaptured {
+            request_id: request_id.clone(),
+            timestamp: Utc::now(),
+            headers: combined_headers.clone(),
+        })
+        .await;
+
+    // Emit rate limit update if available
+    if combined_headers.has_rate_limits() {
+        state
+            .send_event(ProxyEvent::RateLimitUpdate {
+                timestamp: Utc::now(),
+                requests_remaining: combined_headers.requests_remaining,
+                requests_limit: combined_headers.requests_limit,
+                tokens_remaining: combined_headers.tokens_remaining,
+                tokens_limit: combined_headers.tokens_limit,
+                reset_time: combined_headers
+                    .requests_reset
+                    .clone()
+                    .or(combined_headers.tokens_reset.clone()),
+            })
+            .await;
+    }
+
+    // Decide: streaming (SSE) or buffered (JSON) response handling
+    if is_sse_response(&response_headers) && status.is_success() {
+        // STREAMING PATH: Forward chunks immediately while accumulating for parsing
+        tracing::debug!("Handling SSE streaming response");
+        handle_streaming_response(
+            response,
+            status,
+            response_headers,
+            start,
+            request_id,
+            is_messages_endpoint,
+            state,
+        )
+        .await
+    } else {
+        // BUFFERED PATH: Small JSON responses can be buffered
+        tracing::debug!("Handling buffered (non-streaming) response");
+        handle_buffered_response(
+            response,
+            status,
+            response_headers,
+            start,
+            request_id,
+            is_messages_endpoint,
+            state,
+        )
+        .await
+    }
+}
+
+/// Handle SSE streaming responses - forward chunks immediately while accumulating
+async fn handle_streaming_response(
+    response: reqwest::Response,
+    status: reqwest::StatusCode,
+    response_headers: reqwest::header::HeaderMap,
+    start: Instant,
+    request_id: String,
+    is_messages_endpoint: bool,
+    state: ProxyState,
+) -> Result<Response<Body>, ProxyError> {
+    // Create channel for streaming to client
+    // Buffer size of 64 provides some cushion without excessive memory use
+    let (tx, rx) = mpsc::channel::<Result<Bytes, Infallible>>(64);
+
+    // Clone what we need for the background task
+    let parser = state.parser.clone();
+    let event_tx_tui = state.event_tx_tui.clone();
+    let event_tx_storage = state.event_tx_storage.clone();
+    let request_id_clone = request_id.clone();
+
+    // Spawn task to stream response while accumulating
+    tokio::spawn(async move {
+        let mut accumulated = Vec::new();
+        let mut byte_stream = response.bytes_stream();
+        let mut total_bytes = 0usize;
+
+        // Stream chunks to client while accumulating
+        while let Some(chunk_result) = byte_stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    total_bytes += chunk.len();
+                    accumulated.extend_from_slice(&chunk);
+
+                    // Forward chunk to client immediately
+                    if tx.send(Ok(chunk)).await.is_err() {
+                        // Client disconnected, but continue accumulating for logging
+                        tracing::debug!("Client disconnected during streaming");
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Error reading stream chunk: {}", e);
+                    break;
+                }
+            }
+        }
+
+        // Stream complete - now parse and emit events
+        let duration = start.elapsed();
+
+        // Helper to send events
+        let send_event = |event: ProxyEvent| {
+            let tx_tui = event_tx_tui.clone();
+            let tx_storage = event_tx_storage.clone();
+            async move {
+                let _ = tx_tui.send(event.clone()).await;
+                let _ = tx_storage.send(event).await;
+            }
+        };
+
+        // Parse accumulated response for display
+        let parsed_body = if is_messages_endpoint {
+            let body_str = std::str::from_utf8(&accumulated).unwrap_or("");
+            parse_sse_to_json(body_str)
+        } else {
+            None
+        };
+
+        // Emit response event
+        send_event(ProxyEvent::Response {
+            request_id: request_id_clone.clone(),
+            timestamp: Utc::now(),
+            status: status.as_u16(),
+            body_size: total_bytes,
+            duration,
+            body: parsed_body,
+        })
+        .await;
+
+        // Parse for tool calls, thinking blocks, usage, etc.
+        if is_messages_endpoint {
+            if let Ok(events) = parser.parse_response(&accumulated).await {
+                for event in events {
+                    send_event(event).await;
+                }
+            }
+        }
+
+        tracing::debug!(
+            "Streaming complete: {} bytes in {:.2}s",
+            total_bytes,
+            duration.as_secs_f64()
+        );
+    });
+
+    // Build streaming response to return to client immediately
+    let stream = ReceiverStream::new(rx);
+    let body = Body::from_stream(stream);
+
+    let mut builder = Response::builder().status(status.as_u16());
+
+    // Copy response headers (types align between reqwest 0.12 and axum)
+    for (key, value) in response_headers.iter() {
+        if key == "transfer-encoding" || key == "connection" || key == "content-length" {
+            // Skip these - we're streaming so content-length doesn't apply
+            continue;
+        }
+        builder = builder.header(key, value);
+    }
+
+    builder
+        .body(body)
+        .map_err(|e| ProxyError::ResponseBuild(e.to_string()))
+}
+
+/// Handle non-streaming responses (JSON) - buffer and forward
+async fn handle_buffered_response(
+    response: reqwest::Response,
+    status: reqwest::StatusCode,
+    response_headers: reqwest::header::HeaderMap,
+    start: Instant,
+    request_id: String,
+    is_messages_endpoint: bool,
+    state: ProxyState,
+) -> Result<Response<Body>, ProxyError> {
+    // Read full response body
     let response_body = response
         .bytes()
         .await
@@ -280,28 +482,11 @@ async fn proxy_handler(
 
     let duration = start.elapsed();
 
-    // Capture request and response headers
-    let req_headers = extract_request_headers(&headers);
-    let resp_headers = extract_response_headers(&response_headers);
-
-    // Merge headers (request + response)
-    let mut combined_headers = req_headers;
-    combined_headers.request_id = resp_headers.request_id.clone();
-    combined_headers.organization_id = resp_headers.organization_id.clone();
-    combined_headers.requests_limit = resp_headers.requests_limit;
-    combined_headers.requests_remaining = resp_headers.requests_remaining;
-    combined_headers.requests_reset = resp_headers.requests_reset.clone();
-    combined_headers.tokens_limit = resp_headers.tokens_limit;
-    combined_headers.tokens_remaining = resp_headers.tokens_remaining;
-    combined_headers.tokens_reset = resp_headers.tokens_reset.clone();
-
     // Try to parse response body for display
-    let parsed_response_body = if uri.path().contains("/messages") && status.is_success() {
-        // Try parsing as JSON first (non-streaming)
+    let parsed_response_body = if is_messages_endpoint && status.is_success() {
         if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&response_body) {
             Some(json)
         } else {
-            // Try parsing as SSE (streaming)
             let body_str = std::str::from_utf8(&response_body).unwrap_or("");
             if body_str.contains("event:") {
                 parse_sse_to_json(body_str)
@@ -325,33 +510,8 @@ async fn proxy_handler(
         })
         .await;
 
-    // Emit headers captured event
-    state
-        .send_event(ProxyEvent::HeadersCaptured {
-            request_id: request_id.clone(),
-            timestamp: Utc::now(),
-            headers: combined_headers.clone(),
-        })
-        .await;
-
-    // Emit rate limit update if available
-    if combined_headers.has_rate_limits() {
-        state
-            .send_event(ProxyEvent::RateLimitUpdate {
-                timestamp: Utc::now(),
-                requests_remaining: combined_headers.requests_remaining,
-                requests_limit: combined_headers.requests_limit,
-                tokens_remaining: combined_headers.tokens_remaining,
-                tokens_limit: combined_headers.tokens_limit,
-                reset_time: combined_headers
-                    .requests_reset
-                    .or(combined_headers.tokens_reset),
-            })
-            .await;
-    }
-
     // Parse response for tool calls if this is a messages endpoint
-    if uri.path().contains("/messages") && status.is_success() {
+    if is_messages_endpoint && status.is_success() {
         if let Ok(events) = state.parser.parse_response(&response_body).await {
             for event in events {
                 state.send_event(event).await;
@@ -359,37 +519,42 @@ async fn proxy_handler(
         }
     }
 
-    // Build the response to return to Claude Code
-    // Convert reqwest's StatusCode (http v0.2) to axum's StatusCode (http v1.0) via u16
+    // Build response to return to Claude Code
     let mut builder = Response::builder().status(status.as_u16());
 
-    // Copy response headers
-    // Convert from reqwest's http v0.2 types to axum's http v1.0 types
     for (key, value) in response_headers.iter() {
         if key == "transfer-encoding" || key == "connection" {
             continue;
         }
-        // Convert header value from bytes slice to Vec<u8> for axum
-        builder = builder.header(key.as_str(), value.as_bytes().to_vec());
+        builder = builder.header(key, value);
     }
 
-    let response = builder
+    builder
         .body(Body::from(response_body))
-        .map_err(|e| ProxyError::ResponseBuild(e.to_string()))?;
+        .map_err(|e| ProxyError::ResponseBuild(e.to_string()))
+}
 
-    Ok(response)
+/// Merge request and response headers into combined struct
+fn merge_headers(mut req: CapturedHeaders, resp: CapturedHeaders) -> CapturedHeaders {
+    req.request_id = resp.request_id;
+    req.organization_id = resp.organization_id;
+    req.requests_limit = resp.requests_limit;
+    req.requests_remaining = resp.requests_remaining;
+    req.requests_reset = resp.requests_reset;
+    req.tokens_limit = resp.tokens_limit;
+    req.tokens_remaining = resp.tokens_remaining;
+    req.tokens_reset = resp.tokens_reset;
+    req
 }
 
 /// Extract request headers into CapturedHeaders struct
 fn extract_request_headers(headers: &axum::http::HeaderMap) -> CapturedHeaders {
     let mut captured = CapturedHeaders::new();
 
-    // Anthropic API version
     if let Some(version) = headers.get("anthropic-version") {
         captured.anthropic_version = version.to_str().ok().map(String::from);
     }
 
-    // Beta features (can appear multiple times or comma-separated)
     if let Some(beta) = headers.get("anthropic-beta") {
         if let Ok(beta_str) = beta.to_str() {
             captured.anthropic_beta = beta_str.split(',').map(|s| s.trim().to_string()).collect();
@@ -411,12 +576,10 @@ fn extract_request_headers(headers: &axum::http::HeaderMap) -> CapturedHeaders {
 fn extract_response_headers(headers: &reqwest::header::HeaderMap) -> CapturedHeaders {
     let mut captured = CapturedHeaders::new();
 
-    // Request ID for correlation
     if let Some(request_id) = headers.get("request-id") {
         captured.request_id = request_id.to_str().ok().map(String::from);
     }
 
-    // Organization ID
     if let Some(org_id) = headers.get("anthropic-organization-id") {
         captured.organization_id = org_id.to_str().ok().map(String::from);
     }
@@ -465,6 +628,6 @@ impl IntoResponse for ProxyError {
         Response::builder()
             .status(status)
             .body(Body::from(message))
-            .unwrap()
+            .unwrap_or_else(|_| Response::new(Body::from("Internal error building error response")))
     }
 }

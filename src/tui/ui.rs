@@ -29,7 +29,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             Constraint::Percentage(15), // System logs
             Constraint::Length(3),      // Status bar
         ])
-        .split(f.size());
+        .split(f.area());
 
     // Render title bar
     render_title(f, chunks[0]);

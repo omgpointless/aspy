@@ -97,15 +97,21 @@ claude-code
 ```
 Claude Code (HTTP Client)
     ↓ HTTP Requests
+    ↓ ↑ (SSE streams passed through immediately)
 Proxy Server (axum)
-    ↓ Parse bodies
-Parser (extract tool calls/results)
+    ↓ Tee stream: forward to client + accumulate for parsing
+Parser (extract tool calls/results after stream completes)
     ↓ Emit events
 Event Channels (mpsc)
     ↓ Broadcast
 ┌─────────┬──────────┐
 TUI       Storage    (Future consumers)
 ```
+
+**Streaming Architecture:** For SSE responses, the proxy immediately streams chunks
+to Claude Code while accumulating a copy in a background task. This preserves
+low-latency token delivery. Parsing and event emission happen after the stream
+completes, ensuring Claude Code receives tokens without waiting for parsing.
 
 ### Core Components
 
@@ -118,9 +124,11 @@ TUI       Storage    (Future consumers)
 
 **2. proxy/ - HTTP Interception**
 - `mod.rs`: Axum server that forwards all requests to Anthropic API
-- `proxy_handler()`: Captures request/response, emits events
-- Uses `reqwest` for forwarding with 5-minute timeout
-- Broadcasts events to both TUI and storage channels
+- `proxy_handler()`: Routes to streaming or buffered handler based on content-type
+- `handle_streaming_response()`: Tees SSE stream to client + accumulator, parses after completion
+- `handle_buffered_response()`: Buffers small JSON responses for parsing
+- Uses `reqwest` with `bytes_stream()` for SSE streaming
+- 50MB request body limit prevents DoS
 - Headers are extracted and API keys are hashed (SHA-256) for security
 
 **3. parser/ - Protocol Extraction**
@@ -310,10 +318,23 @@ This prevents double-triggering regardless of poll rate.
 - Tested with Claude Code on Windows (PowerShell)
 - Should work on macOS/Linux (standard ANTHROPIC_BASE_URL)
 
+## Commit Conventions
+
+This project uses [Conventional Commits](https://www.conventionalcommits.org/).
+
+Format: `<type>(<scope>): <description>`
+
+Types: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `perf`
+Scopes: `proxy`, `tui`, `parser`, `storage`, `events`, `deps`
+
+Examples:
+- `feat(tui): add mouse scroll support for event list`
+- `fix(proxy): implement SSE stream-through`
+- `chore(deps): remove unused dependencies`
+
 ## References
 
 - **Rust Concepts:** See `.claude/DEVELOPMENT_PHILOSOPHY.md`
 - **Architecture Deep Dive:** See `.claude/ARCHITECTURE.md`
 - **Project Status:** See `.claude/PROJECT_STATUS.md`
 - **Messaging Guidelines:** See `.claude/TONE_GUIDE.md`
-- When suggesting commit titles, note that the developer prefers the syntax of conventional commits

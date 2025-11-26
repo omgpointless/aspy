@@ -6,7 +6,11 @@
 use super::input::InputHandler;
 use crate::events::{ProxyEvent, Stats};
 use crate::logging::LogBuffer;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// Debounce duration for action keys (Enter, Esc, q)
+/// Prevents rapid-fire triggers on terminals that don't send release events
+const ACTION_DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// Main application state for the TUI
 pub struct App {
@@ -39,6 +43,9 @@ pub struct App {
 
     /// Log buffer for system logs display
     pub log_buffer: LogBuffer,
+
+    /// Last time an action key was triggered (for debouncing)
+    last_action_time: Option<Instant>,
 }
 
 impl App {
@@ -58,7 +65,21 @@ impl App {
             detail_scroll: 0,
             input_handler: InputHandler::default(),
             log_buffer,
+            last_action_time: None,
         }
+    }
+
+    /// Check if an action should be debounced
+    /// Returns true if action should be blocked (too soon since last action)
+    pub fn should_debounce_action(&mut self) -> bool {
+        let now = Instant::now();
+        if let Some(last) = self.last_action_time {
+            if now.duration_since(last) < ACTION_DEBOUNCE {
+                return true;
+            }
+        }
+        self.last_action_time = Some(now);
+        false
     }
 
     /// Handle a key press - returns true if the action should be triggered

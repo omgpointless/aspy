@@ -29,6 +29,12 @@ Anthropic Spy sits between Claude Code and the Anthropic API as an HTTP proxy, p
 - **Token tracking** - cumulative input/output/cache tokens with cost estimation
 - Vim-style navigation (j/k or arrow keys)
 
+### True Streaming Passthrough
+- **SSE responses stream directly** to Claude Code with minimal latency
+- Tokens appear incrementally as they're generated (not buffered)
+- Proxy accumulates a copy for parsing without blocking the client
+- Time-to-first-token preserved - no added latency for long responses
+
 ### Structured Logs
 - JSON Lines format for easy parsing with `jq`, `grep`, etc.
 - Daily log rotation (one file per day)
@@ -37,13 +43,17 @@ Anthropic Spy sits between Claude Code and the Anthropic API as an HTTP proxy, p
 
 ### Architecture
 ```
-Claude Code → Anthropic Spy (Proxy) → Anthropic API
-                      ↓
-              ┌───────┴────────┐
-              ↓                ↓
-             TUI          JSON Logs
-        (live display)   (./logs/*.jsonl)
+Claude Code ←─── SSE Stream ───→ Anthropic Spy ←─── SSE Stream ───→ Anthropic API
+                                       │
+                                       │ (tee: accumulate while streaming)
+                                       ▼
+                              ┌────────┴────────┐
+                              ▼                 ▼
+                             TUI           JSON Logs
+                        (live display)   (./logs/*.jsonl)
 ```
+
+The proxy streams SSE responses directly to Claude Code while accumulating a copy for parsing and logging. This preserves the real-time token delivery experience.
 
 ### Demo Mode
 

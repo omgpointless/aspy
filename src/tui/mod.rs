@@ -17,6 +17,7 @@ use app::App;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -87,12 +88,13 @@ async fn run_event_loop(
         // Wait for events using tokio::select!
         // This is non-blocking and efficient - we only wake up when something happens
         tokio::select! {
-            // Keyboard input
+            // Keyboard or mouse input
             _ = async {
-                // crossterm::event::poll is blocking, so we run it in a separate task
                 if event::poll(Duration::from_millis(10)).unwrap_or(false) {
-                    if let Ok(Event::Key(key_event)) = event::read() {
-                        handle_key_event(app, key_event);
+                    match event::read() {
+                        Ok(Event::Key(key_event)) => handle_key_event(app, key_event),
+                        Ok(Event::Mouse(mouse_event)) => handle_mouse_event(app, mouse_event),
+                        _ => {}
                     }
                 }
             } => {}
@@ -117,33 +119,38 @@ async fn run_event_loop(
     Ok(())
 }
 
-/// Handle keyboard input using state tracking
-/// Only triggers actions on key press (not on release or repeat)
+/// Handle keyboard input
+/// Action keys use time-based debounce, navigation keys use state tracking
 fn handle_key_event(app: &mut App, key_event: KeyEvent) {
     let key = key_event.code;
 
-    // Handle key press and release for proper state tracking
     match key_event.kind {
         KeyEventKind::Press => {
-            // Only act if this is a NEW key press (state transition)
-            if !app.handle_key_press(key) {
-                return; // Key was already pressed, ignore
-            }
-
-            // Now handle the actual key action
+            // Action keys - use time-based debounce (no release events needed)
             match key {
                 KeyCode::Char('q') | KeyCode::Char('Q') => {
-                    app.should_quit = true;
+                    if !app.should_debounce_action() {
+                        app.should_quit = true;
+                    }
+                    return;
                 }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    app.select_previous();
+                KeyCode::Enter | KeyCode::Esc => {
+                    if !app.should_debounce_action() {
+                        app.toggle_detail();
+                    }
+                    return;
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    app.select_next();
-                }
-                KeyCode::Enter => {
-                    app.toggle_detail();
-                }
+                _ => {}
+            }
+
+            // Navigation keys - use state tracking for hold-to-repeat
+            if !app.handle_key_press(key) {
+                return;
+            }
+
+            match key {
+                KeyCode::Up | KeyCode::Char('k') => app.select_previous(),
+                KeyCode::Down | KeyCode::Char('j') => app.select_next(),
                 KeyCode::Home => {
                     app.selected = 0;
                     app.scroll_offset = 0;
@@ -157,11 +164,17 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
             }
         }
         KeyEventKind::Release => {
-            // Track key release so it can be pressed again
             app.handle_key_release(key);
         }
-        _ => {
-            // Ignore repeat events
-        }
+        _ => {}
+    }
+}
+
+/// Handle mouse input
+fn handle_mouse_event(app: &mut App, mouse_event: MouseEvent) {
+    match mouse_event.kind {
+        MouseEventKind::ScrollUp => app.select_previous(),
+        MouseEventKind::ScrollDown => app.select_next(),
+        _ => {}
     }
 }

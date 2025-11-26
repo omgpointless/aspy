@@ -1,0 +1,59 @@
+[package]
+name = "anthropic-spy"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# Async runtime - Tokio provides the foundation for async execution
+tokio = { version = "1", features = ["full"] }
+
+# HTTP server and client
+axum = "0.7"                                                    # Web framework built on hyper
+hyper = { version = "1.0", features = ["full"] }               # HTTP implementation
+hyper-util = { version = "0.1", features = ["full"] }          # Hyper utilities
+tower = "0.4"                                                   # Service trait for middleware
+reqwest = { version = "0.11", features = ["json"] }            # HTTP client for forwarding requests
+
+# TUI - Terminal User Interface
+ratatui = "0.26"                                                # Terminal UI library
+crossterm = "0.27"                                              # Cross-platform terminal manipulation
+
+# Serialization - for parsing JSON API responses
+serde = { version = "1.0", features = ["derive"] }             # Serialization framework
+serde_json = "1.0"                                              # JSON support
+
+# Logging and tracing
+tracing = "0.1"                                                 # Application-level tracing
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }  # Log collection
+tracing-appender = "0.2"                                        # File-based logging
+
+# Error handling
+anyhow = "1.0"                                                  # Flexible error handling
+thiserror = "1.0"                                               # Derive macro for custom errors
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }             # Date and time utilities
+
+# HTTP utilities
+http-body-util = "0.1"                                          # Body utilities for hyper
+
+# Cryptography
+sha2 = "0.10"                                                   # SHA-256 hashing for API key tracking
+
+[dev-dependencies]
+# Testing utilities
+tokio-test = "0.4"
+
+[[bin]]
+name = "anthropic-spy"
+path = "src/main.rs"
+
+# Release profile - optimized for distribution
+[profile.release]
+lto = true              # Link-Time Optimization: better inlining across crates
+strip = true            # Remove debug symbols from binary
+codegen-units = 1       # Single codegen unit: better optimization, slower compile
+panic = "abort"         # No unwinding: smaller binary, faster panics
+opt-level = 3           # Maximum optimization level

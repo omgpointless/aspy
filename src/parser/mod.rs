@@ -1,0 +1,397 @@
+// Parser module - extracts tool calls and results from API traffic
+//
+// This module is responsible for parsing the Anthropic API request/response
+// bodies and converting them into our internal ProxyEvent types.
+
+pub mod models;
+
+use crate::events::ProxyEvent;
+use anyhow::{Context, Result};
+use chrono::Utc;
+use models::{ApiRequest, ApiResponse};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+/// Type alias for pending tool calls map: tool_use_id -> (tool_name, start_time)
+type PendingCallsMap = HashMap<String, (String, chrono::DateTime<Utc>)>;
+
+/// Tracks tool calls and their timing to correlate calls with results
+///
+/// This struct maintains state across multiple API calls to match up
+/// tool_use blocks (requests) with tool_result blocks (responses).
+#[derive(Clone)]
+pub struct Parser {
+    /// Maps tool_use_id -> (tool_name, start_time)
+    /// Arc<Mutex<>> allows sharing mutable state across async tasks
+    pending_calls: Arc<Mutex<PendingCallsMap>>,
+}
+
+impl Parser {
+    pub fn new() -> Self {
+        Self {
+            pending_calls: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Parse an API request looking for tool results
+    ///
+    /// Tool results represent Claude Code's responses to previous tool calls.
+    /// We correlate them with the original call to calculate duration.
+    pub async fn parse_request(&self, body: &[u8]) -> Result<Vec<ProxyEvent>> {
+        let request: ApiRequest =
+            serde_json::from_slice(body).context("Failed to parse API request")?;
+
+        let mut events = Vec::new();
+        let tool_results = request.tool_results();
+
+        let mut pending = self.pending_calls.lock().await;
+
+        for (tool_use_id, content, is_error) in tool_results {
+            // Look up the original tool call to get its name and start time
+            if let Some((tool_name, start_time)) = pending.remove(&tool_use_id) {
+                let duration = Utc::now()
+                    .signed_duration_since(start_time)
+                    .to_std()
+                    .unwrap_or_default();
+
+                events.push(ProxyEvent::ToolResult {
+                    id: tool_use_id,
+                    timestamp: Utc::now(),
+                    tool_name,
+                    output: content,
+                    duration,
+                    success: !is_error,
+                });
+            }
+        }
+
+        Ok(events)
+    }
+
+    /// Parse an API response looking for tool calls
+    ///
+    /// Tool calls (tool_use blocks) represent Claude requesting to use a tool.
+    /// We store them in pending_calls so we can correlate with results later.
+    ///
+    /// This handles both regular JSON responses and Server-Sent Events (SSE) streaming.
+    pub async fn parse_response(&self, body: &[u8]) -> Result<Vec<ProxyEvent>> {
+        // Try to detect if this is SSE format
+        let body_str = std::str::from_utf8(body).unwrap_or("");
+
+        if body_str.starts_with("event:") || body_str.contains("\nevent:") {
+            // This is a streaming SSE response
+            tracing::debug!("Detected SSE streaming response");
+            return self.parse_sse_response(body_str).await;
+        }
+
+        // Regular JSON response
+        let response: ApiResponse =
+            serde_json::from_slice(body).context("Failed to parse API response")?;
+
+        let mut events = Vec::new();
+        let tool_uses = response.tool_uses();
+
+        let mut pending = self.pending_calls.lock().await;
+
+        for (id, name, input) in tool_uses {
+            let timestamp = Utc::now();
+
+            // Store this tool call so we can correlate it with the result later
+            pending.insert(id.clone(), (name.clone(), timestamp));
+
+            events.push(ProxyEvent::ToolCall {
+                id,
+                timestamp,
+                tool_name: name,
+                input,
+            });
+        }
+
+        // Extract usage information if present
+        if let Some(usage) = response.usage {
+            events.push(ProxyEvent::ApiUsage {
+                timestamp: Utc::now(),
+                model: response.model.clone(),
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_creation_tokens: usage.cache_creation_input_tokens.unwrap_or(0),
+                cache_read_tokens: usage.cache_read_input_tokens.unwrap_or(0),
+            });
+        }
+
+        Ok(events)
+    }
+
+    /// Parse Server-Sent Events (SSE) streaming response
+    ///
+    /// SSE responses contain multiple event types that we need to handle:
+    /// - message_start: Contains model and initial usage (input tokens)
+    /// - content_block_start: Begins a content block (tool_use, thinking, text)
+    /// - content_block_delta: Incremental data for the block (input_json_delta, thinking_delta)
+    /// - content_block_stop: Block complete, emit the event
+    /// - message_delta: Final usage data (output tokens)
+    ///
+    /// Key insight: We must ACCUMULATE deltas before emitting events!
+    async fn parse_sse_response(&self, body: &str) -> Result<Vec<ProxyEvent>> {
+        let mut events = Vec::new();
+        let mut pending = self.pending_calls.lock().await;
+
+        // Message-level tracking
+        let mut model: Option<String> = None;
+        let mut input_tokens: u32 = 0;
+        let mut output_tokens: u32 = 0;
+        let mut cache_creation_tokens: u32 = 0;
+        let mut cache_read_tokens: u32 = 0;
+
+        // Partial content blocks being accumulated (index -> block data)
+        let mut partial_blocks: HashMap<u32, PartialContentBlock> = HashMap::new();
+
+        // Parse SSE format line by line
+        for line in body.lines() {
+            let line = line.trim();
+
+            // Look for "data:" lines which contain JSON
+            if !line.starts_with("data:") {
+                continue;
+            }
+
+            let json_str = line.strip_prefix("data:").unwrap_or("").trim();
+            if json_str.is_empty() || json_str == "[DONE]" {
+                continue;
+            }
+
+            // Try to parse the JSON data
+            let data: serde_json::Value = match serde_json::from_str(json_str) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            let event_type = data.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+            match event_type {
+                "message_start" => {
+                    // Extract model and initial usage from message_start
+                    if let Some(message) = data.get("message") {
+                        model = message.get("model").and_then(|v| v.as_str()).map(String::from);
+
+                        if let Some(usage) = message.get("usage") {
+                            input_tokens = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            cache_creation_tokens = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            cache_read_tokens = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        }
+                    }
+                }
+
+                "content_block_start" => {
+                    // Start tracking a new content block - DON'T emit yet!
+                    let index = data.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+
+                    if let Some(content_block) = data.get("content_block") {
+                        let block_type = content_block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                        let partial = match block_type {
+                            "tool_use" => {
+                                let id = content_block.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let name = content_block.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                                PartialContentBlock::ToolUse {
+                                    id,
+                                    name,
+                                    input_json: String::new(),
+                                    timestamp: Utc::now(),
+                                }
+                            }
+                            "thinking" => {
+                                PartialContentBlock::Thinking {
+                                    content: String::new(),
+                                    timestamp: Utc::now(),
+                                }
+                            }
+                            _ => PartialContentBlock::Other,
+                        };
+
+                        partial_blocks.insert(index, partial);
+                    }
+                }
+
+                "content_block_delta" => {
+                    // Accumulate delta into the partial block
+                    let index = data.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+
+                    if let Some(delta) = data.get("delta") {
+                        let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                        if let Some(partial) = partial_blocks.get_mut(&index) {
+                            match (partial, delta_type) {
+                                (PartialContentBlock::ToolUse { input_json, .. }, "input_json_delta") => {
+                                    // Accumulate JSON string fragments
+                                    if let Some(partial_json) = delta.get("partial_json").and_then(|v| v.as_str()) {
+                                        input_json.push_str(partial_json);
+                                    }
+                                }
+                                (PartialContentBlock::Thinking { content, .. }, "thinking_delta") => {
+                                    // Accumulate thinking text
+                                    if let Some(thinking) = delta.get("thinking").and_then(|v| v.as_str()) {
+                                        content.push_str(thinking);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+
+                "content_block_stop" => {
+                    // Block complete - NOW emit the event
+                    let index = data.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+
+                    if let Some(partial) = partial_blocks.remove(&index) {
+                        match partial {
+                            PartialContentBlock::ToolUse { id, name, input_json, timestamp } => {
+                                // Parse the accumulated JSON string into a Value
+                                let input: serde_json::Value = if input_json.is_empty() {
+                                    serde_json::Value::Object(serde_json::Map::new())
+                                } else {
+                                    serde_json::from_str(&input_json).unwrap_or_else(|_| {
+                                        // If parsing fails, store as raw string
+                                        serde_json::Value::String(input_json)
+                                    })
+                                };
+
+                                // Register in pending_calls for correlation with results
+                                pending.insert(id.clone(), (name.clone(), timestamp));
+
+                                events.push(ProxyEvent::ToolCall {
+                                    id,
+                                    timestamp,
+                                    tool_name: name,
+                                    input,
+                                });
+                            }
+                            PartialContentBlock::Thinking { content, timestamp } => {
+                                if !content.is_empty() {
+                                    let token_estimate = (content.len() / 4) as u32;
+                                    events.push(ProxyEvent::Thinking {
+                                        timestamp,
+                                        content,
+                                        token_estimate,
+                                    });
+                                }
+                            }
+                            PartialContentBlock::Other => {}
+                        }
+                    }
+                }
+
+                "message_delta" => {
+                    // Extract output tokens from message_delta
+                    if let Some(usage) = data.get("usage") {
+                        output_tokens = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                    }
+                }
+
+                _ => {}
+            }
+        }
+
+        // Emit any remaining partial blocks (shouldn't happen with well-formed SSE)
+        for (_, partial) in partial_blocks {
+            match partial {
+                PartialContentBlock::ToolUse { id, name, input_json, timestamp } => {
+                    let input: serde_json::Value = if input_json.is_empty() {
+                        serde_json::Value::Object(serde_json::Map::new())
+                    } else {
+                        serde_json::from_str(&input_json).unwrap_or(serde_json::Value::String(input_json))
+                    };
+
+                    pending.insert(id.clone(), (name.clone(), timestamp));
+                    events.push(ProxyEvent::ToolCall { id, timestamp, tool_name: name, input });
+                }
+                PartialContentBlock::Thinking { content, timestamp } => {
+                    if !content.is_empty() {
+                        let token_estimate = (content.len() / 4) as u32;
+                        events.push(ProxyEvent::Thinking { timestamp, content, token_estimate });
+                    }
+                }
+                PartialContentBlock::Other => {}
+            }
+        }
+
+        // Emit usage event if we collected data
+        if let Some(model_name) = model {
+            if input_tokens > 0 || output_tokens > 0 {
+                events.push(ProxyEvent::ApiUsage {
+                    timestamp: Utc::now(),
+                    model: model_name,
+                    input_tokens,
+                    output_tokens,
+                    cache_creation_tokens,
+                    cache_read_tokens,
+                });
+            }
+        }
+
+        Ok(events)
+    }
+}
+
+/// Partial content block being accumulated during SSE parsing
+enum PartialContentBlock {
+    /// Tool use block: accumulate input JSON string
+    ToolUse {
+        id: String,
+        name: String,
+        input_json: String,
+        timestamp: chrono::DateTime<Utc>,
+    },
+    /// Thinking block: accumulate thinking text
+    Thinking {
+        content: String,
+        timestamp: chrono::DateTime<Utc>,
+    },
+    /// Other block types we don't track
+    Other,
+}
+
+impl Default for Parser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_parse_tool_use() {
+        let parser = Parser::new();
+
+        let response_json = r#"{
+            "id": "msg_123",
+            "model": "claude-3-opus-20240229",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tool_abc",
+                    "name": "Read",
+                    "input": {"file_path": "/test/file.txt"}
+                }
+            ]
+        }"#;
+
+        let events = parser
+            .parse_response(response_json.as_bytes())
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            ProxyEvent::ToolCall { tool_name, .. } => {
+                assert_eq!(tool_name, "Read");
+            }
+            _ => panic!("Expected ToolCall event"),
+        }
+    }
+}

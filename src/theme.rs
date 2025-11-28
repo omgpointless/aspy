@@ -32,14 +32,10 @@ pub struct Theme {
     pub border: Color,
     pub highlight: Color,
 
-    // Panel identity colors (used when focused) - integration pending
-    #[allow(dead_code)]
+    // Panel identity colors (used when focused)
     pub panel_events: Color,
-    #[allow(dead_code)]
     pub panel_thinking: Color,
-    #[allow(dead_code)]
     pub panel_logs: Color,
-    #[allow(dead_code)]
     pub panel_detail: Color,
 }
 
@@ -248,7 +244,6 @@ impl Theme {
     ///
     /// Focused panels use their identity color, unfocused use the general border color.
     /// This creates clear visual distinction while preserving panel identity.
-    #[allow(dead_code)] // Integration pending - will be used for focus visualization
     pub fn panel_border(&self, panel: crate::tui::scroll::FocusablePanel, focused: bool) -> Color {
         if focused {
             match panel {

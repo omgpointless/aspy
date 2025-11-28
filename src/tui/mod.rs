@@ -21,7 +21,7 @@ use app::{App, View};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-        MouseEvent, MouseEventKind,
+        KeyModifiers, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -185,6 +185,23 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
                     }
                     return;
                 }
+                KeyCode::Tab => {
+                    if !app.should_debounce_action() && app.view == View::Events {
+                        if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                            app.focus_prev();
+                        } else {
+                            app.focus_next();
+                        }
+                    }
+                    return;
+                }
+                // Backtab is what some terminals send for Shift+Tab
+                KeyCode::BackTab => {
+                    if !app.should_debounce_action() && app.view == View::Events {
+                        app.focus_prev();
+                    }
+                    return;
+                }
                 _ => {}
             }
 
@@ -196,15 +213,8 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
             match key {
                 KeyCode::Up | KeyCode::Char('k') => app.select_previous(),
                 KeyCode::Down | KeyCode::Char('j') => app.select_next(),
-                KeyCode::Home => {
-                    app.selected = 0;
-                    app.scroll_offset = 0;
-                }
-                KeyCode::End => {
-                    if !app.events.is_empty() {
-                        app.selected = app.events.len() - 1;
-                    }
-                }
+                KeyCode::Home => app.scroll_to_top(),
+                KeyCode::End => app.scroll_to_bottom(),
                 _ => {}
             }
         }

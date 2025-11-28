@@ -9,15 +9,17 @@
 // 3. Focused panel receives scroll input
 // 4. Consistent scroll behavior across all panels
 //
-// NOTE: This module is built but not yet integrated. Will be used when we add
-// scroll support to thinking panel and focus-based input routing.
-
-#![allow(dead_code)] // Foundation for scroll/focus system - integration pending
+// Integration: Used by App for panel state management and ui.rs for focus rendering.
+//
+// Note: Some methods (page_up, page_down, update_dimensions, etc.) are part of
+// the complete scroll API but not yet wired to keyboard shortcuts or rendering.
+// They exist to provide a consistent, reusable scroll interface.
 
 /// Scroll state for a single panel
 ///
 /// Owns all state needed for scrolling: position, content size, viewport size.
 /// Can be embedded in any component that needs scrolling.
+#[allow(dead_code)] // Complete API - some methods pending keyboard/render integration
 #[derive(Debug, Clone)]
 pub struct ScrollState {
     /// Current scroll offset (line/item index at top of viewport)
@@ -35,6 +37,7 @@ pub struct ScrollState {
     pub auto_follow: bool,
 }
 
+#[allow(dead_code)] // Complete scroll API - some methods pending integration
 impl ScrollState {
     /// Create new scroll state with auto-follow enabled
     pub fn new() -> Self {
@@ -211,6 +214,62 @@ impl FocusablePanel {
             Self::Logs => Self::Thinking,
             Self::Detail => Self::Events,
         }
+    }
+}
+
+/// Scroll state for all focusable panels
+///
+/// Groups scroll state by panel, with appropriate defaults:
+/// - Events/Detail: manual mode (user controls position)
+/// - Thinking/Logs: auto-follow mode (follows new content)
+///
+/// Note: `events` field exists for completeness but Events panel uses
+/// selection-based navigation. Generic `get/get_mut` accessors are available
+/// for dynamic panel access patterns.
+#[allow(dead_code)] // events field + generic accessors for future use
+#[derive(Debug, Clone)]
+pub struct PanelStates {
+    pub events: ScrollState,
+    pub detail: ScrollState,
+    pub thinking: ScrollState,
+    pub logs: ScrollState,
+}
+
+#[allow(dead_code)] // Generic accessors for future dynamic panel access
+impl PanelStates {
+    pub fn new() -> Self {
+        Self {
+            events: ScrollState::manual(), // Selection-based, no auto-follow
+            detail: ScrollState::manual(), // User scrolls to read
+            thinking: ScrollState::new(),  // Auto-follow streaming content
+            logs: ScrollState::new(),      // Auto-follow new logs
+        }
+    }
+
+    /// Get mutable reference to scroll state for a panel
+    pub fn get_mut(&mut self, panel: FocusablePanel) -> &mut ScrollState {
+        match panel {
+            FocusablePanel::Events => &mut self.events,
+            FocusablePanel::Detail => &mut self.detail,
+            FocusablePanel::Thinking => &mut self.thinking,
+            FocusablePanel::Logs => &mut self.logs,
+        }
+    }
+
+    /// Get reference to scroll state for a panel
+    pub fn get(&self, panel: FocusablePanel) -> &ScrollState {
+        match panel {
+            FocusablePanel::Events => &self.events,
+            FocusablePanel::Detail => &self.detail,
+            FocusablePanel::Thinking => &self.thinking,
+            FocusablePanel::Logs => &self.logs,
+        }
+    }
+}
+
+impl Default for PanelStates {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

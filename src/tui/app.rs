@@ -4,6 +4,7 @@
 // of events, selected item, statistics, and UI state.
 
 use super::input::InputHandler;
+use super::scroll::{FocusablePanel, PanelStates};
 use super::streaming::StreamingStateMachine;
 use crate::events::{ProxyEvent, Stats};
 use crate::logging::LogBuffer;
@@ -54,11 +55,8 @@ pub struct App {
     /// When the app started (for uptime display)
     pub start_time: Instant,
 
-    /// Scroll offset for the event list
-    pub scroll_offset: usize,
-
-    /// Scroll offset for detail view
-    pub detail_scroll: usize,
+    /// Scroll state for all panels (events, detail, thinking, logs)
+    pub panels: PanelStates,
 
     /// Input handler for flexible key behavior
     input_handler: InputHandler,
@@ -74,6 +72,9 @@ pub struct App {
 
     /// Active view
     pub view: View,
+
+    /// Currently focused panel (receives scroll input)
+    pub focused: FocusablePanel,
 
     /// Color theme for the UI
     pub theme: Theme,
@@ -102,13 +103,13 @@ impl App {
             should_quit: false,
             stats: Stats::default(),
             start_time: Instant::now(),
-            scroll_offset: 0,
-            detail_scroll: 0,
+            panels: PanelStates::default(),
             input_handler: InputHandler::default(),
             log_buffer,
             last_action_time: None,
             topic: TopicInfo::default(),
             view: View::default(),
+            focused: FocusablePanel::default(),
             theme: Theme::default(),
             streaming_sm: StreamingStateMachine::new(),
             animation_frame: 0,
@@ -166,7 +167,23 @@ impl App {
         self.view = view;
         // Reset view-specific state when switching
         self.show_detail = false;
-        self.detail_scroll = 0;
+        self.focused = FocusablePanel::Events;
+        self.panels.detail.scroll_to_top();
+    }
+
+    /// Cycle focus to next panel (Tab)
+    pub fn focus_next(&mut self) {
+        self.focused = self.focused.next();
+    }
+
+    /// Cycle focus to previous panel (Shift+Tab)
+    pub fn focus_prev(&mut self) {
+        self.focused = self.focused.prev();
+    }
+
+    /// Check if a panel is currently focused
+    pub fn is_focused(&self, panel: FocusablePanel) -> bool {
+        self.focused == panel
     }
 
     /// Check if an action should be debounced
@@ -324,11 +341,9 @@ impl App {
             _ => {}
         }
 
-        // Skip adding thinking events to list - they're shown in header + panel
-        if matches!(
-            event,
-            ProxyEvent::Thinking { .. } | ProxyEvent::ThinkingStarted { .. }
-        ) {
+        // Skip ThinkingStarted (just a spinner signal) - but keep Thinking events
+        // so completed thinking blocks appear in the list for inspection
+        if matches!(event, ProxyEvent::ThinkingStarted { .. }) {
             return;
         }
 
@@ -345,43 +360,71 @@ impl App {
         self.events.get(self.selected)
     }
 
-    /// Move selection up
+    /// Scroll up / select previous based on focused panel
     pub fn select_previous(&mut self) {
-        if self.show_detail {
-            // In detail view, scroll the detail content
-            if self.detail_scroll > 0 {
-                self.detail_scroll -= 1;
-            }
-        } else {
-            // In list view, move selection
-            if self.selected > 0 {
-                self.selected -= 1;
-                // Adjust scroll if needed
-                if self.selected < self.scroll_offset {
-                    self.scroll_offset = self.selected;
+        match self.focused {
+            FocusablePanel::Events => {
+                // Events panel: move selection (not scroll)
+                if self.selected > 0 {
+                    self.selected -= 1;
                 }
             }
+            FocusablePanel::Detail => self.panels.detail.scroll_up(),
+            FocusablePanel::Thinking => self.panels.thinking.scroll_up(),
+            FocusablePanel::Logs => self.panels.logs.scroll_up(),
         }
     }
 
-    /// Move selection down
+    /// Scroll down / select next based on focused panel
     pub fn select_next(&mut self) {
-        if self.show_detail {
-            // In detail view, scroll the detail content
-            self.detail_scroll += 1;
-        } else {
-            // In list view, move selection
-            if self.selected < self.events.len().saturating_sub(1) {
-                self.selected += 1;
+        match self.focused {
+            FocusablePanel::Events => {
+                // Events panel: move selection (not scroll)
+                if self.selected < self.events.len().saturating_sub(1) {
+                    self.selected += 1;
+                }
             }
+            FocusablePanel::Detail => self.panels.detail.scroll_down(),
+            FocusablePanel::Thinking => self.panels.thinking.scroll_down(),
+            FocusablePanel::Logs => self.panels.logs.scroll_down(),
         }
     }
 
-    /// Toggle detail view
+    /// Toggle detail view and switch focus
     pub fn toggle_detail(&mut self) {
         self.show_detail = !self.show_detail;
-        // Reset detail scroll when toggling
-        self.detail_scroll = 0;
+        if self.show_detail {
+            // Entering detail: focus it and reset scroll
+            self.focused = FocusablePanel::Detail;
+            self.panels.detail.scroll_to_top();
+        } else {
+            // Exiting detail: return focus to events
+            self.focused = FocusablePanel::Events;
+        }
+    }
+
+    /// Jump to top based on focused panel
+    pub fn scroll_to_top(&mut self) {
+        match self.focused {
+            FocusablePanel::Events => self.selected = 0,
+            FocusablePanel::Detail => self.panels.detail.scroll_to_top(),
+            FocusablePanel::Thinking => self.panels.thinking.scroll_to_top(),
+            FocusablePanel::Logs => self.panels.logs.scroll_to_top(),
+        }
+    }
+
+    /// Jump to bottom based on focused panel
+    pub fn scroll_to_bottom(&mut self) {
+        match self.focused {
+            FocusablePanel::Events => {
+                if !self.events.is_empty() {
+                    self.selected = self.events.len() - 1;
+                }
+            }
+            FocusablePanel::Detail => self.panels.detail.scroll_to_bottom(),
+            FocusablePanel::Thinking => self.panels.thinking.scroll_to_bottom(),
+            FocusablePanel::Logs => self.panels.logs.scroll_to_bottom(),
+        }
     }
 
     /// Get uptime as a formatted string
@@ -438,19 +481,20 @@ impl App {
     }
 
     /// Calculate visible range for the event list given viewport height
+    /// Keeps selected item visible by computing scroll offset from selection
     pub fn visible_range(&self, height: usize) -> (usize, usize) {
         let total = self.events.len();
         if total == 0 {
             return (0, 0);
         }
 
-        // Adjust scroll offset to keep selected item visible
-        let mut offset = self.scroll_offset;
-        if self.selected >= offset + height {
-            offset = self.selected.saturating_sub(height - 1);
-        } else if self.selected < offset {
-            offset = self.selected;
-        }
+        // Compute offset to keep selected item visible
+        // Selection drives scroll position (selection-based scrolling)
+        let offset = if self.selected >= height {
+            self.selected.saturating_sub(height - 1)
+        } else {
+            0
+        };
 
         let start = offset;
         let end = (offset + height).min(total);

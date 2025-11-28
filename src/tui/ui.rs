@@ -6,6 +6,7 @@
 
 use super::app::{App, StreamingState, View};
 use super::layout::Breakpoint;
+use super::scroll::FocusablePanel;
 use crate::events::ProxyEvent;
 use crate::logging::{LogEntry, LogLevel};
 use ratatui::{
@@ -529,36 +530,58 @@ fn render_thinking_panel(f: &mut Frame, area: Rect, app: &App) {
         .current_thinking_content()
         .unwrap_or_else(|| "Waiting for thinking...".to_string());
 
-    // Calculate visible lines based on area height
+    // Calculate content metrics for title and scrollbar
     let height = area.height.saturating_sub(2) as usize; // Account for borders
-    let lines: Vec<&str> = thinking_content.lines().collect();
-    let total_lines = lines.len();
+    let width = area.width.saturating_sub(2) as usize; // Account for borders
+    let text_lines = thinking_content.lines().count();
 
-    // Show last N lines (most recent thinking)
-    let start = total_lines.saturating_sub(height);
-    let visible_lines = &lines[start..];
-    let visible_text = visible_lines.join("\n");
+    // Estimate visual lines after wrapping (rough: chars / width)
+    // This is imprecise but good enough for scroll position
+    let estimated_visual_lines = thinking_content
+        .lines()
+        .map(|line| (line.len() / width.max(1)).max(1))
+        .sum::<usize>();
 
-    let title = if total_lines > height {
+    // Auto-follow: scroll to show bottom of content
+    // Using Paragraph::scroll which works on visual (wrapped) lines
+    let scroll_offset = estimated_visual_lines.saturating_sub(height);
+
+    let title = if text_lines > height {
         format!(
             " 💭 Thinking ({} lines, ~{} tok) ",
-            total_lines, app.stats.thinking_tokens
+            text_lines, app.stats.thinking_tokens
         )
     } else {
         format!(" 💭 Thinking (~{} tok) ", app.stats.thinking_tokens)
     };
 
-    let paragraph = Paragraph::new(visible_text)
+    let focused = app.is_focused(FocusablePanel::Thinking);
+    let border_color = app.theme.panel_border(FocusablePanel::Thinking, focused);
+    let paragraph = Paragraph::new(thinking_content.as_str())
         .style(Style::default().fg(Color::White))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Magenta))
+                .border_style(Style::default().fg(border_color))
                 .title(title),
         )
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_offset as u16, 0)); // Scroll to bottom (auto-follow)
 
     f.render_widget(paragraph, area);
+
+    // Render scrollbar if content overflows (shows auto-follow position)
+    if estimated_visual_lines > height {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓"));
+
+        let mut scrollbar_state =
+            ScrollbarState::new(estimated_visual_lines.saturating_sub(height))
+                .position(scroll_offset);
+
+        f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+    }
 }
 
 /// Render the title bar
@@ -782,7 +805,14 @@ fn render_list_view(f: &mut Frame, area: Rect, app: &App) {
         format!(" Events ({}) ", app.events.len())
     };
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
+    let focused = app.is_focused(FocusablePanel::Events);
+    let border_color = app.theme.panel_border(FocusablePanel::Events, focused);
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color))
+            .title(title),
+    );
 
     f.render_widget(list, area);
 
@@ -824,19 +854,26 @@ fn render_detail_view(f: &mut Frame, area: Rect, app: &App, event: &ProxyEvent) 
     let lines: Vec<&str> = detail_text.lines().collect();
     let total_lines = lines.len();
 
-    // Calculate visible range based on scroll offset
+    // Calculate visible range based on scroll offset from panel state
     let height = area.height.saturating_sub(2) as usize; // Account for borders
-    let start = app.detail_scroll.min(total_lines.saturating_sub(height));
+    let start = app
+        .panels
+        .detail
+        .offset()
+        .min(total_lines.saturating_sub(height));
     let end = (start + height).min(total_lines);
 
     // Take only the visible lines
     let visible_text = lines[start..end].join("\n");
 
+    let focused = app.is_focused(FocusablePanel::Detail);
+    let border_color = app.theme.panel_border(FocusablePanel::Detail, focused);
     let paragraph = Paragraph::new(visible_text)
         .style(Style::default().fg(Color::White))
         .block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color))
                 .title(" Event Details - Press Esc to close "),
         )
         .wrap(Wrap { trim: false });
@@ -1314,9 +1351,12 @@ pub fn render_logs_panel(f: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
+    let focused = app.is_focused(FocusablePanel::Logs);
+    let border_color = app.theme.panel_border(FocusablePanel::Logs, focused);
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color))
             .title(" System Logs "),
     );
 

@@ -86,12 +86,14 @@ impl ScrollState {
     /// Scroll down by one unit
     /// Re-enables auto-follow if we reach the bottom
     pub fn scroll_down(&mut self) {
-        if self.offset < self.max_offset() {
+        // If dimensions not set (total=0), allow unbounded scroll
+        // Render will clamp to actual content size
+        if self.total == 0 || self.offset < self.max_offset() {
             self.offset += 1;
         }
 
-        // Re-enable auto-follow when user scrolls to bottom
-        if self.offset >= self.max_offset() {
+        // Re-enable auto-follow when user scrolls to bottom (only if dimensions known)
+        if self.total > 0 && self.offset >= self.max_offset() {
             self.auto_follow = true;
         }
     }

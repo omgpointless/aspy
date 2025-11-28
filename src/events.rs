@@ -118,6 +118,15 @@ pub struct Stats {
 
     // Most recent thinking content (for display panel)
     pub current_thinking: Option<String>,
+
+    // Context window tracking
+    pub context_window_size: u64,    // Max tokens for current model
+    pub current_context_tokens: u64, // Tokens used in current conversation turn
+    pub peak_context_tokens: u64,    // Highest context usage seen
+
+    // Per-tool statistics
+    pub tool_call_counts: std::collections::HashMap<String, usize>,
+    pub tool_durations: std::collections::HashMap<String, Duration>,
 }
 
 impl Stats {
@@ -167,6 +176,61 @@ impl Stats {
         } else {
             0.0
         }
+    }
+
+    /// Get context window usage as a percentage (0.0 - 1.0)
+    pub fn context_usage_pct(&self) -> f64 {
+        if self.context_window_size == 0 {
+            0.0
+        } else {
+            self.current_context_tokens as f64 / self.context_window_size as f64
+        }
+    }
+
+    /// Get context window size for a model
+    pub fn model_context_window(model: &str) -> u64 {
+        // Claude 2.x models have 100k context
+        if model.contains("claude-2") {
+            100_000
+        } else {
+            // All Claude 3+ models have 200k context
+            200_000
+        }
+    }
+
+    /// Update context window tracking from API usage
+    pub fn update_context(&mut self, input_tokens: u64, output_tokens: u64) {
+        // Current context is approximated as input + output tokens
+        self.current_context_tokens = input_tokens + output_tokens;
+
+        // Update peak if this is higher
+        if self.current_context_tokens > self.peak_context_tokens {
+            self.peak_context_tokens = self.current_context_tokens;
+        }
+
+        // Update context window size based on current model
+        if let Some(ref model) = self.current_model {
+            self.context_window_size = Self::model_context_window(model);
+        }
+    }
+
+    /// Get average duration for a specific tool
+    pub fn avg_tool_duration(&self, tool_name: &str) -> Option<Duration> {
+        let count = self.tool_call_counts.get(tool_name)?;
+        let total = self.tool_durations.get(tool_name)?;
+        if *count > 0 {
+            Some(*total / *count as u32)
+        } else {
+            None
+        }
+    }
+
+    /// Get top N tools by call count
+    pub fn top_tools(&self, n: usize) -> Vec<(&String, usize)> {
+        let mut tools: Vec<_> = self.tool_call_counts.iter().map(|(k, v)| (k, *v)).collect();
+        tools.sort_by(|a, b| b.1.cmp(&a.1));
+        tools.truncate(n);
+        tools
     }
 }
 

@@ -4,18 +4,22 @@
 // you define the UI layout and widgets in a render function that gets
 // called on every frame.
 
-use super::app::App;
+use super::app::{App, View};
+use super::theme::Theme;
 use crate::events::ProxyEvent;
 use crate::logging::{LogEntry, LogLevel};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
 /// Main UI render function - called on every frame
 pub fn draw(f: &mut Frame, app: &App) {
+    let theme = app.theme.theme();
+
     // Split the terminal into four vertical sections:
     // - Title bar (3 lines)
     // - Main content area (flexible, 65% of remaining)
@@ -31,13 +35,29 @@ pub fn draw(f: &mut Frame, app: &App) {
         ])
         .split(f.area());
 
-    // Render title bar
-    render_title(f, chunks[0]);
+    // Render title bar with view tabs
+    render_title(f, chunks[0], app, &theme);
 
-    // Main content area: split horizontally if we have thinking
-    let has_thinking = app.stats.current_thinking.is_some();
+    // Render the current view
+    match app.current_view {
+        View::Main => render_main_view(f, chunks[1], app, &theme),
+        View::Stats => render_stats_view(f, chunks[1], app, &theme),
+        View::Help => render_help_view(f, chunks[1], app, &theme),
+    }
 
-    if has_thinking {
+    // Render system logs panel
+    render_logs_panel(f, chunks[2], app, &theme);
+
+    // Render status bar
+    render_status(f, chunks[3], app, &theme);
+}
+
+/// Render the main events view
+fn render_main_view(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    // Check if we have thinking and it's not collapsed
+    let show_thinking = app.stats.current_thinking.is_some() && !app.thinking_collapsed;
+
+    if show_thinking {
         // Split main area: Events (65%) | Thinking (35%)
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -45,35 +65,29 @@ pub fn draw(f: &mut Frame, app: &App) {
                 Constraint::Percentage(65), // Events
                 Constraint::Percentage(35), // Thinking panel
             ])
-            .split(chunks[1]);
+            .split(area);
 
         // Render events on the left
         if app.show_detail {
-            render_split_view(f, main_chunks[0], app);
+            render_split_view(f, main_chunks[0], app, theme);
         } else {
-            render_list_view(f, main_chunks[0], app);
+            render_list_view(f, main_chunks[0], app, theme);
         }
 
         // Render thinking panel on the right
-        render_thinking_panel(f, main_chunks[1], app);
+        render_thinking_panel(f, main_chunks[1], app, theme);
     } else {
         // No thinking - full width for events
         if app.show_detail {
-            render_split_view(f, chunks[1], app);
+            render_split_view(f, area, app, theme);
         } else {
-            render_list_view(f, chunks[1], app);
+            render_list_view(f, area, app, theme);
         }
     }
-
-    // Render system logs panel
-    render_logs_panel(f, chunks[2], app);
-
-    // Render status bar
-    render_status(f, chunks[3], app);
 }
 
 /// Render the thinking panel showing Claude's reasoning
-fn render_thinking_panel(f: &mut Frame, area: Rect, app: &App) {
+fn render_thinking_panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let thinking_content = app
         .stats
         .current_thinking
@@ -92,19 +106,22 @@ fn render_thinking_panel(f: &mut Frame, area: Rect, app: &App) {
 
     let title = if total_lines > height {
         format!(
-            " 💭 Thinking ({} lines, ~{} tok) ",
+            " 💭 Thinking ({} lines, ~{} tok) [t to toggle] ",
             total_lines, app.stats.thinking_tokens
         )
     } else {
-        format!(" 💭 Thinking (~{} tok) ", app.stats.thinking_tokens)
+        format!(
+            " 💭 Thinking (~{} tok) [t to toggle] ",
+            app.stats.thinking_tokens
+        )
     };
 
     let paragraph = Paragraph::new(visible_text)
-        .style(Style::default().fg(Color::White))
+        .style(Style::default().fg(theme.fg))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Magenta))
+                .border_style(Style::default().fg(theme.thinking))
                 .title(title),
         )
         .wrap(Wrap { trim: false });
@@ -112,22 +129,64 @@ fn render_thinking_panel(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(paragraph, area);
 }
 
-/// Render the title bar
-fn render_title(f: &mut Frame, area: Rect) {
-    let title = Paragraph::new("Anthropic Spy - Claude Code Observability Proxy")
-        .style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .block(Block::default().borders(Borders::ALL));
+/// Render the title bar with view tabs
+fn render_title(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    // Create tab indicators
+    let views = [View::Main, View::Stats, View::Help];
+    let tabs: Vec<Span> = views
+        .iter()
+        .map(|v| {
+            let name = format!(" {} ", v.name());
+            if *v == app.current_view {
+                Span::styled(
+                    name,
+                    Style::default()
+                        .fg(theme.selected_fg)
+                        .add_modifier(Modifier::BOLD | Modifier::REVERSED),
+                )
+            } else {
+                Span::styled(name, Style::default().fg(theme.border))
+            }
+        })
+        .collect();
+
+    let title_text = vec![
+        Span::styled("Anthropic Spy ", theme.title_style()),
+        Span::raw("│ "),
+        tabs[0].clone(),
+        Span::raw(" "),
+        tabs[1].clone(),
+        Span::raw(" "),
+        tabs[2].clone(),
+        Span::raw(" │ Theme: "),
+        Span::styled(app.theme.name(), Style::default().fg(theme.stats_highlight)),
+    ];
+
+    let title = Paragraph::new(Line::from(title_text)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme.border_style()),
+    );
 
     f.render_widget(title, area);
 }
 
-/// Render the status bar with statistics
-fn render_status(f: &mut Frame, area: Rect, app: &App) {
+/// Render the status bar with statistics and context window
+fn render_status(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let stats = &app.stats;
+
+    // Build context window display
+    let context_info = if stats.context_window_size > 0 {
+        let usage_pct = stats.context_usage_pct();
+        format!(
+            " | Ctx: {}/{} ({:.0}%)",
+            format_number(stats.current_context_tokens),
+            format_number(stats.context_window_size),
+            usage_pct * 100.0
+        )
+    } else {
+        String::new()
+    };
 
     // Format token and cost information
     let token_info = if stats.total_tokens() > 0 {
@@ -136,14 +195,14 @@ fn render_status(f: &mut Frame, area: Rect, app: &App) {
 
         if savings > 0.0 {
             format!(
-                " | Session: {} tokens | Cost: ${:.4} | Cache saved: ${:.4}",
+                " | {} tok | ${:.4} | -${:.4}",
                 format_number(stats.total_tokens()),
                 cost,
                 savings
             )
         } else {
             format!(
-                " | Session: {} tokens | Est. Cost: ${:.4}",
+                " | {} tok | ${:.4}",
                 format_number(stats.total_tokens()),
                 cost
             )
@@ -153,20 +212,260 @@ fn render_status(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let status_text = format!(
-        " Uptime: {} | Requests: {} | Tools: {} | Success: {:.1}% | Avg: {:.2}s{} | Press 'q' to quit, Enter for details",
+        " {} | Req:{} | Tools:{} | {:.1}% | {:.2}s{}{} | Tab:views T:theme ?:help q:quit",
         app.uptime(),
         stats.total_requests,
         stats.total_tool_calls,
         stats.success_rate(),
         stats.avg_duration().as_secs_f64(),
+        context_info,
         token_info,
     );
 
     let status = Paragraph::new(status_text)
-        .style(Style::default().fg(Color::Green))
-        .block(Block::default().borders(Borders::ALL));
+        .style(theme.status_style())
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme.border_style()),
+        );
 
     f.render_widget(status, area);
+}
+
+/// Render the Stats view with comprehensive metrics
+fn render_stats_view(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    let stats = &app.stats;
+
+    // Split into two columns
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    // Left column: Overview stats
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(8), // General stats
+            Constraint::Length(6), // Context window
+            Constraint::Min(5),    // Top tools
+        ])
+        .split(chunks[0]);
+
+    // General statistics
+    let general_stats = format!(
+        r#"
+ Uptime:          {}
+ Total Requests:  {}
+ Total Tool Calls: {}
+ Success Rate:    {:.2}%
+ Avg Duration:    {:.3}s
+"#,
+        app.uptime(),
+        stats.total_requests,
+        stats.total_tool_calls,
+        stats.success_rate(),
+        stats.avg_duration().as_secs_f64()
+    );
+
+    let general = Paragraph::new(general_stats)
+        .style(Style::default().fg(theme.fg))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme.border_style())
+                .title(" Overview "),
+        );
+    f.render_widget(general, left_chunks[0]);
+
+    // Context window gauge
+    let usage_pct = stats.context_usage_pct();
+    let context_color = if usage_pct < 0.5 {
+        theme.context_low
+    } else if usage_pct < 0.8 {
+        theme.context_medium
+    } else {
+        theme.context_high
+    };
+
+    let gauge_label = if stats.context_window_size > 0 {
+        format!(
+            "{} / {} tokens ({:.1}%)",
+            format_number(stats.current_context_tokens),
+            format_number(stats.context_window_size),
+            usage_pct * 100.0
+        )
+    } else {
+        "No context data yet".to_string()
+    };
+
+    let gauge = Gauge::default()
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme.border_style())
+                .title(" Context Window "),
+        )
+        .gauge_style(Style::default().fg(context_color))
+        .ratio(usage_pct.min(1.0))
+        .label(gauge_label);
+    f.render_widget(gauge, left_chunks[1]);
+
+    // Top tools by call count
+    let top_tools = stats.top_tools(10);
+    let tool_items: Vec<ListItem> = top_tools
+        .iter()
+        .map(|(name, count)| {
+            let avg = stats.avg_tool_duration(name);
+            let avg_str = avg
+                .map(|d| format!("{:.2}s", d.as_secs_f64()))
+                .unwrap_or_else(|| "N/A".to_string());
+            ListItem::new(format!(" {}: {} calls (avg: {})", name, count, avg_str))
+                .style(Style::default().fg(theme.tool_call))
+        })
+        .collect();
+
+    let tools_list = List::new(tool_items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme.border_style())
+            .title(" Top Tools "),
+    );
+    f.render_widget(tools_list, left_chunks[2]);
+
+    // Right column: Token stats
+    let right_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(12), // Token breakdown
+            Constraint::Min(5),     // Cost analysis
+        ])
+        .split(chunks[1]);
+
+    // Token breakdown
+    let token_stats = format!(
+        r#"
+ Input Tokens:          {}
+ Output Tokens:         {}
+ Cache Creation:        {}
+ Cache Read:            {}
+ ─────────────────────────
+ Total Tokens:          {}
+
+ Thinking Blocks:       {}
+ Thinking Tokens:       ~{}
+"#,
+        format_number(stats.total_input_tokens),
+        format_number(stats.total_output_tokens),
+        format_number(stats.total_cache_creation_tokens),
+        format_number(stats.total_cache_read_tokens),
+        format_number(stats.total_tokens()),
+        stats.thinking_blocks,
+        format_number(stats.thinking_tokens)
+    );
+
+    let tokens = Paragraph::new(token_stats)
+        .style(Style::default().fg(theme.fg))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme.border_style())
+                .title(" Token Usage "),
+        );
+    f.render_widget(tokens, right_chunks[0]);
+
+    // Cost analysis
+    let model_name = stats.current_model.as_deref().unwrap_or("Unknown");
+    let total_cost = stats.total_cost();
+    let cache_savings = stats.cache_savings();
+    let cost_without_cache = total_cost + cache_savings;
+
+    let cost_stats = format!(
+        r#"
+ Model:           {}
+
+ Total Cost:      ${:.4}
+ Cache Savings:   ${:.4}
+ Without Cache:   ${:.4}
+
+ Peak Context:    {} tokens
+"#,
+        model_name,
+        total_cost,
+        cache_savings,
+        cost_without_cache,
+        format_number(stats.peak_context_tokens)
+    );
+
+    let costs = Paragraph::new(cost_stats)
+        .style(Style::default().fg(theme.fg))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme.border_style())
+                .title(" Cost Analysis "),
+        );
+    f.render_widget(costs, right_chunks[1]);
+}
+
+/// Render the Help view with keybindings
+fn render_help_view(f: &mut Frame, area: Rect, _app: &App, theme: &Theme) {
+    let help_text = r#"
+  NAVIGATION
+  ──────────────────────────────────────────────────────
+  Tab / Shift+Tab     Cycle through views (Events → Stats → Help)
+  1, 2, 3             Jump to view (1=Events, 2=Stats, 3=Help)
+
+  EVENTS VIEW
+  ──────────────────────────────────────────────────────
+  ↑/k, ↓/j            Navigate event list
+  Enter               Toggle detail panel for selected event
+  Esc                 Close detail panel
+  Home / End          Jump to first/last event
+  t                   Toggle thinking panel visibility
+
+  THEMES
+  ──────────────────────────────────────────────────────
+  T / Shift+T         Cycle through themes
+
+  Available themes:
+    • Dark (default)  - Classic dark terminal colors
+    • Light           - Light background for bright environments
+    • Monokai         - Popular code editor theme
+    • Dracula         - Dark purple-tinted theme
+    • Nord            - Arctic, bluish color palette
+    • Solarized       - Ethan Schoonover's precision colors
+
+  GENERAL
+  ──────────────────────────────────────────────────────
+  q / Q               Quit the application
+  ?                   Show this help (same as Help view)
+
+  MOUSE
+  ──────────────────────────────────────────────────────
+  Scroll Up/Down      Navigate event list
+
+  ABOUT
+  ──────────────────────────────────────────────────────
+  Anthropic Spy is an observability proxy for Claude Code.
+  It intercepts API traffic and displays tool calls, responses,
+  token usage, and thinking blocks in real-time.
+
+  For more information, see the README.md file.
+"#;
+
+    let paragraph = Paragraph::new(help_text)
+        .style(Style::default().fg(theme.fg))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme.border_style())
+                .title(" Help - Keybindings "),
+        )
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(paragraph, area);
 }
 
 /// Format a large number with commas for readability
@@ -185,7 +484,7 @@ fn format_number(n: u64) -> String {
 }
 
 /// Render the main list view showing all events
-fn render_list_view(f: &mut Frame, area: Rect, app: &App) {
+fn render_list_view(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let (start, end) = app.visible_range(area.height.saturating_sub(2) as usize);
 
     let items: Vec<ListItem> = app.events[start..end]
@@ -197,44 +496,47 @@ fn render_list_view(f: &mut Frame, area: Rect, app: &App) {
 
             let line = format_event_line(event);
             let style = if is_selected {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                theme.selected_style()
             } else {
-                event_color_style(event)
+                event_color_style(event, theme)
             };
 
             ListItem::new(line).style(style)
         })
         .collect();
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
-        " Events ({}/{}) - ↑↓ to navigate ",
-        app.selected + 1,
-        app.events.len()
-    )));
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme.border_style())
+            .title(format!(
+                " Events ({}/{}) - ↑↓ to navigate ",
+                app.selected + 1,
+                app.events.len()
+            )),
+    );
 
     f.render_widget(list, area);
 }
 
 /// Render split view with list on top and details on bottom
-fn render_split_view(f: &mut Frame, area: Rect, app: &App) {
+fn render_split_view(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
     // Render the list in the top half
-    render_list_view(f, chunks[0], app);
+    render_list_view(f, chunks[0], app, theme);
 
     // Render details in the bottom half
     if let Some(event) = app.selected_event() {
-        render_detail_view(f, chunks[1], app, event);
+        render_detail_view(f, chunks[1], app, event, theme);
     }
 }
 
 /// Render detailed view of a single event
-fn render_detail_view(f: &mut Frame, area: Rect, app: &App, event: &ProxyEvent) {
+fn render_detail_view(f: &mut Frame, area: Rect, app: &App, event: &ProxyEvent, theme: &Theme) {
     let detail_text = format_event_detail(event);
 
     // Split detail text into lines for scrolling
@@ -257,11 +559,16 @@ fn render_detail_view(f: &mut Frame, area: Rect, app: &App, event: &ProxyEvent) 
     };
 
     let paragraph = Paragraph::new(visible_text)
-        .style(Style::default().fg(Color::White))
-        .block(Block::default().borders(Borders::ALL).title(format!(
-            " Event Details - Press Enter to close {}",
-            scroll_indicator
-        )))
+        .style(Style::default().fg(theme.fg))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme.border_focused_style())
+                .title(format!(
+                    " Event Details - Press Enter to close {}",
+                    scroll_indicator
+                )),
+        )
         .wrap(Wrap { trim: false });
 
     f.render_widget(paragraph, area);
@@ -280,7 +587,7 @@ fn format_event_line(event: &ProxyEvent) -> String {
                 "[{}] 🔧 Tool Call: {} ({})",
                 timestamp.format("%H:%M:%S"),
                 tool_name,
-                &id[..8]
+                &id[..8.min(id.len())]
             )
         }
         ProxyEvent::ToolResult {
@@ -620,30 +927,32 @@ fn format_event_detail(event: &ProxyEvent) -> String {
 }
 
 /// Get appropriate color style for an event
-fn event_color_style(event: &ProxyEvent) -> Style {
+fn event_color_style(event: &ProxyEvent, theme: &Theme) -> Style {
     match event {
-        ProxyEvent::ToolCall { .. } => Style::default().fg(Color::Cyan),
+        ProxyEvent::ToolCall { .. } => Style::default().fg(theme.tool_call),
         ProxyEvent::ToolResult { success, .. } => {
             if *success {
-                Style::default().fg(Color::Green)
+                Style::default().fg(theme.tool_result_success)
             } else {
-                Style::default().fg(Color::Red)
+                Style::default().fg(theme.tool_result_failure)
             }
         }
-        ProxyEvent::Request { .. } => Style::default().fg(Color::Blue),
-        ProxyEvent::Response { .. } => Style::default().fg(Color::Magenta),
-        ProxyEvent::Error { .. } => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ProxyEvent::HeadersCaptured { .. } => Style::default().fg(Color::Gray),
-        ProxyEvent::RateLimitUpdate { .. } => Style::default().fg(Color::Yellow),
-        ProxyEvent::ApiUsage { .. } => Style::default().fg(Color::LightBlue),
+        ProxyEvent::Request { .. } => Style::default().fg(theme.request),
+        ProxyEvent::Response { .. } => Style::default().fg(theme.response),
+        ProxyEvent::Error { .. } => Style::default()
+            .fg(theme.error)
+            .add_modifier(Modifier::BOLD),
+        ProxyEvent::HeadersCaptured { .. } => Style::default().fg(theme.headers),
+        ProxyEvent::RateLimitUpdate { .. } => Style::default().fg(theme.rate_limit),
+        ProxyEvent::ApiUsage { .. } => Style::default().fg(theme.api_usage),
         ProxyEvent::Thinking { .. } => Style::default()
-            .fg(Color::Magenta)
+            .fg(theme.thinking)
             .add_modifier(Modifier::ITALIC),
     }
 }
 
 /// Render system logs panel at the bottom of the screen
-pub fn render_logs_panel(f: &mut Frame, area: Rect, app: &App) {
+pub fn render_logs_panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     // Get recent log entries from buffer
     let height = area.height.saturating_sub(2) as usize; // Account for borders
     let log_entries = app.log_buffer.get_recent(height);
@@ -653,7 +962,7 @@ pub fn render_logs_panel(f: &mut Frame, area: Rect, app: &App) {
         .iter()
         .map(|entry| {
             let formatted = format_log_entry(entry);
-            let style = log_level_style(&entry.level);
+            let style = log_level_style(&entry.level, theme);
             ListItem::new(formatted).style(style)
         })
         .collect();
@@ -661,6 +970,7 @@ pub fn render_logs_panel(f: &mut Frame, area: Rect, app: &App) {
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
+            .border_style(theme.border_style())
             .title(" System Logs "),
     );
 
@@ -678,12 +988,14 @@ fn format_log_entry(entry: &LogEntry) -> String {
 }
 
 /// Get color style for log level
-fn log_level_style(level: &LogLevel) -> Style {
+fn log_level_style(level: &LogLevel, theme: &Theme) -> Style {
     match level {
-        LogLevel::Error => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        LogLevel::Warn => Style::default().fg(Color::Yellow),
-        LogLevel::Info => Style::default().fg(Color::Blue),
-        LogLevel::Debug => Style::default().fg(Color::Gray),
-        LogLevel::Trace => Style::default().fg(Color::DarkGray),
+        LogLevel::Error => Style::default()
+            .fg(theme.log_error)
+            .add_modifier(Modifier::BOLD),
+        LogLevel::Warn => Style::default().fg(theme.log_warn),
+        LogLevel::Info => Style::default().fg(theme.log_info),
+        LogLevel::Debug => Style::default().fg(theme.log_debug),
+        LogLevel::Trace => Style::default().fg(theme.log_trace),
     }
 }

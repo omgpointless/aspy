@@ -8,12 +8,13 @@
 
 pub mod app;
 pub mod input;
+pub mod theme;
 pub mod ui;
 
 use crate::events::ProxyEvent;
 use crate::logging::LogBuffer;
 use anyhow::{Context, Result};
-use app::App;
+use app::{App, View};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -123,23 +124,95 @@ async fn run_event_loop(
 /// Action keys use time-based debounce, navigation keys use state tracking
 fn handle_key_event(app: &mut App, key_event: KeyEvent) {
     let key = key_event.code;
+    let modifiers = key_event.modifiers;
 
     match key_event.kind {
         KeyEventKind::Press => {
             // Action keys - use time-based debounce (no release events needed)
             match key {
+                // Quit
                 KeyCode::Char('q') | KeyCode::Char('Q') => {
                     if !app.should_debounce_action() {
                         app.should_quit = true;
                     }
                     return;
                 }
-                KeyCode::Enter | KeyCode::Esc => {
-                    if !app.should_debounce_action() {
+
+                // Toggle detail view (Main view only)
+                KeyCode::Enter => {
+                    if app.current_view == View::Main && !app.should_debounce_action() {
                         app.toggle_detail();
                     }
                     return;
                 }
+                KeyCode::Esc => {
+                    if app.current_view == View::Main
+                        && app.show_detail
+                        && !app.should_debounce_action()
+                    {
+                        app.toggle_detail();
+                    }
+                    return;
+                }
+
+                // View switching with Tab
+                KeyCode::Tab => {
+                    if !app.should_debounce_action() {
+                        if modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+                            app.prev_view();
+                        } else {
+                            app.next_view();
+                        }
+                    }
+                    return;
+                }
+                KeyCode::BackTab => {
+                    if !app.should_debounce_action() {
+                        app.prev_view();
+                    }
+                    return;
+                }
+
+                // Direct view jumping with number keys
+                KeyCode::Char('1') => {
+                    if !app.should_debounce_action() {
+                        app.set_view(View::Main);
+                    }
+                    return;
+                }
+                KeyCode::Char('2') => {
+                    if !app.should_debounce_action() {
+                        app.set_view(View::Stats);
+                    }
+                    return;
+                }
+                KeyCode::Char('3') | KeyCode::Char('?') => {
+                    if !app.should_debounce_action() {
+                        app.set_view(View::Help);
+                    }
+                    return;
+                }
+
+                // Theme cycling
+                KeyCode::Char('T') => {
+                    if !app.should_debounce_action() {
+                        if modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+                            app.prev_theme();
+                        } else {
+                            app.next_theme();
+                        }
+                    }
+                    return;
+                }
+
+                // Toggle thinking panel
+                KeyCode::Char('t') => {
+                    if !app.should_debounce_action() {
+                        app.toggle_thinking();
+                    }
+                    return;
+                }
+
                 _ => {}
             }
 
@@ -148,19 +221,46 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
                 return;
             }
 
-            match key {
-                KeyCode::Up | KeyCode::Char('k') => app.select_previous(),
-                KeyCode::Down | KeyCode::Char('j') => app.select_next(),
-                KeyCode::Home => {
-                    app.selected = 0;
-                    app.scroll_offset = 0;
-                }
-                KeyCode::End => {
-                    if !app.events.is_empty() {
-                        app.selected = app.events.len() - 1;
+            // View-specific navigation
+            match app.current_view {
+                View::Main => match key {
+                    KeyCode::Up | KeyCode::Char('k') => app.select_previous(),
+                    KeyCode::Down | KeyCode::Char('j') => app.select_next(),
+                    KeyCode::Home => {
+                        app.selected = 0;
+                        app.scroll_offset = 0;
+                    }
+                    KeyCode::End => {
+                        if !app.events.is_empty() {
+                            app.selected = app.events.len() - 1;
+                        }
+                    }
+                    _ => {}
+                },
+                View::Stats => {
+                    // Stats view scrolling (if needed in future)
+                    match key {
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.stats_scroll = app.stats_scroll.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.stats_scroll += 1;
+                        }
+                        _ => {}
                     }
                 }
-                _ => {}
+                View::Help => {
+                    // Help view scrolling
+                    match key {
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.help_scroll = app.help_scroll.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.help_scroll += 1;
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         KeyEventKind::Release => {

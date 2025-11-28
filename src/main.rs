@@ -37,6 +37,79 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 /// Uses std::sync::Mutex for sync access in render loop
 pub type StreamingThinking = Arc<Mutex<String>>;
 
+/// Shared context state for interceptor injection
+/// Parser updates this when ApiUsage arrives, interceptor reads when processing requests
+#[derive(Debug, Default)]
+pub struct ContextState {
+    /// Current context size (input + cache_read tokens from last API call)
+    pub current_tokens: u64,
+    /// Configured context limit
+    pub limit: u64,
+    /// Last threshold percentage we warned at (80, 85, 90, 95) to avoid spam
+    pub last_warned_threshold: Option<u8>,
+}
+
+impl ContextState {
+    pub fn new(limit: u64) -> Self {
+        Self {
+            current_tokens: 0,
+            limit,
+            last_warned_threshold: None,
+        }
+    }
+
+    /// Get context usage as percentage (0-100)
+    pub fn usage_percent(&self) -> f64 {
+        if self.limit == 0 {
+            return 0.0;
+        }
+        (self.current_tokens as f64 / self.limit as f64) * 100.0
+    }
+
+    /// Check if we should warn at current level
+    /// Returns Some(threshold) if we should warn, None if already warned at this level
+    pub fn should_warn(&self) -> Option<u8> {
+        let percent = self.usage_percent();
+
+        // Determine current threshold bucket
+        let threshold = if percent >= 95.0 {
+            95
+        } else if percent >= 90.0 {
+            90
+        } else if percent >= 85.0 {
+            85
+        } else if percent >= 80.0 {
+            80
+        } else {
+            return None; // Below warning threshold
+        };
+
+        // Check if we already warned at this level
+        match self.last_warned_threshold {
+            Some(last) if last >= threshold => None, // Already warned
+            _ => Some(threshold),
+        }
+    }
+
+    /// Update context tokens (called by parser on ApiUsage)
+    pub fn update(&mut self, input_tokens: u64, cache_read_tokens: u64) {
+        self.current_tokens = input_tokens + cache_read_tokens;
+    }
+
+    /// Record that we warned at a threshold
+    pub fn mark_warned(&mut self, threshold: u8) {
+        self.last_warned_threshold = Some(threshold);
+    }
+
+    /// Reset warning state (called on context compact)
+    pub fn reset_warnings(&mut self) {
+        self.last_warned_threshold = None;
+    }
+}
+
+/// Shared context state wrapped for thread-safe access
+pub type SharedContextState = Arc<Mutex<ContextState>>;
+
 /// Generate a unique session ID for log file naming
 /// Format: YYYYMMDD-HHMMSS-XXXX (timestamp + 4 random hex chars)
 fn generate_session_id() -> String {
@@ -105,6 +178,10 @@ async fn main() -> Result<()> {
     // Proxy writes thinking_delta content here, TUI reads it for real-time display
     let streaming_thinking: StreamingThinking = Arc::new(Mutex::new(String::new()));
 
+    // Create shared context state for interceptor injection
+    // Parser updates this on ApiUsage, interceptor reads to decide injection
+    let context_state: SharedContextState = Arc::new(Mutex::new(ContextState::new(config.context_limit)));
+
     // Spawn the storage task (if enabled)
     // This runs in the background, writing events to disk
     let storage_handle = if config.features.storage {
@@ -128,6 +205,7 @@ async fn main() -> Result<()> {
     // We also pass the shutdown receiver so the proxy can gracefully shut down
     let proxy_config = config.clone();
     let proxy_streaming_thinking = streaming_thinking.clone();
+    let proxy_context_state = context_state.clone();
     let proxy_handle = if config.demo_mode {
         // Demo mode: generate mock events instead of running real proxy
         // Drop storage sender since demo doesn't use it
@@ -144,6 +222,7 @@ async fn main() -> Result<()> {
                 event_tx_storage,
                 shutdown_rx,
                 proxy_streaming_thinking,
+                proxy_context_state,
             )
             .await
             .expect("Proxy server failed");

@@ -14,7 +14,7 @@ use crate::config::Config;
 use crate::events::{generate_id, ProxyEvent};
 use crate::parser::models::CapturedHeaders;
 use crate::parser::Parser;
-use crate::StreamingThinking;
+use crate::{SharedContextState, StreamingThinking};
 use anyhow::{Context, Result};
 use axum::{
     body::Body,
@@ -52,6 +52,8 @@ pub struct ProxyState {
     api_url: String,
     /// Shared buffer for streaming thinking content to TUI
     streaming_thinking: StreamingThinking,
+    /// Shared context state for interceptor injection
+    context_state: SharedContextState,
 }
 
 /// Context for handling an API response
@@ -73,6 +75,7 @@ pub async fn start_proxy(
     event_tx_storage: mpsc::Sender<ProxyEvent>,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
     streaming_thinking: StreamingThinking,
+    context_state: SharedContextState,
 ) -> Result<()> {
     let bind_addr = config.bind_addr;
     let api_url = config.api_url.clone();
@@ -91,6 +94,7 @@ pub async fn start_proxy(
         event_tx_storage,
         api_url,
         streaming_thinking,
+        context_state,
     };
 
     // Build the router - all requests go to the proxy handler
@@ -287,12 +291,27 @@ async fn proxy_handler(
         format!("{}?{}", forward_url, query)
     };
 
+    // INTERCEPTOR: Potentially modify request body for context warnings
+    // Only applies to POST /messages requests
+    let final_body = if is_messages_endpoint && method == "POST" {
+        if let Some(modified) =
+            interceptor::maybe_inject_context_warning(&body_bytes, &state.context_state)
+        {
+            tracing::info!("Injected context warning annotation");
+            modified
+        } else {
+            body_bytes.to_vec()
+        }
+    } else {
+        body_bytes.to_vec()
+    };
+
     // Build the forwarded request
     // With reqwest 0.12, Method types align with axum (both use http 1.0 crate)
     let mut forward_req = state
         .client
         .request(method, &forward_url)
-        .body(body_bytes.to_vec());
+        .body(final_body);
 
     // Copy relevant headers (types align between axum and reqwest 0.12)
     for (key, value) in headers.iter() {
@@ -389,6 +408,7 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
     let event_tx_storage = state.event_tx_storage.clone();
     let request_id_clone = request_id.clone();
     let streaming_thinking = state.streaming_thinking.clone();
+    let context_state = state.context_state.clone();
 
     // Spawn task to stream response while accumulating
     tokio::spawn(async move {
@@ -497,6 +517,23 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
         if is_messages_endpoint {
             if let Ok(events) = parser.parse_response(&accumulated).await {
                 for event in events {
+                    // Update context state when we see ApiUsage
+                    if let ProxyEvent::ApiUsage {
+                        input_tokens,
+                        cache_read_tokens,
+                        ..
+                    } = &event
+                    {
+                        if let Ok(mut ctx) = context_state.lock() {
+                            ctx.update(*input_tokens as u64, *cache_read_tokens as u64);
+                        }
+                    }
+                    // Reset warnings on context compact
+                    if let ProxyEvent::ContextCompact { .. } = &event {
+                        if let Ok(mut ctx) = context_state.lock() {
+                            ctx.reset_warnings();
+                        }
+                    }
                     send_event(event).await;
                 }
             }
@@ -582,6 +619,23 @@ async fn handle_buffered_response(ctx: ResponseContext) -> Result<Response<Body>
     if is_messages_endpoint && status.is_success() {
         if let Ok(events) = state.parser.parse_response(&response_body).await {
             for event in events {
+                // Update context state when we see ApiUsage
+                if let ProxyEvent::ApiUsage {
+                    input_tokens,
+                    cache_read_tokens,
+                    ..
+                } = &event
+                {
+                    if let Ok(mut ctx) = state.context_state.lock() {
+                        ctx.update(*input_tokens as u64, *cache_read_tokens as u64);
+                    }
+                }
+                // Reset warnings on context compact
+                if let ProxyEvent::ContextCompact { .. } = &event {
+                    if let Ok(mut ctx) = state.context_state.lock() {
+                        ctx.reset_warnings();
+                    }
+                }
                 state.send_event(event).await;
             }
         }

@@ -18,14 +18,37 @@ mod parser;
 mod pricing;
 mod proxy;
 mod storage;
+mod theme;
 mod tui;
 
 use anyhow::Result;
+use chrono::Utc;
 use config::Config;
 use logging::{LogBuffer, TuiLogLayer};
+use std::sync::{Arc, Mutex};
 use storage::Storage;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+/// Shared buffer for streaming thinking content
+/// The proxy writes to this as thinking_delta events arrive,
+/// and the TUI reads from it each render frame for real-time display
+/// Uses std::sync::Mutex for sync access in render loop
+pub type StreamingThinking = Arc<Mutex<String>>;
+
+/// Generate a unique session ID for log file naming
+/// Format: YYYYMMDD-HHMMSS-XXXX (timestamp + 4 random hex chars)
+fn generate_session_id() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    // Use RandomState to get a random value without adding a dependency
+    let random = RandomState::new().build_hasher().finish();
+    let short_hash = format!("{:04x}", random & 0xFFFF);
+
+    format!("{}-{}", timestamp, short_hash)
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -58,7 +81,11 @@ async fn main() -> Result<()> {
             .init();
     }
 
+    // Generate session ID for this run
+    let session_id = generate_session_id();
+
     tracing::info!("Starting Anthropic Spy");
+    tracing::info!("Session ID: {}", session_id);
     tracing::info!("Configuration: {:?}", config);
 
     // Create event channels
@@ -72,11 +99,16 @@ async fn main() -> Result<()> {
     // This is a oneshot channel - it can only send one signal
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
+    // Create shared buffer for streaming thinking content
+    // Proxy writes thinking_delta content here, TUI reads it for real-time display
+    let streaming_thinking: StreamingThinking = Arc::new(Mutex::new(String::new()));
+
     // Spawn the storage task
     // This runs in the background, writing events to disk
     let storage_config = config.clone();
+    let storage_session_id = session_id.clone();
     let storage_handle = tokio::spawn(async move {
-        let storage = Storage::new(storage_config.log_dir, event_rx_storage)
+        let storage = Storage::new(storage_config.log_dir, storage_session_id, event_rx_storage)
             .expect("Failed to create storage");
         storage.run().await
     });
@@ -86,19 +118,26 @@ async fn main() -> Result<()> {
     // We pass both event senders so the proxy can broadcast to TUI and storage
     // We also pass the shutdown receiver so the proxy can gracefully shut down
     let proxy_config = config.clone();
+    let proxy_streaming_thinking = streaming_thinking.clone();
     let proxy_handle = if config.demo_mode {
         // Demo mode: generate mock events instead of running real proxy
         // Drop storage sender since demo doesn't use it
         drop(event_tx_storage);
         tracing::info!("Running in DEMO MODE - generating mock events");
         tokio::spawn(async move {
-            demo::run_demo(event_tx_tui, shutdown_rx).await;
+            demo::run_demo(event_tx_tui, shutdown_rx, proxy_streaming_thinking).await;
         })
     } else {
         tokio::spawn(async move {
-            proxy::start_proxy(proxy_config, event_tx_tui, event_tx_storage, shutdown_rx)
-                .await
-                .expect("Proxy server failed");
+            proxy::start_proxy(
+                proxy_config,
+                event_tx_tui,
+                event_tx_storage,
+                shutdown_rx,
+                proxy_streaming_thinking,
+            )
+            .await
+            .expect("Proxy server failed");
         })
     };
 
@@ -106,7 +145,15 @@ async fn main() -> Result<()> {
     // This blocks until the user quits (presses 'q')
     if config.enable_tui {
         tracing::info!("Starting TUI");
-        if let Err(e) = tui::run_tui(event_rx_tui, log_buffer).await {
+        if let Err(e) = tui::run_tui(
+            event_rx_tui,
+            log_buffer,
+            config.context_limit,
+            &config.theme,
+            streaming_thinking,
+        )
+        .await
+        {
             tracing::error!("TUI error: {:?}", e);
         }
     } else {

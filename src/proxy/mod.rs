@@ -14,6 +14,7 @@ use crate::config::Config;
 use crate::events::{generate_id, ProxyEvent};
 use crate::parser::models::CapturedHeaders;
 use crate::parser::Parser;
+use crate::StreamingThinking;
 use anyhow::{Context, Result};
 use axum::{
     body::Body,
@@ -49,6 +50,20 @@ pub struct ProxyState {
     event_tx_storage: mpsc::Sender<ProxyEvent>,
     /// Target API URL
     api_url: String,
+    /// Shared buffer for streaming thinking content to TUI
+    streaming_thinking: StreamingThinking,
+}
+
+/// Context for handling an API response
+struct ResponseContext {
+    response: reqwest::Response,
+    status: reqwest::StatusCode,
+    headers: reqwest::header::HeaderMap,
+    start: Instant,
+    ttfb: std::time::Duration,
+    request_id: String,
+    is_messages_endpoint: bool,
+    state: ProxyState,
 }
 
 /// Start the proxy server
@@ -57,6 +72,7 @@ pub async fn start_proxy(
     event_tx_tui: mpsc::Sender<ProxyEvent>,
     event_tx_storage: mpsc::Sender<ProxyEvent>,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    streaming_thinking: StreamingThinking,
 ) -> Result<()> {
     let bind_addr = config.bind_addr;
     let api_url = config.api_url.clone();
@@ -74,6 +90,7 @@ pub async fn start_proxy(
         event_tx_tui,
         event_tx_storage,
         api_url,
+        streaming_thinking,
     };
 
     // Build the router - all requests go to the proxy handler
@@ -291,6 +308,9 @@ async fn proxy_handler(
         .await
         .map_err(|e| ProxyError::Upstream(e.to_string()))?;
 
+    // TTFB: Time to first byte - captured immediately after headers received
+    let ttfb = start.elapsed();
+
     let status = response.status();
     let response_headers = response.headers().clone();
 
@@ -325,46 +345,40 @@ async fn proxy_handler(
             .await;
     }
 
+    // Bundle context for handler
+    let ctx = ResponseContext {
+        response,
+        status,
+        headers: response_headers,
+        start,
+        ttfb,
+        request_id,
+        is_messages_endpoint,
+        state,
+    };
+
     // Decide: streaming (SSE) or buffered (JSON) response handling
-    if is_sse_response(&response_headers) && status.is_success() {
-        // STREAMING PATH: Forward chunks immediately while accumulating for parsing
+    if is_sse_response(&ctx.headers) && ctx.status.is_success() {
         tracing::debug!("Handling SSE streaming response");
-        handle_streaming_response(
-            response,
-            status,
-            response_headers,
-            start,
-            request_id,
-            is_messages_endpoint,
-            state,
-        )
-        .await
+        handle_streaming_response(ctx).await
     } else {
-        // BUFFERED PATH: Small JSON responses can be buffered
         tracing::debug!("Handling buffered (non-streaming) response");
-        handle_buffered_response(
-            response,
-            status,
-            response_headers,
-            start,
-            request_id,
-            is_messages_endpoint,
-            state,
-        )
-        .await
+        handle_buffered_response(ctx).await
     }
 }
 
 /// Handle SSE streaming responses - forward chunks immediately while accumulating
-async fn handle_streaming_response(
-    response: reqwest::Response,
-    status: reqwest::StatusCode,
-    response_headers: reqwest::header::HeaderMap,
-    start: Instant,
-    request_id: String,
-    is_messages_endpoint: bool,
-    state: ProxyState,
-) -> Result<Response<Body>, ProxyError> {
+async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body>, ProxyError> {
+    let ResponseContext {
+        response,
+        status,
+        headers: response_headers,
+        start,
+        ttfb,
+        request_id,
+        is_messages_endpoint,
+        state,
+    } = ctx;
     // Create channel for streaming to client
     // Buffer size of 64 provides some cushion without excessive memory use
     let (tx, rx) = mpsc::channel::<Result<Bytes, Infallible>>(64);
@@ -374,6 +388,7 @@ async fn handle_streaming_response(
     let event_tx_tui = state.event_tx_tui.clone();
     let event_tx_storage = state.event_tx_storage.clone();
     let request_id_clone = request_id.clone();
+    let streaming_thinking = state.streaming_thinking.clone();
 
     // Spawn task to stream response while accumulating
     tokio::spawn(async move {
@@ -399,8 +414,27 @@ async fn handle_streaming_response(
                             // Process complete lines
                             while let Some(newline_pos) = line_buffer.find('\n') {
                                 let line = line_buffer[..newline_pos].trim();
+                                // Register tool_use IDs immediately
                                 if let Some(tool_info) = extract_tool_use_from_sse_line(line) {
                                     parser.register_pending_tool(tool_info.0, tool_info.1).await;
+                                }
+                                // Emit ThinkingStarted immediately for real-time feedback
+                                if is_thinking_block_start(line) {
+                                    // Clear buffer for new thinking block
+                                    if let Ok(mut buf) = streaming_thinking.lock() {
+                                        buf.clear();
+                                    }
+                                    let _ = event_tx_tui
+                                        .send(ProxyEvent::ThinkingStarted {
+                                            timestamp: chrono::Utc::now(),
+                                        })
+                                        .await;
+                                }
+                                // Stream thinking content in real-time
+                                if let Some(thinking_text) = extract_thinking_delta(line) {
+                                    if let Ok(mut buf) = streaming_thinking.lock() {
+                                        buf.push_str(&thinking_text);
+                                    }
                                 }
                                 line_buffer = line_buffer[newline_pos + 1..].to_string();
                             }
@@ -453,6 +487,7 @@ async fn handle_streaming_response(
             timestamp: Utc::now(),
             status: status.as_u16(),
             body_size: total_bytes,
+            ttfb,
             duration,
             body: parsed_body,
         })
@@ -495,15 +530,17 @@ async fn handle_streaming_response(
 }
 
 /// Handle non-streaming responses (JSON) - buffer and forward
-async fn handle_buffered_response(
-    response: reqwest::Response,
-    status: reqwest::StatusCode,
-    response_headers: reqwest::header::HeaderMap,
-    start: Instant,
-    request_id: String,
-    is_messages_endpoint: bool,
-    state: ProxyState,
-) -> Result<Response<Body>, ProxyError> {
+async fn handle_buffered_response(ctx: ResponseContext) -> Result<Response<Body>, ProxyError> {
+    let ResponseContext {
+        response,
+        status,
+        headers: response_headers,
+        start,
+        ttfb,
+        request_id,
+        is_messages_endpoint,
+        state,
+    } = ctx;
     // Read full response body
     let response_body = response
         .bytes()
@@ -535,6 +572,7 @@ async fn handle_buffered_response(
             timestamp: Utc::now(),
             status: status.as_u16(),
             body_size: response_body.len(),
+            ttfb,
             duration,
             body: parsed_response_body,
         })
@@ -672,6 +710,61 @@ fn extract_tool_use_from_sse_line(line: &str) -> Option<(String, String)> {
     let name = content_block.get("name")?.as_str()?.to_string();
 
     Some((id, name))
+}
+
+/// Check if an SSE line indicates the start of a thinking block
+/// Used for real-time "Thinking..." feedback before the full block arrives
+fn is_thinking_block_start(line: &str) -> bool {
+    let Some(json_str) = line.strip_prefix("data:") else {
+        return false;
+    };
+    let json_str = json_str.trim();
+    if json_str.is_empty() || json_str == "[DONE]" {
+        return false;
+    }
+
+    let Ok(data) = serde_json::from_str::<serde_json::Value>(json_str) else {
+        return false;
+    };
+
+    // Check for content_block_start with type "thinking"
+    let event_type = data.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if event_type != "content_block_start" {
+        return false;
+    }
+
+    data.get("content_block")
+        .and_then(|b| b.get("type"))
+        .and_then(|t| t.as_str())
+        .map(|t| t == "thinking")
+        .unwrap_or(false)
+}
+
+/// Extract thinking text from a thinking_delta SSE event
+/// Returns Some(text) if this is a thinking delta, None otherwise
+fn extract_thinking_delta(line: &str) -> Option<String> {
+    let json_str = line.strip_prefix("data:")?.trim();
+    if json_str.is_empty() || json_str == "[DONE]" {
+        return None;
+    }
+
+    let data: serde_json::Value = serde_json::from_str(json_str).ok()?;
+
+    // Check for content_block_delta event
+    let event_type = data.get("type")?.as_str()?;
+    if event_type != "content_block_delta" {
+        return None;
+    }
+
+    // Check if delta type is thinking_delta
+    let delta = data.get("delta")?;
+    let delta_type = delta.get("type")?.as_str()?;
+    if delta_type != "thinking_delta" {
+        return None;
+    }
+
+    // Extract the thinking text
+    delta.get("thinking")?.as_str().map(String::from)
 }
 
 /// Errors that can occur during proxying

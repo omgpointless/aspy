@@ -5,11 +5,11 @@
 // - Grep/search with standard tools
 // - Parse with jq or other JSON tools
 //
-// Example: cat logs/2025-01-15.jsonl | jq '.tool_name'
+// Each session gets its own log file: anthropic-spy-YYYYMMDD-HHMMSS-XXXX.jsonl
+// Example: jq '.tool_name' logs/anthropic-spy-20251127-143022-a7b3.jsonl
 
 use crate::events::ProxyEvent;
 use anyhow::{Context, Result};
-use chrono::Utc;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -18,22 +18,33 @@ use tokio::sync::mpsc;
 /// Handles writing events to JSON Lines files
 pub struct Storage {
     log_dir: PathBuf,
+    session_id: String,
     event_rx: mpsc::Receiver<ProxyEvent>,
 }
 
 impl Storage {
     /// Create a new storage handler
-    pub fn new(log_dir: PathBuf, event_rx: mpsc::Receiver<ProxyEvent>) -> Result<Self> {
+    /// Each session gets its own log file based on session_id
+    pub fn new(
+        log_dir: PathBuf,
+        session_id: String,
+        event_rx: mpsc::Receiver<ProxyEvent>,
+    ) -> Result<Self> {
         // Create the log directory if it doesn't exist
         fs::create_dir_all(&log_dir).context("Failed to create log directory")?;
 
-        Ok(Self { log_dir, event_rx })
+        Ok(Self {
+            log_dir,
+            session_id,
+            event_rx,
+        })
     }
 
-    /// Get the path to today's log file
+    /// Get the path to this session's log file
+    /// Format: anthropic-spy-YYYYMMDD-HHMMSS-XXXX.jsonl
     fn log_file_path(&self) -> PathBuf {
-        let today = Utc::now().format("%Y-%m-%d");
-        self.log_dir.join(format!("anthropic-spy-{}.jsonl", today))
+        self.log_dir
+            .join(format!("anthropic-spy-{}.jsonl", self.session_id))
     }
 
     /// Run the storage loop, writing events to disk as they arrive
@@ -42,7 +53,7 @@ impl Storage {
     /// In Rust, this pattern of "run until channel closes" is idiomatic for
     /// worker tasks that process a stream of events.
     pub async fn run(mut self) -> Result<()> {
-        tracing::info!("Storage started, writing to: {:?}", self.log_dir);
+        tracing::info!("Storage started, session log: {:?}", self.log_file_path());
 
         while let Some(event) = self.event_rx.recv().await {
             if let Err(e) = self.write_event(&event) {

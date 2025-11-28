@@ -41,6 +41,10 @@ sha2 = "0.10"                                                   # SHA-256 hashin
 # Byte handling
 bytes = "1"                                                     # Efficient byte buffer for streaming
 
+# Configuration
+dirs = "5"                                                      # Platform-specific config directories
+toml = "0.8"                                                    # TOML config file parsing
+
 [[bin]]
 name = "anthropic-spy"
 path = "src/main.rs"

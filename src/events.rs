@@ -7,6 +7,7 @@
 use crate::parser::models::CapturedHeaders;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// Main event type that flows through the application
@@ -47,6 +48,9 @@ pub enum ProxyEvent {
         timestamp: DateTime<Utc>,
         status: u16,
         body_size: usize,
+        /// Time to first byte - how long until the API started responding
+        ttfb: Duration,
+        /// Total duration - full request-to-response-complete time
         duration: Duration,
         body: Option<serde_json::Value>, // Parsed response body (or assembled from SSE)
     },
@@ -92,22 +96,47 @@ pub enum ProxyEvent {
         /// Approximate token count (content.len() / 4)
         token_estimate: u32,
     },
+
+    /// Context window was compacted (detected by cache dropping to 0)
+    ContextCompact {
+        timestamp: DateTime<Utc>,
+        /// Context size before compact
+        previous_context: u64,
+        /// Context size after compact (from the triggering call)
+        new_context: u64,
+    },
+
+    /// Thinking block started (emitted immediately for real-time feedback)
+    ThinkingStarted { timestamp: DateTime<Utc> },
 }
 
 /// Summary statistics for the status bar
 #[derive(Debug, Clone, Default)]
 pub struct Stats {
     pub total_requests: usize,
+    pub failed_requests: usize,
     pub total_tool_calls: usize,
-    pub successful_calls: usize,
-    pub failed_calls: usize,
-    pub total_duration: Duration,
+    pub failed_tool_calls: usize,
+    /// Accumulated TTFB (time to first byte) for averaging
+    pub total_ttfb: Duration,
+    /// Count of responses (for TTFB averaging)
+    pub response_count: usize,
 
     // Token usage tracking
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_cache_creation_tokens: u64,
     pub total_cache_read_tokens: u64,
+
+    // Context window tracking (most recent API call's context size)
+    /// Current context size = input_tokens + cache_read_tokens from last ApiUsage
+    pub current_context_tokens: u64,
+    /// Last seen cache_read_tokens (for compact detection)
+    pub last_cached_tokens: u64,
+    /// Number of context compacts detected this session
+    pub compact_count: usize,
+    /// Configured context limit (from config file, default 150K)
+    pub configured_context_limit: u64,
 
     // Thinking block tracking
     pub thinking_blocks: usize,
@@ -118,22 +147,54 @@ pub struct Stats {
 
     // Most recent thinking content (for display panel)
     pub current_thinking: Option<String>,
+
+    // === Session metadata ===
+    /// When the session started (absolute time for reports)
+    pub session_started: Option<DateTime<Utc>>,
+
+    // === Distribution tracking for Statistics view ===
+    /// API calls per model: "claude-opus-4-5-20251101" -> 65
+    pub model_calls: HashMap<String, u32>,
+
+    /// Token usage per model for detailed breakdown
+    pub model_tokens: HashMap<String, ModelTokens>,
+
+    /// Tool calls by name: "Read" -> 18, "Edit" -> 10
+    pub tool_calls_by_name: HashMap<String, u32>,
+
+    /// Tool execution durations for timing analysis
+    /// Stores durations in milliseconds to avoid Duration in HashMap
+    pub tool_durations_ms: HashMap<String, Vec<u64>>,
+}
+
+/// Per-model token tracking for Statistics view
+#[derive(Debug, Clone, Default)]
+pub struct ModelTokens {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_creation: u64,
+    pub calls: u32,
 }
 
 impl Stats {
+    /// Returns the percentage of HTTP requests that succeeded (non-error status)
+    /// Calculated as (total - failed) / total to avoid false dips during pending requests
     pub fn success_rate(&self) -> f64 {
-        if self.total_tool_calls == 0 {
-            0.0
+        if self.total_requests == 0 {
+            100.0 // No requests yet = nothing has failed
         } else {
-            (self.successful_calls as f64 / self.total_tool_calls as f64) * 100.0
+            ((self.total_requests - self.failed_requests) as f64 / self.total_requests as f64)
+                * 100.0
         }
     }
 
-    pub fn avg_duration(&self) -> Duration {
-        if self.total_tool_calls == 0 {
+    /// Average time to first byte across all API responses
+    pub fn avg_ttfb(&self) -> Duration {
+        if self.response_count == 0 {
             Duration::default()
         } else {
-            self.total_duration / self.total_tool_calls as u32
+            self.total_ttfb / self.response_count as u32
         }
     }
 
@@ -166,6 +227,46 @@ impl Stats {
             crate::pricing::calculate_cache_savings(model, self.total_cache_read_tokens as u32)
         } else {
             0.0
+        }
+    }
+
+    /// Calculate cache hit percentage (cached / (cached + input))
+    pub fn cache_hit_rate(&self) -> f64 {
+        let total_input = self.total_input_tokens + self.total_cache_read_tokens;
+        if total_input == 0 {
+            0.0
+        } else {
+            (self.total_cache_read_tokens as f64 / total_input as f64) * 100.0
+        }
+    }
+
+    /// Get average tool execution time in milliseconds for a specific tool
+    pub fn avg_tool_duration_ms(&self, tool_name: &str) -> Option<u64> {
+        self.tool_durations_ms.get(tool_name).and_then(|durations| {
+            if durations.is_empty() {
+                None
+            } else {
+                Some(durations.iter().sum::<u64>() / durations.len() as u64)
+            }
+        })
+    }
+
+    /// Get context window usage as percentage (0-100)
+    /// Returns None if no context data available yet
+    pub fn context_usage_percent(&self) -> Option<f64> {
+        if self.current_context_tokens == 0 {
+            return None;
+        }
+        let limit = self.context_limit();
+        Some((self.current_context_tokens as f64 / limit as f64) * 100.0)
+    }
+
+    /// Get the configured context limit
+    pub fn context_limit(&self) -> u64 {
+        if self.configured_context_limit > 0 {
+            self.configured_context_limit
+        } else {
+            150_000 // Default fallback
         }
     }
 }

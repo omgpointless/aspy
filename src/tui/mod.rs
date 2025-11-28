@@ -8,12 +8,14 @@
 
 pub mod app;
 pub mod input;
+pub mod layout;
 pub mod ui;
 
 use crate::events::ProxyEvent;
 use crate::logging::LogBuffer;
+use crate::StreamingThinking;
 use anyhow::{Context, Result};
-use app::App;
+use app::{App, View};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -34,6 +36,9 @@ use tokio::sync::mpsc;
 pub async fn run_tui(
     mut event_rx: mpsc::Receiver<ProxyEvent>,
     log_buffer: LogBuffer,
+    context_limit: u64,
+    theme_name: &str,
+    streaming_thinking: StreamingThinking,
 ) -> Result<()> {
     // Set up terminal
     enable_raw_mode().context("Failed to enable raw mode")?;
@@ -43,8 +48,11 @@ pub async fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("Failed to create terminal")?;
 
-    // Create app state with log buffer
+    // Create app state with log buffer and config
     let mut app = App::with_log_buffer(log_buffer);
+    app.stats.configured_context_limit = context_limit;
+    app.theme = crate::theme::Theme::by_name(theme_name);
+    app.streaming_thinking = Some(streaming_thinking);
 
     // Run the event loop
     let result = run_event_loop(&mut terminal, &mut app, &mut event_rx).await;
@@ -101,7 +109,8 @@ async fn run_event_loop(
 
             // Periodic tick for redrawing
             _ = tick_interval.tick() => {
-                // Just redraw, handled at the top of the loop
+                // Advance animation frame for spinners
+                app.tick_animation();
             }
 
             // Proxy events
@@ -134,8 +143,42 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
                     }
                     return;
                 }
-                KeyCode::Enter | KeyCode::Esc => {
+                // View switching
+                KeyCode::Char('s') | KeyCode::Char('S') => {
                     if !app.should_debounce_action() {
+                        app.set_view(View::Stats);
+                    }
+                    return;
+                }
+                KeyCode::Char('e') | KeyCode::Char('E') => {
+                    if !app.should_debounce_action() {
+                        app.set_view(View::Events);
+                    }
+                    return;
+                }
+                KeyCode::Char('?') => {
+                    if !app.should_debounce_action() {
+                        if app.view == View::Help {
+                            app.set_view(View::Events);
+                        } else {
+                            app.set_view(View::Help);
+                        }
+                    }
+                    return;
+                }
+                KeyCode::Esc => {
+                    if !app.should_debounce_action() {
+                        // Esc closes detail or goes back to Events
+                        if app.show_detail {
+                            app.toggle_detail();
+                        } else if app.view != View::Events {
+                            app.set_view(View::Events);
+                        }
+                    }
+                    return;
+                }
+                KeyCode::Enter => {
+                    if !app.should_debounce_action() && app.view == View::Events {
                         app.toggle_detail();
                     }
                     return;

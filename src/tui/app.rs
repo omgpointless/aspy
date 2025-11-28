@@ -6,11 +6,42 @@
 use super::input::InputHandler;
 use crate::events::{ProxyEvent, Stats};
 use crate::logging::LogBuffer;
+use crate::theme::Theme;
+use crate::StreamingThinking;
 use std::time::{Duration, Instant};
 
 /// Debounce duration for action keys (Enter, Esc, q)
 /// Prevents rapid-fire triggers on terminals that don't send release events
 const ACTION_DEBOUNCE: Duration = Duration::from_millis(150);
+
+/// Active view in the TUI
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum View {
+    #[default]
+    Events,
+    Stats,
+    Help,
+}
+
+/// Streaming state for header animation
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StreamingState {
+    #[default]
+    Idle,
+    /// Claude is thinking (extended thinking block active)
+    Thinking,
+    /// Claude is generating response
+    Generating,
+    /// Waiting for user to approve tool call (Edit/Write/Bash)
+    AwaitingApproval,
+}
+
+/// Topic info extracted from Haiku's summarization
+#[derive(Debug, Clone, Default)]
+pub struct TopicInfo {
+    pub title: Option<String>,
+    pub is_new_topic: bool,
+}
 
 /// Main application state for the TUI
 pub struct App {
@@ -46,6 +77,25 @@ pub struct App {
 
     /// Last time an action key was triggered (for debouncing)
     last_action_time: Option<Instant>,
+
+    /// Current conversation topic (from Haiku summarization)
+    pub topic: TopicInfo,
+
+    /// Active view
+    pub view: View,
+
+    /// Color theme for the UI
+    pub theme: Theme,
+
+    /// Current streaming state (for header animation)
+    pub streaming_state: StreamingState,
+
+    /// Animation frame counter (increments each render tick)
+    pub animation_frame: usize,
+
+    /// Shared buffer for real-time streaming thinking content
+    /// Proxy writes to this, TUI reads from it each frame
+    pub streaming_thinking: Option<StreamingThinking>,
 }
 
 impl App {
@@ -66,7 +116,61 @@ impl App {
             input_handler: InputHandler::default(),
             log_buffer,
             last_action_time: None,
+            topic: TopicInfo::default(),
+            view: View::default(),
+            theme: Theme::default(),
+            streaming_state: StreamingState::default(),
+            animation_frame: 0,
+            streaming_thinking: None,
         }
+    }
+
+    /// Advance animation frame (call on each render tick)
+    pub fn tick_animation(&mut self) {
+        self.animation_frame = self.animation_frame.wrapping_add(1);
+    }
+
+    /// Get current spinner frame for animations
+    pub fn spinner_char(&self) -> char {
+        const SPINNER: [char; 4] = ['◐', '◓', '◑', '◒'];
+        SPINNER[self.animation_frame % SPINNER.len()]
+    }
+
+    /// Get current thinking content for display
+    /// Returns streaming content if available, otherwise last completed thinking block
+    pub fn current_thinking_content(&self) -> Option<String> {
+        // First try streaming content (real-time)
+        if let Some(ref streaming) = self.streaming_thinking {
+            if let Ok(guard) = streaming.lock() {
+                if !guard.is_empty() {
+                    return Some(guard.clone());
+                }
+            }
+        }
+        // Fall back to completed thinking
+        self.stats.current_thinking.clone()
+    }
+
+    /// Check if there's any thinking content to display
+    pub fn has_thinking_content(&self) -> bool {
+        // Check streaming buffer first
+        if let Some(ref streaming) = self.streaming_thinking {
+            if let Ok(guard) = streaming.lock() {
+                if !guard.is_empty() {
+                    return true;
+                }
+            }
+        }
+        // Fall back to completed thinking
+        self.stats.current_thinking.is_some()
+    }
+
+    /// Set the active view
+    pub fn set_view(&mut self, view: View) {
+        self.view = view;
+        // Reset view-specific state when switching
+        self.show_detail = false;
+        self.detail_scroll = 0;
     }
 
     /// Check if an action should be debounced
@@ -95,23 +199,77 @@ impl App {
 
     /// Add a new event and update statistics
     pub fn add_event(&mut self, event: ProxyEvent) {
+        // Set session start time on first event
+        if self.stats.session_started.is_none() {
+            self.stats.session_started = Some(chrono::Utc::now());
+        }
+
         // Update statistics based on event type
         match &event {
             ProxyEvent::Request { .. } => {
                 self.stats.total_requests += 1;
+                // Request sent - Claude is about to generate
+                self.streaming_state = StreamingState::Generating;
             }
-            ProxyEvent::ToolCall { .. } => {
+            ProxyEvent::Response {
+                status, ttfb, body, ..
+            } => {
+                // Track TTFB for latency monitoring
+                self.stats.total_ttfb += *ttfb;
+                self.stats.response_count += 1;
+
+                // Track failures - success is derived from (total - failed)
+                // This avoids false success rate dips during pending requests
+                if !(200..300).contains(status) {
+                    self.stats.failed_requests += 1;
+                }
+
+                // Extract topic from Haiku summarization responses
+                if let Some(topic_info) = Self::extract_topic_from_response(body) {
+                    self.topic = topic_info;
+                }
+
+                // Response complete - back to idle
+                self.streaming_state = StreamingState::Idle;
+            }
+            ProxyEvent::ToolCall { tool_name, .. } => {
                 self.stats.total_tool_calls += 1;
+                // Track tool calls by name for distribution
+                *self
+                    .stats
+                    .tool_calls_by_name
+                    .entry(tool_name.clone())
+                    .or_insert(0) += 1;
+
+                // ToolCall means generation is done - Claude decided what to do
+                // Tools needing approval wait, others go idle (auto-executed)
+                if Self::tool_needs_approval(tool_name) {
+                    self.streaming_state = StreamingState::AwaitingApproval;
+                } else {
+                    self.streaming_state = StreamingState::Idle;
+                }
             }
             ProxyEvent::ToolResult {
-                duration, success, ..
+                tool_name,
+                duration,
+                success,
+                ..
             } => {
-                self.stats.total_duration += *duration;
-                if *success {
-                    self.stats.successful_calls += 1;
-                } else {
-                    self.stats.failed_calls += 1;
+                // Track tool execution duration in milliseconds
+                let duration_ms = duration.as_millis() as u64;
+                self.stats
+                    .tool_durations_ms
+                    .entry(tool_name.clone())
+                    .or_default()
+                    .push(duration_ms);
+
+                // Track failed/rejected tool calls
+                if !success {
+                    self.stats.failed_tool_calls += 1;
                 }
+
+                // Tool result received - back to idle (next Request will set Generating)
+                self.streaming_state = StreamingState::Idle;
             }
             ProxyEvent::ApiUsage {
                 model,
@@ -129,6 +287,27 @@ impl App {
 
                 // Update current model (use the most recent one)
                 self.stats.current_model = Some(model.clone());
+
+                // Track context only for non-Haiku models (Opus/Sonnet carry the conversation)
+                // Haiku is used for quick side-tasks and doesn't reflect actual context usage
+                // Note: Compact detection moved to Parser layer for proper logging
+                let is_haiku = model.contains("haiku");
+                if !is_haiku {
+                    let cache = *cache_read_tokens as u64;
+                    self.stats.current_context_tokens = *input_tokens as u64 + cache;
+                    self.stats.last_cached_tokens = cache;
+                }
+
+                // Track model calls for distribution
+                *self.stats.model_calls.entry(model.clone()).or_insert(0) += 1;
+
+                // Track per-model token usage
+                let model_tokens = self.stats.model_tokens.entry(model.clone()).or_default();
+                model_tokens.input += *input_tokens as u64;
+                model_tokens.output += *output_tokens as u64;
+                model_tokens.cache_read += *cache_read_tokens as u64;
+                model_tokens.cache_creation += *cache_creation_tokens as u64;
+                model_tokens.calls += 1;
             }
             ProxyEvent::Thinking {
                 content,
@@ -141,8 +320,29 @@ impl App {
 
                 // Store current thinking for the dedicated panel
                 self.stats.current_thinking = Some(content.clone());
+
+                // Full thinking block arrived - thinking done, now generating
+                self.streaming_state = StreamingState::Generating;
+            }
+            ProxyEvent::ThinkingStarted { .. } => {
+                // Thinking just started
+                self.streaming_state = StreamingState::Thinking;
+            }
+            ProxyEvent::ContextCompact { new_context, .. } => {
+                // Context was compacted - update stats
+                self.stats.compact_count += 1;
+                self.stats.current_context_tokens = *new_context;
+                self.stats.last_cached_tokens = 0;
             }
             _ => {}
+        }
+
+        // Skip adding thinking events to list - they're shown in header + panel
+        if matches!(
+            event,
+            ProxyEvent::Thinking { .. } | ProxyEvent::ThinkingStarted { .. }
+        ) {
+            return;
         }
 
         self.events.push(event);
@@ -206,6 +406,53 @@ impl App {
         let secs = seconds % 60;
 
         format!("{:02}:{:02}:{:02}", hours, minutes, secs)
+    }
+
+    /// Extract topic info from a Haiku response body
+    fn extract_topic_from_response(body: &Option<serde_json::Value>) -> Option<TopicInfo> {
+        let body = body.as_ref()?;
+
+        // Check if this is a Haiku model response
+        let model = body.get("model")?.as_str()?;
+        if !model.contains("haiku") {
+            return None;
+        }
+
+        // Get the text content: body.content[0].text
+        let content = body.get("content")?.as_array()?;
+        let first = content.first()?;
+        let text = first.get("text")?.as_str()?;
+
+        // Parse the JSON from the text
+        // Haiku sometimes returns JSON without opening brace, so we fix it up
+        let trimmed = text.trim();
+        let json_str = if trimmed.starts_with('{') {
+            trimmed.to_string()
+        } else if trimmed.contains("isNewTopic") {
+            format!("{{{}", trimmed)
+        } else {
+            return None;
+        };
+        let topic_json: serde_json::Value = serde_json::from_str(&json_str).ok()?;
+
+        let title = topic_json
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let is_new_topic = topic_json
+            .get("isNewTopic")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        Some(TopicInfo {
+            title,
+            is_new_topic,
+        })
+    }
+
+    /// Check if a tool requires user approval before execution
+    fn tool_needs_approval(tool_name: &str) -> bool {
+        matches!(tool_name, "Edit" | "Write" | "Bash" | "NotebookEdit")
     }
 
     /// Calculate visible range for the event list given viewport height

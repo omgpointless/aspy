@@ -151,8 +151,8 @@ completes, ensuring Claude Code receives tokens without waiting for parsing.
 - `input.rs`: State-based keyboard handling (tracks pressed keys, no debouncing)
 
 **6. storage/ - Persistence**
-- Writes events to JSON Lines format (`./logs/anthropic-spy-YYYY-MM-DD.jsonl`)
-- Daily log rotation
+- Writes events to JSON Lines format (`./logs/anthropic-spy-YYYYMMDD-HHMMSS-XXXX.jsonl`)
+- Session-based log rotation (each run creates a new file)
 - Runs in background task, receives events via mpsc channel
 
 **7. logging/ - Custom Tracing**
@@ -331,6 +331,123 @@ Examples:
 - `feat(tui): add mouse scroll support for event list`
 - `fix(proxy): implement SSE stream-through`
 - `chore(deps): remove unused dependencies`
+
+## Analyzing Session Logs
+
+Session logs are stored in JSON Lines format (`./logs/anthropic-spy-YYYYMMDD-HHMMSS-XXXX.jsonl`). Each session creates a new file. Use `jq` to query and analyze them.
+
+### Quick Session Profile
+
+Get a complete session overview:
+
+```bash
+# Event type distribution
+jq -s 'group_by(.type) | map({type: .[0].type, count: length}) | sort_by(-.count)' logs/<session>.jsonl
+
+# Model distribution (Haiku vs Opus vs Sonnet)
+jq -s '[.[] | select(.type == "ApiUsage") | .model] | group_by(.) | map({model: .[0], count: length}) | sort_by(-.count)' logs/<session>.jsonl
+
+# Tool call distribution
+jq -s '[.[] | select(.type == "ToolCall") | .tool_name] | group_by(.) | map({tool: .[0], count: length}) | sort_by(-.count)' logs/<session>.jsonl
+```
+
+### Token & Cost Analysis
+
+```bash
+# Token breakdown by model
+jq -s '[.[] | select(.type == "ApiUsage")] | group_by(.model) | map({model: .[0].model, input: (map(.input_tokens) | add), output: (map(.output_tokens) | add), cached: (map(.cache_read_tokens) | add)})' logs/<session>.jsonl
+
+# Cache efficiency (expect 90%+ for typical sessions)
+jq -s '[.[] | select(.type == "ApiUsage")] | {total_input: (map(.input_tokens) | add), total_cached: (map(.cache_read_tokens) | add), total_output: (map(.output_tokens) | add)} | . + {cache_ratio_pct: ((.total_cached / (.total_input + .total_cached)) * 100 | floor)}' logs/<session>.jsonl
+
+# Session time range
+jq -s '[.[] | select(.type == "ApiUsage")] | {first: .[0].timestamp, last: .[-1].timestamp, count: length}' logs/<session>.jsonl
+```
+
+### Debugging Queries
+
+```bash
+# Find failed tool results
+jq 'select(.type == "ToolResult" and .success == false)' logs/<session>.jsonl
+
+# Get specific event by ID
+jq 'select(.id == "<event-id>")' logs/<session>.jsonl
+
+# Last N events (most recent activity)
+jq -cs '.[-10:][] | {type, timestamp, tool_name}' logs/<session>.jsonl
+
+# Errors only
+jq 'select(.type == "Error")' logs/<session>.jsonl
+```
+
+### Schema Discovery
+
+Understand the structure of logged events:
+
+```bash
+# Get all event type schemas (field names per type)
+jq -s 'group_by(.type) | map({type: .[0].type, fields: (.[0] | keys)})' logs/<session>.jsonl
+
+# Files read during session (most accessed first)
+jq -r 'select(.type == "ToolCall" and .tool_name == "Read") | .input.file_path' logs/<session>.jsonl | sort | uniq -c | sort -rn
+
+# Tool execution times (reveals human-in-the-loop delays for Edit/Write)
+jq -s '[.[] | select(.type == "ToolResult")] | group_by(.tool_name) | map({tool: .[0].tool_name, avg_ms: ((map(.duration.secs * 1000 + .duration.nanos / 1000000) | add) / length | floor), count: length})' logs/<session>.jsonl
+
+# Thinking block stats
+jq -s '[.[] | select(.type == "Thinking")] | {count: length, total_tokens: (map(.token_estimate) | add), avg_tokens: ((map(.token_estimate) | add) / length | floor)}' logs/<session>.jsonl
+```
+
+### Comprehensive Session Summary
+
+The power query - full session profile in one command:
+
+```bash
+jq -s '
+{
+  session: {
+    first: ([.[] | select(.type == "Request")][0].timestamp),
+    last: ([.[] | select(.type == "Response")][-1].timestamp),
+    events: length
+  },
+  models: ([.[] | select(.type == "ApiUsage") | .model] | group_by(.) | map({model: .[0], calls: length})),
+  tokens: {
+    input: ([.[] | select(.type == "ApiUsage") | .input_tokens] | add),
+    output: ([.[] | select(.type == "ApiUsage") | .output_tokens] | add),
+    cached: ([.[] | select(.type == "ApiUsage") | .cache_read_tokens] | add),
+    cache_pct: ((([.[] | select(.type == "ApiUsage") | .cache_read_tokens] | add) / (([.[] | select(.type == "ApiUsage") | .input_tokens] | add) + ([.[] | select(.type == "ApiUsage") | .cache_read_tokens] | add))) * 100 | floor)
+  },
+  tools: ([.[] | select(.type == "ToolCall") | .tool_name] | group_by(.) | map({tool: .[0], calls: length})),
+  thinking: {
+    blocks: ([.[] | select(.type == "Thinking")] | length),
+    tokens: ([.[] | select(.type == "Thinking") | .token_estimate] | add)
+  },
+  health: {
+    requests: ([.[] | select(.type == "Request")] | length),
+    responses: ([.[] | select(.type == "Response")] | length),
+    failures: ([.[] | select(.type == "ToolResult" and .success == false)] | length),
+    errors: ([.[] | select(.type == "Error")] | length)
+  }
+}
+' logs/<session>.jsonl
+```
+
+### Typical Session Profile
+
+A healthy Claude Code session looks like:
+- **Cache ratio:** 95-99% (context is heavily cached)
+- **Model split:** ~50/50 Haiku/Opus (Haiku for quick tasks, Opus for reasoning)
+- **Tool distribution:** Read-heavy for research, Edit-heavy for implementation
+
+Example output from a 3.5 hour research session:
+```
+Duration:     ~3.5 hours
+API calls:    79
+Model split:  53% Haiku, 47% Opus
+Cache ratio:  98.2%
+Total tokens: ~1.56M (1.5M cached)
+Tool calls:   29 (Read-heavy)
+```
 
 ## References
 

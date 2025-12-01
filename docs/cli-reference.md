@@ -9,7 +9,7 @@ aspy provides a command-line interface for configuration management.
 aspy
 
 # Run in demo mode (mock events for testing)
-ANTHROPIC_SPY_DEMO=1 aspy
+ASPY_DEMO=1 aspy
 
 # Configuration management
 aspy config [OPTIONS]
@@ -157,29 +157,29 @@ Environment variables override config file values:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ANTHROPIC_SPY_BIND` | Proxy bind address | `127.0.0.1:8080` |
+| `ASPY_BIND` | Proxy bind address | `127.0.0.1:8080` |
 | `ANTHROPIC_API_URL` | Upstream API URL | `https://api.anthropic.com` |
-| `ANTHROPIC_SPY_LOG_DIR` | Log directory | `./logs` |
-| `ANTHROPIC_SPY_CONTEXT_LIMIT` | Context window limit | `147000` |
-| `ANTHROPIC_SPY_THEME` | Theme name | `Spy Dark` |
-| `ANTHROPIC_SPY_NO_TUI` | Disable TUI (headless) | `false` |
-| `ANTHROPIC_SPY_DEMO` | Enable demo mode | `false` |
+| `ASPY_LOG_DIR` | Log directory | `./logs` |
+| `ASPY_CONTEXT_LIMIT` | Context window limit | `147000` |
+| `ASPY_THEME` | Theme name | `Spy Dark` |
+| `ASPY_NO_TUI` | Disable TUI (headless) | `false` |
+| `ASPY_DEMO` | Enable demo mode | `false` |
 | `RUST_LOG` | Log level filter | `info` |
 
 **Examples:**
 
 ```bash
 # Run with different bind address
-ANTHROPIC_SPY_BIND=0.0.0.0:9090 aspy
+ASPY_BIND=0.0.0.0:9090 aspy
 
 # Run headless (no TUI, just proxy)
-ANTHROPIC_SPY_NO_TUI=1 aspy
+ASPY_NO_TUI=1 aspy
 
 # Debug logging
 RUST_LOG=debug aspy
 
 # Demo mode with custom theme
-ANTHROPIC_SPY_DEMO=1 ANTHROPIC_SPY_THEME="Dracula" aspy
+ASPY_DEMO=1 ASPY_THEME="Spy Dark" aspy
 ```
 
 ## Configuration Options Reference

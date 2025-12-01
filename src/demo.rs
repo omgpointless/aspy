@@ -9,7 +9,7 @@
 // - Model variety (Sonnet for reasoning, Haiku for quick tasks)
 // - Cache efficiency (high cache hit rates typical of Claude Code)
 //
-// Run with: ANTHROPIC_SPY_DEMO=1 cargo run --release
+// Run with: ASPY_DEMO=1 cargo run --release
 
 use crate::events::ProxyEvent;
 use crate::StreamingThinking;

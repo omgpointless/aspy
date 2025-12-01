@@ -35,10 +35,10 @@ This doc mirrors the expectations in `CLAUDE.md` for any AI agent contributing h
 - `src/config.rs`, `src/events.rs` define configuration, event types, and stats helpers.
 - `src/proxy` (kernel) handles HTTP interception; `proxy/augmentation` (userland) holds toggleable augmentors; helpers stay proxy-local.
 - `src/parser` parses Anthropic payloads and correlates tool calls/results; helpers stay parser-local.
-- `src/storage` writes JSONL logs under `logs/` (rotated daily `anthropic-spy-YYYY-MM-DD.jsonl`, gitignored).
+- `src/storage` writes JSONL logs under `logs/` (rotated daily `aspy-*.jsonl`, gitignored).
 - `src/logging` owns tracing layer for the TUI log pane; `src/pricing.rs` handles token cost math; `src/theme.rs` defines color palettes; `src/demo.rs` drives mock events.
 - `src/tui` owns app state, rendering orchestration, behaviors/traits, components, views, layout helpers, theme loader, modal/markdown/preset systems, and TUI-only helpers. Components own their state; views compose components; behaviors stay isolated per trait file.
-- Bundled themes live in `themes/*.json`; binary target is `anthropic-spy`.
+- Bundled themes live in `themes/*.json`; binary target is `aspy`.
 
 ## Current State vs Target
 
@@ -151,8 +151,8 @@ impl EventsPanel {
 - Keep TUI rendering functions pure; side effects live in proxy/storage layers.
 
 ## Build & Run
-- `cargo build --release` for optimized builds; `cargo run --release` to start proxy + TUI (honors env like `ANTHROPIC_SPY_BIND`).
-- Demo: `ANTHROPIC_SPY_DEMO=1 cargo run --release` (mock events); headless: `ANTHROPIC_SPY_NO_TUI=1 cargo run --release`.
+- `cargo build --release` for optimized builds; `cargo run --release` to start proxy + TUI (honors env like `ASPY_BIND`).
+- Demo: `ASPY_DEMO=1 cargo run --release` (mock events); headless: `ASPY_NO_TUI=1 cargo run --release`.
 - Diagnostics: `RUST_LOG=debug cargo run`; quick checks: `cargo fmt`, `cargo clippy`, `cargo check`; tests: `cargo test`.
 
 ## Testing
@@ -166,9 +166,9 @@ impl EventsPanel {
 - PRs: short summary, test evidence (`cargo test`, `cargo clippy`), screenshots/GIFs for TUI changes, and call out new env vars or breaking config changes.
 
 ## Security & Configuration Notes
-- Proxy binds to `127.0.0.1:8080` by default; override with `ANTHROPIC_SPY_BIND`. Prefer `ANTHROPIC_BASE_URL` for Claude Code (`HTTPS_PROXY` redirects all HTTPS).
+- Proxy binds to `127.0.0.1:8080` by default; override with `ASPY_BIND`. Prefer `ANTHROPIC_BASE_URL` for Claude Code (`HTTPS_PROXY` redirects all HTTPS).
 - Do not commit logs or secrets. Validate `ANTHROPIC_API_URL` for non-default endpoints.
-- Use `ANTHROPIC_SPY_NO_TUI=1` for headless logging in CI/remote environments. Demo mode via `ANTHROPIC_SPY_DEMO=1`.
+- Use `ASPY_NO_TUI=1` for headless logging in CI/remote environments. Demo mode via `ASPY_DEMO=1`.
 
 ## Common Scenarios
 

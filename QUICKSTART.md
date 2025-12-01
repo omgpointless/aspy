@@ -8,10 +8,10 @@ Want to see the TUI first? Try demo mode - no Claude Code needed:
 
 ```bash
 # Windows
-$env:ANTHROPIC_SPY_DEMO="1"; .\aspy.exe
+$env:ASPY_DEMO="1"; .\aspy.exe
 
 # macOS/Linux
-ANTHROPIC_SPY_DEMO=1 ./aspy
+ASPY_DEMO=1 ./aspy
 ```
 
 This generates mock events showing thinking blocks, tool calls, and token tracking.
@@ -92,17 +92,17 @@ Switch back to the proxy terminal. You'll see events appearing, and if Claude is
 
 ## Check the Logs
 
-All events are also saved to `logs/anthropic-spy-YYYY-MM-DD.jsonl`:
+All events are also saved to `logs/aspy-*.jsonl`:
 
 ```bash
 # View today's log file
-cat logs/anthropic-spy-*.jsonl
+cat logs/aspy-*.jsonl
 
 # Pretty-print with jq
-cat logs/anthropic-spy-*.jsonl | jq
+cat logs/aspy-*.jsonl | jq
 
 # Count tool calls
-cat logs/anthropic-spy-*.jsonl | grep tool_call | wc -l
+cat logs/aspy-*.jsonl | grep tool_call | wc -l
 ```
 
 ## Common Issues
@@ -113,7 +113,7 @@ Make sure the proxy is running BEFORE starting Claude Code.
 ### "Address already in use"
 Use a different port:
 ```bash
-ANTHROPIC_SPY_BIND="127.0.0.1:9000" ./aspy
+ASPY_BIND="127.0.0.1:9000" ./aspy
 ```
 Then: `export ANTHROPIC_BASE_URL=http://127.0.0.1:9000`
 

@@ -6,7 +6,7 @@
 // - Legacy JSON support for backwards compatibility during migration
 //
 // Theme loading priority:
-// 1. External TOML themes from ~/.config/anthropic-spy/themes/*.toml
+// 1. External TOML themes from ~/.config/aspy/themes/*.toml
 // 2. External JSON themes (legacy, will be converted)
 // 3. Bundled themes (extracted on first run)
 // 4. Fallback to hardcoded default
@@ -200,7 +200,7 @@ impl Theme {
 
     /// Get themes directory path
     fn themes_dir() -> Option<PathBuf> {
-        dirs::home_dir().map(|h| h.join(".config").join("anthropic-spy").join("themes"))
+        dirs::home_dir().map(|h| h.join(".config").join("aspy").join("themes"))
     }
 
     /// Parse border type string to BorderType enum

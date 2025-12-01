@@ -50,7 +50,7 @@ fi
 # Create temp tape file with theme substituted
 TEMP_TAPE=$(mktemp)
 sed -e "s/Set Theme \".*\"/Set Theme \"$THEME\"/" \
-    -e "s/ANTHROPIC_SPY_THEME=[^ ]*/ANTHROPIC_SPY_THEME=\"$THEME\"/" \
+    -e "s/ASPY_THEME=[^ ]*/ASPY_THEME=\"$THEME\"/" \
     demo.tape > "$TEMP_TAPE"
 
 echo ""

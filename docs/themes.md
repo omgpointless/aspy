@@ -242,7 +242,7 @@ The extraction only happens once (tracked by `.extracted_v2` marker file).
 Run in demo mode to see how your theme handles various event types:
 
 ```bash
-ANTHROPIC_SPY_DEMO=1 anthropic-spy
+ASPY_DEMO=1 aspy
 ```
 
 ## Programmatic Access

@@ -65,7 +65,7 @@ impl ContextWarningAugmenter {
     /// Build the annotation text with styled borders
     fn format_annotation(&self, message: &str) -> String {
         format!(
-            "\n\n`★ anthropic-spy (context) ─────────────────────────────`\n\
+            "\n\n`★ aspy (context) ─────────────────────────────────────`\n\
              {}\n\
              `─────────────────────────────────────────────────────────`",
             message

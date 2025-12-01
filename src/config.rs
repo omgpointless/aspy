@@ -417,7 +417,7 @@ level = "{log_level}"
         let file = Self::load_file_config();
 
         // Bind address: env > file > default
-        let bind_addr = std::env::var("ANTHROPIC_SPY_BIND")
+        let bind_addr = std::env::var("ASPY_BIND")
             .ok()
             .or(file.bind_addr)
             .unwrap_or_else(|| "127.0.0.1:8080".to_string())
@@ -431,31 +431,31 @@ level = "{log_level}"
             .unwrap_or_else(|| "https://api.anthropic.com".to_string());
 
         // Log directory: env > file > default
-        let log_dir = std::env::var("ANTHROPIC_SPY_LOG_DIR")
+        let log_dir = std::env::var("ASPY_LOG_DIR")
             .ok()
             .or(file.log_dir)
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("./logs"));
 
         // TUI toggle: env only (runtime flag)
-        let enable_tui = std::env::var("ANTHROPIC_SPY_NO_TUI")
+        let enable_tui = std::env::var("ASPY_NO_TUI")
             .map(|v| v != "1" && v.to_lowercase() != "true")
             .unwrap_or(true);
 
         // Demo mode: env only (runtime flag)
-        let demo_mode = std::env::var("ANTHROPIC_SPY_DEMO")
+        let demo_mode = std::env::var("ASPY_DEMO")
             .map(|v| v == "1" || v.to_lowercase() == "true")
             .unwrap_or(false);
 
         // Context limit: env > file > default (147K based on empirical data)
-        let context_limit = std::env::var("ANTHROPIC_SPY_CONTEXT_LIMIT")
+        let context_limit = std::env::var("ASPY_CONTEXT_LIMIT")
             .ok()
             .and_then(|v| v.parse().ok())
             .or(file.context_limit)
             .unwrap_or(147_000);
 
         // Theme: env > file > default ("Spy Dark" is the project's signature theme)
-        let theme = std::env::var("ANTHROPIC_SPY_THEME")
+        let theme = std::env::var("ASPY_THEME")
             .ok()
             .or(file.theme)
             .unwrap_or_else(|| "Spy Dark".to_string());

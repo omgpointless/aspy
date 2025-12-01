@@ -75,7 +75,7 @@ cargo build
 cargo run --release
 
 # Run in demo mode (mock events for showcasing)
-ANTHROPIC_SPY_DEMO=1 cargo run --release
+ASPY_DEMO=1 cargo run --release
 ```
 
 ### Testing with Claude Code

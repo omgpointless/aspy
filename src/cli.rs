@@ -15,7 +15,7 @@ use std::process::Command;
 
 /// Anthropic Spy - Observability proxy for Claude Code
 #[derive(Parser)]
-#[command(name = "anthropic-spy")]
+#[command(name = "aspy")]
 #[command(version = VERSION)]
 #[command(about = "Observability proxy for Claude Code", long_about = None)]
 pub struct Cli {
@@ -80,7 +80,7 @@ pub fn handle_cli() -> bool {
                 handle_config_init();
             } else {
                 // No flag provided, show help
-                println!("Usage: anthropic-spy config [OPTIONS]");
+                println!("Usage: aspy config [OPTIONS]");
                 println!();
                 println!("Options:");
                 println!("  --init    Interactive setup wizard (recommended for first-time setup)");
@@ -341,7 +341,7 @@ fn handle_config_init() {
 
     println!();
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("                    ANTHROPIC-SPY CONFIGURATION WIZARD");
+    println!("                         ASPY CONFIGURATION WIZARD");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
 
@@ -485,8 +485,8 @@ fn handle_config_init() {
     println!("  1. Set environment variable in your shell:");
     println!("     export ANTHROPIC_BASE_URL=http://{}", config.bind_addr);
     println!();
-    println!("  2. Run anthropic-spy:");
-    println!("     anthropic-spy");
+    println!("  2. Run aspy:");
+    println!("     aspy");
     println!();
     println!("  3. Use Claude Code as normal - all traffic will be proxied through the TUI");
     println!();

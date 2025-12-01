@@ -55,7 +55,7 @@ Pre-release alpha.
 ### Added
 - **Thinking block capture** - Dedicated panel showing Claude's reasoning in real-time
 - **Token & cost tracking** - Cumulative session statistics in status bar
-- **Demo mode** - Generate mock events for showcasing (`ANTHROPIC_SPY_DEMO=1`)
+- **Demo mode** - Generate mock events for showcasing (`ASPY_DEMO=1`)
 - **SSE delta accumulation** - Proper handling of streaming API responses
 - Real-time TUI with tool calls, results, and API usage
 - JSON Lines logging with daily rotation

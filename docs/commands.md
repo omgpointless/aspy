@@ -23,10 +23,10 @@ cargo run
 cargo run --release
 
 # Run in headless mode (no TUI, logs to stdout)
-ANTHROPIC_SPY_NO_TUI=1 cargo run --release
+ASPY_NO_TUI=1 cargo run --release
 
 # Run in demo mode (generate mock events for showcasing)
-ANTHROPIC_SPY_DEMO=1 cargo run --release
+ASPY_DEMO=1 cargo run --release
 
 # Run with debug logging
 RUST_LOG=debug cargo run
@@ -47,10 +47,10 @@ The demo simulates a typical Claude Code session including:
 
 ```bash
 # Windows PowerShell
-$env:ANTHROPIC_SPY_DEMO="1"; cargo run --release
+$env:ASPY_DEMO="1"; cargo run --release
 
 # macOS/Linux
-ANTHROPIC_SPY_DEMO=1 cargo run --release
+ASPY_DEMO=1 cargo run --release
 ```
 
 ## Code Quality
@@ -133,10 +133,10 @@ See [sessions.md](sessions.md) for full configuration reference.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_SPY_BIND` | `127.0.0.1:8080` | Proxy bind address (overrides config) |
-| `ANTHROPIC_SPY_LOG_DIR` | `./logs` | Log file directory (overrides config) |
-| `ANTHROPIC_SPY_NO_TUI` | `false` | Disable TUI (headless mode) |
-| `ANTHROPIC_SPY_DEMO` | `false` | Enable demo mode (mock events) |
+| `ASPY_BIND` | `127.0.0.1:8080` | Proxy bind address (overrides config) |
+| `ASPY_LOG_DIR` | `./logs` | Log file directory (overrides config) |
+| `ASPY_NO_TUI` | `false` | Disable TUI (headless mode) |
+| `ASPY_DEMO` | `false` | Enable demo mode (mock events) |
 | `RUST_LOG` | `anthropic_spy=info` | Logging level |
 
 ## Code Style Guidelines

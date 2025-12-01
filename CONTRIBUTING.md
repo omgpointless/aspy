@@ -170,7 +170,7 @@ claude
 For TUI testing without API costs:
 
 ```bash
-ANTHROPIC_SPY_DEMO=1 cargo run --release
+ASPY_DEMO=1 cargo run --release
 ```
 
 ### What to Verify

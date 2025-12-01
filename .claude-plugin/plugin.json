@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Observability and development tools for Claude Code sessions",
   "author": {
-    "name": "anthropic-spy contributors",
+    "name": "aspy contributors",
     "url": "https://github.com/omgpointless/anthropic-spy"
   },
   "homepage": "https://github.com/omgpointless/anthropic-spy",

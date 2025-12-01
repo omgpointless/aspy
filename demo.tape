@@ -17,7 +17,7 @@ Set Padding 15
 Set Framerate 30
 
 # Start demo mode
-Type "ANTHROPIC_SPY_DEMO=1 /app/target/release/aspy"
+Type "ASPY_DEMO=1 /app/target/release/aspy"
 Sleep 300ms
 Enter
 

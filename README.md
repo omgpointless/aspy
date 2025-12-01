@@ -75,7 +75,7 @@ After restarting Claude Code, use `/aspy:stats` to query session metrics. The pl
 Try the TUI without Claude Code:
 
 ```bash
-ANTHROPIC_SPY_DEMO=1 ./aspy
+ASPY_DEMO=1 ./aspy
 ```
 
 Generates mock events to showcase the interface.

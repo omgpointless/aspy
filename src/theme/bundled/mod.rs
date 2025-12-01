@@ -1,6 +1,6 @@
 //! Bundled TOML themes (compiled into binary, extracted on first run)
 //!
-//! These themes are written to ~/.config/anthropic-spy/themes/ on first run.
+//! These themes are written to ~/.config/aspy/themes/ on first run.
 //! Users can then modify them freely.
 //!
 //! Each theme lives in its own module file for easy editing without loading

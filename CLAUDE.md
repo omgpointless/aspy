@@ -255,7 +255,7 @@ Examples:
 
 ## Current Development Phase
 
-**v0.2.0: Views & Statistics Complete**
+**v0.1.0: Core Observability Complete**
 
 **Completed Features:**
 - Views system with Events, Stats, and Settings views

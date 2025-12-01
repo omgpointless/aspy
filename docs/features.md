@@ -10,7 +10,7 @@ Watch Claude's reasoning stream word-by-word as it thinks through problems. The 
 
 - Streams incrementally as tokens arrive
 - Dedicated panel keeps thinking visible while events scroll
-- Supports markdown formatting with syntax highlighting
+- Renders markdown with inline code and code block highlighting
 
 ## Stats Dashboard
 
@@ -27,7 +27,18 @@ Press `s` to switch to Stats view, `Tab` to cycle through tabs.
 
 ## Context Recall
 
+Search across all your past sessions. When compaction wipes context, the logs remain.
+
+- **Full-text search** across session history
+- **Query from Claude** via MCP tools (`aspy_search`)
+- **Recover decisions** — find why you made that architectural choice 3 weeks ago
+- **Cross-session continuity** — new Claude instances can recall what previous ones discovered
+
+This isn't just logging—it's a searchable memory of your AI-assisted development journey.
+
 ![Context Recall](images/features/context-recall.png)
+
+> **Coming soon:** Local SQLite storage for faster querying and smarter context management. JSONL files will remain for portability; SQLite adds efficient indexing for recall at scale.
 
 ## Context Warnings
 
@@ -36,7 +47,7 @@ Press `s` to switch to Stats view, `Tab` to cycle through tabs.
 Automatic notifications when your context window fills up:
 
 ```
-⚠️ Context at 80% - consider using /compact
+⚠️ Context at 80% - consider using /aspy:tempcontext
 ```
 
 Configurable thresholds (default: 60%, 80%, 85%, 90%, 95%) inject helpful reminders into Claude's responses suggesting when to compact.
@@ -46,6 +57,18 @@ Configurable thresholds (default: 60%, 80%, 85%, 90%, 95%) inject helpful remind
 context_warning = true
 context_warning_thresholds = [60, 80, 85, 90, 95]
 ```
+
+### Preparing for Compact
+
+When it's time to compact, use the `/aspy:tempcontext` command. This:
+
+1. Creates a temporary context file summarizing your current tangent and direction
+2. Provides compact instructions you can copy and run
+3. The context file itself adds weight to what gets preserved during compaction
+
+The result is generally quality context retention. For any gaps, use `aspy_search` to recall details from the session logs.
+
+> **Future:** I'm exploring ways to automate this into a single command.
 
 ## Theme System
 
@@ -79,21 +102,31 @@ provider = "anthropic"
 
 [clients.work]
 name = "Work Projects"
-provider = "anthropic"
+provider = "foundry"
 
 [providers.anthropic]
 base_url = "https://api.anthropic.com"
+
+[providers.foundry]
+base_url = "https://{resource}.services.ai.azure.com"
 ```
 
 Connect via URL path:
 ```bash
+# Personal projects via Anthropic API
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080/dev-1
+claude
+
+# Work projects via Foundry
+export ANTHROPIC_FOUNDRY_BASE_URL=http://127.0.0.1:8080/work
+export ANTHROPIC_FOUNDRY_API_KEY=your-foundry-key
 claude
 ```
 
 Each client gets isolated session tracking. Query specific clients via API:
 ```bash
 curl http://127.0.0.1:8080/api/stats?client=dev-1
+curl http://127.0.0.1:8080/api/stats?client=work
 ```
 
 See [Multi-Client Routing](sessions.md) for full configuration.
@@ -134,9 +167,20 @@ All endpoints support `?client=<id>` for multi-client filtering.
 
 See [API Reference](api-reference.md) for full documentation.
 
+## Slash Commands
+
+Quick access to session data without leaving your flow:
+
+| Command | Description |
+|---------|-------------|
+| `/aspy:stats` | Token counts, costs, cache efficiency at a glance |
+| `/aspy:context` | Context window status and warning level |
+| `/aspy:events` | Recent tool calls and results |
+| `/aspy:tempcontext` | Prepare context for compaction (see [Context Warnings](#context-warnings)) |
+
 ## MCP Integration
 
-Query session data from within Claude Code:
+Query session data programmatically from within Claude Code:
 
 ```bash
 claude mcp add aspy -- npx -y aspy-mcp

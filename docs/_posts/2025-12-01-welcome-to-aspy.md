@@ -43,7 +43,7 @@ By providing rich ways to manage and inspect your sessions, you'll further your 
 
 - Make your prompt engineering more efficient
 - Reduce waiting-time anxiety with easier overview of the reasoning chain
-- Understand the cost of your MCP calls (use aspy-mcp carefully while we develop it... or don't—and check the stats page as you do)
+- Understand the cost of your MCP calls (use aspy-mcp carefully while you develop with it... or don't—and check the stats page as you do)
 
 ## Where We Are Now
 

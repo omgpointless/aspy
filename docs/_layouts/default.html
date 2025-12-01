@@ -9,6 +9,11 @@
   <!-- Favicon -->
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
 
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+
   <!-- Styles -->
   <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
 
@@ -19,11 +24,8 @@
 </head>
 <body>
   <header class="site-header">
-    <div class="container">
-      <a href="{{ '/' | relative_url }}" class="site-title">
-        <img src="{{ '/images/aspy-header-logo.webp' | relative_url }}" alt="Aspy" class="header-logo">
-        {{ site.title }}
-      </a>
+    <div class="container header-container">
+      <a href="{{ '/' | relative_url }}" class="site-title">Aspy</a>
       <nav class="site-nav">
         <a href="{{ '/' | relative_url }}" {% if page.url == '/' %}class="active"{% endif %}>Home</a>
         <a href="{{ '/features' | relative_url }}" {% if page.url == '/features' or page.url == '/features/' %}class="active"{% endif %}>Features</a>

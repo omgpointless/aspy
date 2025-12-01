@@ -115,7 +115,14 @@ impl InputHandler {
         if state.is_pressed {
             match behavior {
                 KeyBehavior::StateChange => {
-                    // Don't trigger on hold
+                    // Debounce: only trigger if enough time passed since last trigger
+                    // This handles terminals that don't send Release events
+                    if let Some(last) = state.last_triggered {
+                        if now.duration_since(last) >= Duration::from_millis(150) {
+                            state.last_triggered = Some(now);
+                            return true;
+                        }
+                    }
                     false
                 }
                 KeyBehavior::Repeatable {
@@ -186,15 +193,31 @@ impl InputHandler {
             KeyBehavior::fast_navigation(),
         );
 
-        // Action keys - state change only
+        // Action keys - state change only (trigger once per press)
         handler.configure_keys(
             &[
+                // Core actions
                 KeyCode::Enter,
                 KeyCode::Esc,
                 KeyCode::Tab,
+                KeyCode::BackTab,
+                KeyCode::Char(' '),
+                // Quit
                 KeyCode::Char('q'),
                 KeyCode::Char('Q'),
-                KeyCode::Char(' '),
+                // View switching
+                KeyCode::F(1),
+                KeyCode::F(2),
+                KeyCode::F(3),
+                KeyCode::Char('e'),
+                KeyCode::Char('E'),
+                KeyCode::Char('s'),
+                KeyCode::Char('S'),
+                // Clipboard
+                KeyCode::Char('y'),
+                KeyCode::Char('Y'),
+                // Help
+                KeyCode::Char('?'),
             ],
             KeyBehavior::StateChange,
         );

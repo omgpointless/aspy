@@ -1,0 +1,59 @@
+# GitHub Light High Contrast theme for anthropic-spy
+# GitHub's high contrast light theme for visibility
+
+[meta]
+name = "GitHub Light High Contrast"
+version = 1
+author = "iTerm2-Color-Schemes"
+
+[ui]
+background = "#ffffff"
+foreground = "#0e1116"
+border = "#66707b"
+border_focused = "#3f2200"
+title = "#1b7c83"
+status_bar = "#0e1116"
+selection_bg = "#0e1116"
+selection_fg = "#ffffff"
+
+[events]
+tool_call = "#1b7c83"
+tool_result_ok = "#024c1a"
+tool_result_fail = "#a0111f"
+request = "#0349b4"
+response = "#622cbc"
+error = "#a0111f"
+thinking = "#622cbc"
+api_usage = "#0e1116"
+headers = "#0e1116"
+rate_limit = "#0e1116"
+context_compact = "#3f2200"
+
+[context_bar]
+fill = "#024c1a"
+warn = "#3f2200"
+danger = "#a0111f"
+
+[panels]
+events = "#0349b4"
+thinking = "#844ae7"
+logs = "#055d20"
+
+[vhs]
+black = "#0e1116"
+red = "#a0111f"
+green = "#024c1a"
+yellow = "#3f2200"
+blue = "#0349b4"
+purple = "#622cbc"
+cyan = "#1b7c83"
+white = "#66707b"
+bright_black = "#4b535d"
+bright_red = "#86061d"
+bright_green = "#055d20"
+bright_yellow = "#4e2c00"
+bright_blue = "#1168e3"
+bright_purple = "#844ae7"
+bright_cyan = "#3192aa"
+bright_white = "#88929d"
+cursor = "#0349b4"

@@ -16,6 +16,15 @@ use tokio::sync::Mutex;
 /// Type alias for pending tool calls map: tool_use_id -> (tool_name, start_time)
 type PendingCallsMap = HashMap<String, (String, chrono::DateTime<Utc>)>;
 
+/// State for context compact detection
+/// Tracks total cache tokens (read + creation) from non-Haiku models
+struct CompactDetectionState {
+    /// Last seen total cache (cache_read + cache_creation) for compact detection
+    last_cached_tokens: u64,
+    /// Last known context size before potential compact
+    last_context_tokens: u64,
+}
+
 /// Tracks tool calls and their timing to correlate calls with results
 ///
 /// This struct maintains state across multiple API calls to match up
@@ -25,13 +34,79 @@ pub struct Parser {
     /// Maps tool_use_id -> (tool_name, start_time)
     /// Arc<Mutex<>> allows sharing mutable state across async tasks
     pending_calls: Arc<Mutex<PendingCallsMap>>,
+    /// State for detecting context compaction events
+    compact_state: Arc<Mutex<CompactDetectionState>>,
 }
 
 impl Parser {
     pub fn new() -> Self {
         Self {
             pending_calls: Arc::new(Mutex::new(HashMap::new())),
+            compact_state: Arc::new(Mutex::new(CompactDetectionState {
+                last_cached_tokens: 0,
+                last_context_tokens: 0,
+            })),
         }
+    }
+
+    /// Check for context compaction and return a ContextCompact event if detected
+    ///
+    /// Compaction is detected when:
+    /// 1. This is a non-Haiku model (Haiku is dispatcher, never has cache)
+    /// 2. Total cache (read + creation) dropped significantly (>30% decrease OR >30K drop)
+    /// 3. Previous total cache was >10K tokens (avoids false positives on first call)
+    ///
+    /// Note: We use cache_read + cache_creation because when Anthropic's cache
+    /// expires, tokens move from cache_read to cache_creation - but the total
+    /// context size is unchanged. A real compact drops the TOTAL, not just the
+    /// read portion.
+    ///
+    /// Returns Some(ContextCompact) if compact detected, None otherwise
+    async fn check_for_compact(
+        &self,
+        model: &str,
+        input_tokens: u32,
+        cache_read_tokens: u32,
+        cache_creation_tokens: u32,
+    ) -> Option<ProxyEvent> {
+        // Skip Haiku - it's the dispatcher model and never maintains cache
+        if model.contains("haiku") {
+            return None;
+        }
+
+        let mut state = self.compact_state.lock().await;
+        // Total cache = read + creation (cache expiry moves tokens between these)
+        let total_cache = cache_read_tokens as u64 + cache_creation_tokens as u64;
+        let current_context = input_tokens as u64 + total_cache;
+        let prev_cache = state.last_cached_tokens;
+
+        // Detect significant cache drop (compact doesn't always go to zero)
+        // Triggers on: >30% drop OR >30K absolute drop
+        let significant_drop = prev_cache > 10_000
+            && (total_cache < prev_cache.saturating_sub(30_000)
+                || total_cache < prev_cache * 70 / 100);
+
+        let compact_event = if significant_drop {
+            Some(ProxyEvent::ContextCompact {
+                timestamp: Utc::now(),
+                previous_context: state.last_context_tokens,
+                new_context: current_context,
+            })
+        } else {
+            None
+        };
+
+        // Update state for next check (only for non-Haiku)
+        if total_cache > 0 {
+            state.last_cached_tokens = total_cache;
+            state.last_context_tokens = current_context;
+        } else if compact_event.is_some() {
+            // Reset after compact
+            state.last_cached_tokens = 0;
+            state.last_context_tokens = current_context;
+        }
+
+        compact_event
     }
 
     /// Register a tool_use ID for correlation with future tool_results
@@ -149,13 +224,29 @@ impl Parser {
 
         // Extract usage information if present
         if let Some(usage) = response.usage {
+            let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
+            let cache_creation = usage.cache_creation_input_tokens.unwrap_or(0);
+
+            // Check for context compaction before emitting ApiUsage
+            if let Some(compact_event) = self
+                .check_for_compact(
+                    &response.model,
+                    usage.input_tokens,
+                    cache_read,
+                    cache_creation,
+                )
+                .await
+            {
+                events.push(compact_event);
+            }
+
             events.push(ProxyEvent::ApiUsage {
                 timestamp: Utc::now(),
                 model: response.model.clone(),
                 input_tokens: usage.input_tokens,
                 output_tokens: usage.output_tokens,
-                cache_creation_tokens: usage.cache_creation_input_tokens.unwrap_or(0),
-                cache_read_tokens: usage.cache_read_input_tokens.unwrap_or(0),
+                cache_creation_tokens: cache_creation,
+                cache_read_tokens: cache_read,
             });
         }
 
@@ -413,9 +504,25 @@ impl Parser {
             }
         }
 
+        // Drop pending lock before compact check to avoid holding two locks
+        drop(pending);
+
         // Emit usage event if we collected data
         if let Some(model_name) = model {
             if input_tokens > 0 || output_tokens > 0 {
+                // Check for context compaction before emitting ApiUsage
+                if let Some(compact_event) = self
+                    .check_for_compact(
+                        &model_name,
+                        input_tokens,
+                        cache_read_tokens,
+                        cache_creation_tokens,
+                    )
+                    .await
+                {
+                    events.push(compact_event);
+                }
+
                 events.push(ProxyEvent::ApiUsage {
                     timestamp: Utc::now(),
                     model: model_name,

@@ -1,0 +1,59 @@
+# 3024 Night theme for anthropic-spy
+# Warm dark theme from the 3024 series
+
+[meta]
+name = "3024 Night"
+version = 1
+author = "iTerm2-Color-Schemes"
+
+[ui]
+background = "#090300"
+foreground = "#a5a2a2"
+border = "#a5a2a2"
+border_focused = "#fded02"
+title = "#b5e4f4"
+status_bar = "#a5a2a2"
+selection_bg = "#4a4543"
+selection_fg = "#f7f7f7"
+
+[events]
+tool_call = "#b5e4f4"
+tool_result_ok = "#01a252"
+tool_result_fail = "#db2d20"
+request = "#01a0e4"
+response = "#a16a94"
+error = "#db2d20"
+thinking = "#a16a94"
+api_usage = "#a5a2a2"
+headers = "#a5a2a2"
+rate_limit = "#a5a2a2"
+context_compact = "#fded02"
+
+[context_bar]
+fill = "#01a252"
+warn = "#fded02"
+danger = "#db2d20"
+
+[panels]
+events = "#01a0e4"
+thinking = "#a16a94"
+logs = "#01a252"
+
+[vhs]
+black = "#090300"
+red = "#db2d20"
+green = "#01a252"
+yellow = "#fded02"
+blue = "#01a0e4"
+purple = "#a16a94"
+cyan = "#b5e4f4"
+white = "#a5a2a2"
+bright_black = "#5c5855"
+bright_red = "#e8bbd0"
+bright_green = "#47413f"
+bright_yellow = "#4a4543"
+bright_blue = "#807d7c"
+bright_purple = "#d6d5d4"
+bright_cyan = "#cdab53"
+bright_white = "#f7f7f7"
+cursor = "#a5a2a2"

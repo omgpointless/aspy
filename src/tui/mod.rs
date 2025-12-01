@@ -7,25 +7,40 @@
 // - Receiving proxy events and updating the display
 
 pub mod app;
+pub mod clipboard;
+pub mod components;
 pub mod input;
+pub mod layout;
+pub mod markdown;
+pub mod modal;
+pub mod preset;
+pub mod scroll;
+pub mod streaming;
+pub mod traits;
 pub mod ui;
+pub mod views;
 
+use crate::config::Config;
 use crate::events::ProxyEvent;
 use crate::logging::LogBuffer;
+use crate::StreamingThinking;
 use anyhow::{Context, Result};
-use app::App;
+use app::{App, View};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-        MouseEvent, MouseEventKind,
+        KeyModifiers, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use modal::{Modal, ModalAction};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use traits::{Copyable, Handled, Scrollable};
+use views::format_event_detail;
 
 /// Run the TUI
 ///
@@ -34,6 +49,10 @@ use tokio::sync::mpsc;
 pub async fn run_tui(
     mut event_rx: mpsc::Receiver<ProxyEvent>,
     log_buffer: LogBuffer,
+    config: Config,
+    streaming_thinking: StreamingThinking,
+    shared_stats: crate::proxy::api::SharedStats,
+    shared_events: crate::proxy::api::SharedEvents,
 ) -> Result<()> {
     // Set up terminal
     enable_raw_mode().context("Failed to enable raw mode")?;
@@ -43,8 +62,9 @@ pub async fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("Failed to create terminal")?;
 
-    // Create app state with log buffer
-    let mut app = App::with_log_buffer(log_buffer);
+    // Create app state with config (initializes theme, preset from config)
+    let mut app = App::with_config(log_buffer, config, shared_stats, shared_events);
+    app.streaming_thinking = Some(streaming_thinking);
 
     // Run the event loop
     let result = run_event_loop(&mut terminal, &mut app, &mut event_rx).await;
@@ -76,13 +96,13 @@ async fn run_event_loop(
     app: &mut App,
     event_rx: &mut mpsc::Receiver<ProxyEvent>,
 ) -> Result<()> {
-    // Create a ticker for periodic redraws (10 FPS)
-    let mut tick_interval = tokio::time::interval(Duration::from_millis(100));
+    // Create a ticker for periodic redraws (20 FPS)
+    let mut tick_interval = tokio::time::interval(Duration::from_millis(200));
 
     loop {
         // Draw the UI
         terminal
-            .draw(|f| ui::draw(f, app))
+            .draw(|f| views::draw(f, app))
             .context("Failed to draw terminal")?;
 
         // Wait for events using tokio::select!
@@ -101,7 +121,8 @@ async fn run_event_loop(
 
             // Periodic tick for redrawing
             _ = tick_interval.tick() => {
-                // Just redraw, handled at the top of the loop
+                // Advance animation frame for spinners
+                app.tick_animation();
             }
 
             // Proxy events
@@ -120,23 +141,137 @@ async fn run_event_loop(
 }
 
 /// Handle keyboard input
-/// Action keys use time-based debounce, navigation keys use state tracking
+/// Layered dispatch: Modal → Global → View-specific → Component
 fn handle_key_event(app: &mut App, key_event: KeyEvent) {
+    // Layer 1: Modal captures all input when active
+    if handle_modal_input(app, &key_event) {
+        return;
+    }
+
+    // Layer 2: Global keys (work regardless of view)
+    if handle_global_keys(app, &key_event) {
+        return;
+    }
+
     let key = key_event.code;
 
+    // Layer 3: View-specific action keys (use InputHandler for debounce)
     match key_event.kind {
         KeyEventKind::Press => {
-            // Action keys - use time-based debounce (no release events needed)
             match key {
-                KeyCode::Char('q') | KeyCode::Char('Q') => {
-                    if !app.should_debounce_action() {
-                        app.should_quit = true;
+                KeyCode::Esc => {
+                    if app.handle_key_press(key) {
+                        // Esc: first let focused panel handle it (clear selection)
+                        // If panel didn't handle it, fall back to view navigation
+                        let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+                        if app.dispatch_to_focused(key_event) == Handled::No {
+                            // Panel had nothing to clear - go back to Events view
+                            if app.view != View::Events {
+                                if app.view == View::Settings {
+                                    app.save_settings_if_dirty();
+                                }
+                                app.set_view(View::Events);
+                            }
+                        }
                     }
                     return;
                 }
-                KeyCode::Enter | KeyCode::Esc => {
-                    if !app.should_debounce_action() {
-                        app.toggle_detail();
+                KeyCode::Enter => {
+                    if app.handle_key_press(key) {
+                        match app.view {
+                            View::Events => {
+                                // Only open detail when focused on Events panel
+                                if app.focused == scroll::FocusablePanel::Events {
+                                    // Get index: use selected if in selection mode,
+                                    // otherwise use last event (auto-follow mode)
+                                    let idx = app
+                                        .events_panel
+                                        .selected
+                                        .or_else(|| app.events.len().checked_sub(1));
+
+                                    if let Some(idx) = idx {
+                                        app.detail_panel.reset();
+                                        // Populate cached content for clipboard copy
+                                        if let Some(event) = app.events.get(idx) {
+                                            let content = format_event_detail(event);
+                                            app.detail_panel.set_content(content);
+                                        }
+                                        app.modal = Some(Modal::detail(idx));
+                                    }
+                                } else if app.focused == scroll::FocusablePanel::Logs {
+                                    // Logs panel: dispatch Enter to the component
+                                    let entries = app.log_buffer.get_all();
+                                    app.logs_panel.entry_count = entries.len();
+                                    if let Some(idx) = app
+                                        .logs_panel
+                                        .selected
+                                        .or_else(|| entries.len().checked_sub(1))
+                                    {
+                                        // Open log detail modal
+                                        if let Some(entry) = entries.get(idx) {
+                                            app.detail_panel.reset();
+                                            let content = format!(
+                                                "Log Entry\n─────────\n\nTimestamp: {}\nLevel: {:?}\nMessage: {}",
+                                                entry.timestamp.format("%Y-%m-%d %H:%M:%S%.3f"),
+                                                entry.level,
+                                                entry.message
+                                            );
+                                            app.detail_panel.set_content(content);
+                                            app.modal = Some(Modal::log_detail());
+                                        }
+                                    }
+                                }
+                            }
+                            View::Settings => app.settings_apply_option(),
+                            _ => {}
+                        }
+                    }
+                    return;
+                }
+                KeyCode::Tab | KeyCode::Right => {
+                    if app.handle_key_press(key) {
+                        match app.view {
+                            View::Events => {
+                                if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                                    app.focus_prev();
+                                } else {
+                                    app.focus_next();
+                                }
+                            }
+                            View::Settings => app.settings_toggle_focus(),
+                            View::Stats => {
+                                // Navigate to next tab (wraps around)
+                                app.stats_selected_tab = (app.stats_selected_tab + 1) % 5;
+                            }
+                        }
+                    }
+                    return;
+                }
+                // Backtab or Left arrow - go back
+                KeyCode::BackTab | KeyCode::Left => {
+                    if app.handle_key_press(key) {
+                        match app.view {
+                            View::Events => app.focus_prev(),
+                            View::Settings => app.settings_toggle_focus(),
+                            View::Stats => {
+                                // Navigate to previous tab (wraps around)
+                                app.stats_selected_tab = if app.stats_selected_tab == 0 {
+                                    4
+                                } else {
+                                    app.stats_selected_tab - 1
+                                };
+                            }
+                        }
+                    }
+                    return;
+                }
+                // Number keys 1-5 for direct tab selection in Stats view
+                KeyCode::Char('1'..='5') => {
+                    if app.handle_key_press(key) && app.view == View::Stats {
+                        // Map '1' -> tab 0, '2' -> tab 1, etc.
+                        if let KeyCode::Char(c) = key {
+                            app.stats_selected_tab = (c as usize) - ('1' as usize);
+                        }
                     }
                     return;
                 }
@@ -148,20 +283,10 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
                 return;
             }
 
-            match key {
-                KeyCode::Up | KeyCode::Char('k') => app.select_previous(),
-                KeyCode::Down | KeyCode::Char('j') => app.select_next(),
-                KeyCode::Home => {
-                    app.selected = 0;
-                    app.scroll_offset = 0;
-                }
-                KeyCode::End => {
-                    if !app.events.is_empty() {
-                        app.selected = app.events.len() - 1;
-                    }
-                }
-                _ => {}
-            }
+            // Dispatch to focused panel via Interactive trait
+            // All views (Events, Stats, Settings) route through dispatch_to_focused()
+            // Settings uses dispatch_to_settings() → settings_panel.handle_key()
+            app.dispatch_to_focused(key_event);
         }
         KeyEventKind::Release => {
             app.handle_key_release(key);
@@ -173,8 +298,154 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
 /// Handle mouse input
 fn handle_mouse_event(app: &mut App, mouse_event: MouseEvent) {
     match mouse_event.kind {
-        MouseEventKind::ScrollUp => app.select_previous(),
-        MouseEventKind::ScrollDown => app.select_next(),
+        MouseEventKind::ScrollUp => {
+            // Synthesize Up key event for trait dispatch
+            let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+            app.dispatch_to_focused(key_event);
+        }
+        MouseEventKind::ScrollDown => {
+            // Synthesize Down key event for trait dispatch
+            let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+            app.dispatch_to_focused(key_event);
+        }
         _ => {}
+    }
+}
+
+/// Handle modal input - returns true if modal absorbed the input
+fn handle_modal_input(app: &mut App, key_event: &KeyEvent) -> bool {
+    let Some(ref mut modal) = app.modal else {
+        return false;
+    };
+
+    // CRITICAL: Always process Release events to keep InputHandler in sync
+    // Without this, keys get stuck in "pressed" state after modal closes
+    if key_event.kind == KeyEventKind::Release {
+        app.handle_key_release(key_event.code);
+        return true; // Modal absorbs the event, but state is updated
+    }
+
+    if key_event.kind != KeyEventKind::Press {
+        return true; // Modal absorbs other non-press events (Repeat, etc.)
+    }
+
+    match modal.handle_input(key_event.code) {
+        ModalAction::None => {}
+        ModalAction::Close => {
+            app.detail_panel.reset();
+            app.modal = None;
+        }
+        ModalAction::ScrollUp => app.detail_panel.scroll_up(),
+        ModalAction::ScrollDown => app.detail_panel.scroll_down(),
+        ModalAction::ScrollLeft => app.detail_panel.scroll_left(),
+        ModalAction::ScrollRight => app.detail_panel.scroll_right(),
+        ModalAction::ScrollTop => app.detail_panel.scroll_to_top(),
+        ModalAction::ScrollBottom => app.detail_panel.scroll_to_bottom(),
+        ModalAction::ScrollLeftmost => app.detail_panel.scroll_to_left(),
+        ModalAction::PageUp => app.detail_panel.page_up(),
+        ModalAction::PageDown => app.detail_panel.page_down(),
+        ModalAction::CopyReadable => {
+            if let Some(text) = app.detail_panel.copy_text() {
+                if clipboard::copy_to_clipboard(&text).is_ok() {
+                    app.show_toast("✓ Copied to clipboard");
+                } else {
+                    app.show_toast("✗ Failed to copy");
+                }
+            }
+        }
+        ModalAction::CopyJsonl => {
+            if let Some(idx) = modal.event_index() {
+                if let Some(event) = app.events.get(idx) {
+                    if let Ok(json) = serde_json::to_string(event) {
+                        if clipboard::copy_to_clipboard(&json).is_ok() {
+                            app.show_toast("✓ Copied JSONL to clipboard");
+                        } else {
+                            app.show_toast("✗ Failed to copy");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    true // Modal absorbed the input
+}
+
+/// Handle global keys - returns true if handled
+/// Global keys work the same regardless of current view
+/// Uses InputHandler for debounce (StateChange behavior = trigger once per press)
+fn handle_global_keys(app: &mut App, key_event: &KeyEvent) -> bool {
+    if key_event.kind != KeyEventKind::Press {
+        return false;
+    }
+
+    let key = key_event.code;
+
+    match key {
+        // Quit
+        KeyCode::Char('q') | KeyCode::Char('Q') => {
+            if app.handle_key_press(key) {
+                app.should_quit = true;
+            }
+            true
+        }
+        // View switching - F-keys (primary) and letter shortcuts
+        KeyCode::F(1) | KeyCode::Char('e') | KeyCode::Char('E') => {
+            if app.handle_key_press(key) {
+                if app.view == View::Settings {
+                    app.save_settings_if_dirty();
+                }
+                app.set_view(View::Events);
+            }
+            true
+        }
+        KeyCode::F(2) | KeyCode::Char('s') | KeyCode::Char('S') => {
+            if app.handle_key_press(key) {
+                if app.view == View::Settings {
+                    app.save_settings_if_dirty();
+                }
+                app.set_view(View::Stats);
+            }
+            true
+        }
+        KeyCode::F(3) => {
+            if app.handle_key_press(key) {
+                app.set_view(View::Settings);
+            }
+            true
+        }
+        // Help modal
+        KeyCode::Char('?') => {
+            if app.handle_key_press(key) {
+                app.modal = Some(Modal::help());
+            }
+            true
+        }
+        // Copy to clipboard: y = readable, Y = JSONL
+        KeyCode::Char('y') => {
+            if app.handle_key_press(key) {
+                if let Some(text) = app.copy_current_readable() {
+                    if clipboard::copy_to_clipboard(&text).is_ok() {
+                        app.show_toast("✓ Copied to clipboard");
+                    } else {
+                        app.show_toast("✗ Failed to copy");
+                    }
+                }
+            }
+            true
+        }
+        KeyCode::Char('Y') => {
+            if app.handle_key_press(key) {
+                if let Some(json) = app.copy_current_jsonl() {
+                    if clipboard::copy_to_clipboard(&json).is_ok() {
+                        app.show_toast("✓ Copied JSONL to clipboard");
+                    } else {
+                        app.show_toast("✗ Failed to copy");
+                    }
+                }
+            }
+            true
+        }
+        _ => false,
     }
 }

@@ -1,0 +1,59 @@
+# Cursor Dark theme for anthropic-spy
+# Nord-inspired colors with darker background
+
+[meta]
+name = "Cursor Dark"
+version = 1
+author = "iTerm2-Color-Schemes"
+
+[ui]
+background = "#141414"
+foreground = "#ffffff"
+border = "#d8dee9"
+border_focused = "#ebcb8b"
+title = "#88c0d0"
+status_bar = "#ffffff"
+selection_bg = "#303030"
+selection_fg = "#ffffff"
+
+[events]
+tool_call = "#88c0d0"
+tool_result_ok = "#a3be8c"
+tool_result_fail = "#bf616a"
+request = "#81a1c1"
+response = "#b48ead"
+error = "#bf616a"
+thinking = "#b48ead"
+api_usage = "#d8dee9"
+headers = "#d8dee9"
+rate_limit = "#d8dee9"
+context_compact = "#ebcb8b"
+
+[context_bar]
+fill = "#a3be8c"
+warn = "#ebcb8b"
+danger = "#bf616a"
+
+[panels]
+events = "#88c0d0"
+thinking = "#b48ead"
+logs = "#a3be8c"
+
+[vhs]
+black = "#2a2a2a"
+red = "#bf616a"
+green = "#a3be8c"
+yellow = "#ebcb8b"
+blue = "#81a1c1"
+purple = "#b48ead"
+cyan = "#88c0d0"
+white = "#d8dee9"
+bright_black = "#505050"
+bright_red = "#bf616a"
+bright_green = "#a3be8c"
+bright_yellow = "#ebcb8b"
+bright_blue = "#81a1c1"
+bright_purple = "#b48ead"
+bright_cyan = "#88c0d0"
+bright_white = "#ffffff"
+cursor = "#ffffff"

@@ -1,0 +1,28 @@
+{
+  "name": "aspy",
+  "owner": {
+    "name": "anthropic-spy contributors",
+    "url": "https://github.com/omgpointless/anthropic-spy"
+  },
+  "metadata": {
+    "description": "Plugin marketplace for anthropic-spy - a TUI observability proxy for Claude Code",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "aspy",
+      "source": "./",
+      "description": "Observability and development tools for Claude Code sessions",
+      "version": "0.1.0",
+      "author": {
+        "name": "anthropic-spy contributors",
+        "url": "https://github.com/omgpointless/anthropic-spy"
+      },
+      "homepage": "https://github.com/omgpointless/anthropic-spy",
+      "repository": "https://github.com/omgpointless/anthropic-spy",
+      "license": "MIT",
+      "keywords": ["observability", "proxy", "tui", "statistics", "cost-tracking"],
+      "category": "development"
+    }
+  ]
+}

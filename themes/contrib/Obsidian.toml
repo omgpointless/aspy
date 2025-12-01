@@ -1,0 +1,59 @@
+# Obsidian theme for anthropic-spy
+# Classic dark theme with vibrant colors
+
+[meta]
+name = "Obsidian"
+version = 1
+author = "iTerm2-Color-Schemes"
+
+[ui]
+background = "#283033"
+foreground = "#cdcdcd"
+border = "#cdcdcd"
+border_focused = "#fecd22"
+title = "#00bbbb"
+status_bar = "#cdcdcd"
+selection_bg = "#3e4c4f"
+selection_fg = "#ffffff"
+
+[events]
+tool_call = "#00bbbb"
+tool_result_ok = "#00bb00"
+tool_result_fail = "#b30d0e"
+request = "#3a9bdb"
+response = "#bb00bb"
+error = "#b30d0e"
+thinking = "#bb00bb"
+api_usage = "#cdcdcd"
+headers = "#cdcdcd"
+rate_limit = "#cdcdcd"
+context_compact = "#fecd22"
+
+[context_bar]
+fill = "#93c863"
+warn = "#fecd22"
+danger = "#ff0003"
+
+[panels]
+events = "#00bbbb"
+thinking = "#ff55ff"
+logs = "#93c863"
+
+[vhs]
+black = "#000000"
+red = "#b30d0e"
+green = "#00bb00"
+yellow = "#fecd22"
+blue = "#3a9bdb"
+purple = "#bb00bb"
+cyan = "#00bbbb"
+white = "#bbbbbb"
+bright_black = "#555555"
+bright_red = "#ff0003"
+bright_green = "#93c863"
+bright_yellow = "#fef874"
+bright_blue = "#a1d7ff"
+bright_purple = "#ff55ff"
+bright_cyan = "#55ffff"
+bright_white = "#ffffff"
+cursor = "#c0cad0"

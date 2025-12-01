@@ -1,0 +1,51 @@
+# .claude/.gitignore
+# Controls what gets committed to the repository vs. kept local
+
+# ============================================================================
+# COMMIT POLICY (What we DO commit):
+# ============================================================================
+# - Core architectural docs: CLAUDE.md, EXTENSIONS_VISION.md, ARCHITECTURE.md, etc.
+# - API reference materials: api-spec/
+# - Default slash commands: commands/spy/*.md
+# - This README and .gitignore
+#
+# These are stable project knowledge that benefits all contributors.
+
+# ============================================================================
+# IGNORE POLICY (What we DON'T commit):
+# ============================================================================
+
+# Session-specific notes and context
+SESSION_*.md
+temporal-context/
+snapshots/
+
+# Exploratory and brainstorming notes
+roadmap-brainstorms/
+
+# Learning notes and scratchpads
+*LEARNING*.md
+*PRICING*.md
+
+# Session helpers (regenerated per-session)
+QUICK_REFERENCE.md
+START_HERE.md
+
+# Temporal planning documents
+RELEASE_PLAN*.md
+
+# User-specific overrides and local state
+*.local.md
+*.local.json
+.state/
+.cache/
+
+# Future: User hooks will live here (always ignored)
+# See EXTENSIONS_VISION.md Phase 4
+hooks/
+examples/hooks/*.sh
+
+# Editor temp files (belt-and-suspenders, also in root .gitignore)
+*.swp
+*.swo
+*~

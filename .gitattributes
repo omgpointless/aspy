@@ -1,0 +1,17 @@
+# Auto detect text files and normalize to LF on commit
+* text=auto eol=lf
+
+# Shell scripts must stay LF (executable on Unix/WSL)
+*.sh text eol=lf
+
+# Batch files need CRLF (Windows native)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Ensure hooks stay LF
+hooks/** text eol=lf
+
+# Binary files (don't touch)
+*.png binary
+*.jpg binary
+*.ico binary

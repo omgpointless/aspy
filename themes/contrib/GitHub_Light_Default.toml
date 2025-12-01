@@ -1,0 +1,59 @@
+# GitHub Light Default theme for anthropic-spy
+# GitHub's official light theme
+
+[meta]
+name = "GitHub Light Default"
+version = 1
+author = "iTerm2-Color-Schemes"
+
+[ui]
+background = "#ffffff"
+foreground = "#1f2328"
+border = "#6e7781"
+border_focused = "#4d2d00"
+title = "#1b7c83"
+status_bar = "#1f2328"
+selection_bg = "#1f2328"
+selection_fg = "#ffffff"
+
+[events]
+tool_call = "#1b7c83"
+tool_result_ok = "#116329"
+tool_result_fail = "#cf222e"
+request = "#0969da"
+response = "#8250df"
+error = "#cf222e"
+thinking = "#8250df"
+api_usage = "#1f2328"
+headers = "#1f2328"
+rate_limit = "#1f2328"
+context_compact = "#4d2d00"
+
+[context_bar]
+fill = "#1b7c83"
+warn = "#4d2d00"
+danger = "#cf222e"
+
+[panels]
+events = "#0969da"
+thinking = "#8250df"
+logs = "#116329"
+
+[vhs]
+black = "#24292f"
+red = "#cf222e"
+green = "#116329"
+yellow = "#4d2d00"
+blue = "#0969da"
+purple = "#8250df"
+cyan = "#1b7c83"
+white = "#6e7781"
+bright_black = "#57606a"
+bright_red = "#a40e26"
+bright_green = "#1a7f37"
+bright_yellow = "#633c01"
+bright_blue = "#218bff"
+bright_purple = "#a475f9"
+bright_cyan = "#3192aa"
+bright_white = "#8c959f"
+cursor = "#0969da"

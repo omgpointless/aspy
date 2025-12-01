@@ -1,0 +1,59 @@
+# Monokai Pro theme for anthropic-spy
+# Modern take on the classic Monokai
+
+[meta]
+name = "Monokai Pro"
+version = 1
+author = "anthropic-spy"
+
+[ui]
+background = "#2d2a2e"
+foreground = "#fcfcfa"
+border = "#fcfcfa"
+border_focused = "#ffd866"
+title = "#78dce8"
+status_bar = "#fcfcfa"
+selection_bg = "#5b595c"
+selection_fg = "#fcfcfa"
+
+[events]
+tool_call = "#78dce8"
+tool_result_ok = "#a9dc76"
+tool_result_fail = "#ff6188"
+request = "#fc9867"
+response = "#ab9df2"
+error = "#ff6188"
+thinking = "#ab9df2"
+api_usage = "#fcfcfa"
+headers = "#fcfcfa"
+rate_limit = "#fcfcfa"
+context_compact = "#ffd866"
+
+[context_bar]
+fill = "#a9dc76"
+warn = "#ffd866"
+danger = "#ff6188"
+
+[panels]
+events = "#78dce8"
+thinking = "#ab9df2"
+logs = "#a9dc76"
+
+[vhs]
+black = "#2d2a2e"
+red = "#ff6188"
+green = "#a9dc76"
+yellow = "#ffd866"
+blue = "#fc9867"
+purple = "#ab9df2"
+cyan = "#78dce8"
+white = "#fcfcfa"
+bright_black = "#727072"
+bright_red = "#ff6188"
+bright_green = "#a9dc76"
+bright_yellow = "#ffd866"
+bright_blue = "#fc9867"
+bright_purple = "#ab9df2"
+bright_cyan = "#78dce8"
+bright_white = "#fcfcfa"
+cursor = "#c1c0c0"

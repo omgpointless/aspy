@@ -1,0 +1,21 @@
+{
+  "name": "aspy",
+  "version": "0.1.0",
+  "description": "Observability and development tools for Claude Code sessions",
+  "author": {
+    "name": "anthropic-spy contributors",
+    "url": "https://github.com/omgpointless/anthropic-spy"
+  },
+  "homepage": "https://github.com/omgpointless/anthropic-spy",
+  "repository": "https://github.com/omgpointless/anthropic-spy",
+  "license": "MIT",
+  "keywords": ["observability", "proxy", "tui", "statistics", "cost-tracking"],
+  "commands": "./commands/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": {
+    "aspy": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/index.js"]
+    }
+  }
+}

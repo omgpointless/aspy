@@ -1,0 +1,14 @@
+# Rust formatting configuration
+# See: https://rust-lang.github.io/rustfmt/
+
+# Maximum line width (default: 100)
+max_width = 100
+
+# Use field init shorthand where possible: Foo { x } instead of Foo { x: x }
+use_field_init_shorthand = true
+
+# Use Unix-style line endings
+newline_style = "Unix"
+
+# Edition (matches Cargo.toml)
+edition = "2021"

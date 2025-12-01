@@ -8,13 +8,18 @@
 // while accumulating a copy for parsing. This ensures low latency for
 // Claude Code while maintaining full observability.
 
-pub mod interceptor;
+pub mod api;
+pub mod augmentation;
+pub mod sessions;
+pub mod sse;
 
 use crate::config::Config;
 use crate::events::{generate_id, ProxyEvent};
 use crate::parser::models::CapturedHeaders;
 use crate::parser::Parser;
+use crate::{SharedContextState, StreamingThinking};
 use anyhow::{Context, Result};
+use augmentation::{AugmentationContext, AugmentationPipeline, StopReason};
 use axum::{
     body::Body,
     extract::State,
@@ -28,6 +33,7 @@ use chrono::Utc;
 use futures::StreamExt;
 use sha2::{Digest, Sha256};
 use std::convert::Infallible;
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -49,14 +55,75 @@ pub struct ProxyState {
     event_tx_storage: mpsc::Sender<ProxyEvent>,
     /// Target API URL
     api_url: String,
+    /// Shared buffer for streaming thinking content to TUI
+    streaming_thinking: StreamingThinking,
+    /// Shared context state for augmentation
+    context_state: SharedContextState,
+    /// Augmentation pipeline for response modification
+    augmentation: Arc<AugmentationPipeline>,
+    /// Shared statistics for API endpoints
+    stats: api::SharedStats,
+    /// Shared events buffer for API endpoints
+    events: api::SharedEvents,
+    /// Session manager for multi-user tracking
+    pub sessions: api::SharedSessions,
+    /// Log directory for session log search
+    pub log_dir: std::path::PathBuf,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Proxy Input Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Event broadcast channels for TUI and storage consumers
+#[derive(Clone)]
+pub struct EventChannels {
+    /// Channel for sending events to TUI
+    pub tui: mpsc::Sender<ProxyEvent>,
+    /// Channel for sending events to storage
+    pub storage: mpsc::Sender<ProxyEvent>,
+}
+
+/// Shared state passed to the proxy for cross-task coordination
+///
+/// All fields are Arc<Mutex<T>> for safe concurrent access across:
+/// - Proxy (writes stats, events, session updates)
+/// - TUI (reads for display)
+/// - HTTP API (reads for external queries)
+#[derive(Clone)]
+pub struct SharedState {
+    /// Accumulated statistics (tokens, costs, tool calls)
+    pub stats: api::SharedStats,
+    /// Event buffer for API queries
+    pub events: api::SharedEvents,
+    /// Session manager for multi-user tracking
+    pub sessions: api::SharedSessions,
+    /// Context window state for augmentation decisions
+    pub context: SharedContextState,
+    /// Buffer for streaming thinking content to TUI
+    pub streaming_thinking: StreamingThinking,
+}
+
+/// Context for handling an API response
+struct ResponseContext {
+    response: reqwest::Response,
+    status: reqwest::StatusCode,
+    headers: reqwest::header::HeaderMap,
+    start: Instant,
+    ttfb: std::time::Duration,
+    request_id: String,
+    is_messages_endpoint: bool,
+    state: ProxyState,
+    /// User ID (api_key_hash) for session tracking
+    user_id: Option<String>,
 }
 
 /// Start the proxy server
 pub async fn start_proxy(
     config: Config,
-    event_tx_tui: mpsc::Sender<ProxyEvent>,
-    event_tx_storage: mpsc::Sender<ProxyEvent>,
+    channels: EventChannels,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    shared: SharedState,
 ) -> Result<()> {
     let bind_addr = config.bind_addr;
     let api_url = config.api_url.clone();
@@ -68,16 +135,48 @@ pub async fn start_proxy(
         .build()
         .context("Failed to create HTTP client")?;
 
+    // Create augmentation pipeline from config (opt-in augmenters)
+    let augmentation = Arc::new(AugmentationPipeline::from_config(&config.augmentation));
+    if augmentation.is_empty() {
+        tracing::debug!("Augmentation pipeline: no augmenters enabled");
+    } else {
+        tracing::debug!(
+            "Augmentation pipeline initialized with: {:?}",
+            augmentation.augmenter_names()
+        );
+    }
+
     let state = ProxyState {
         client,
         parser: Parser::new(),
-        event_tx_tui,
-        event_tx_storage,
+        event_tx_tui: channels.tui,
+        event_tx_storage: channels.storage,
         api_url,
+        streaming_thinking: shared.streaming_thinking,
+        context_state: shared.context,
+        augmentation,
+        stats: shared.stats,
+        events: shared.events,
+        sessions: shared.sessions,
+        log_dir: config.log_dir.clone(),
     };
 
-    // Build the router - all requests go to the proxy handler
+    // Build the router - API endpoints + proxy handler
     let app = Router::new()
+        // Stats and events endpoints
+        .route("/api/stats", axum::routing::get(api::get_stats))
+        .route("/api/events", axum::routing::get(api::get_events))
+        .route("/api/context", axum::routing::get(api::get_context))
+        // Session management endpoints
+        .route("/api/sessions", axum::routing::get(api::get_sessions))
+        .route(
+            "/api/session/start",
+            axum::routing::post(api::session_start),
+        )
+        .route("/api/session/end", axum::routing::post(api::session_end))
+        // Log search endpoint
+        .route("/api/search", axum::routing::post(api::search_logs))
+        // Proxy handler (catch-all)
         .route("/*path", any(proxy_handler))
         .with_state(state);
 
@@ -103,102 +202,19 @@ pub async fn start_proxy(
 }
 
 impl ProxyState {
-    /// Send an event to both TUI and storage
+    /// Send an event to TUI, storage, and user's session
     /// We ignore errors here to avoid blocking the proxy if a receiver is slow or closed
-    async fn send_event(&self, event: ProxyEvent) {
+    async fn send_event(&self, event: ProxyEvent, user_id: Option<&str>) {
+        // Send to TUI and storage channels
         let _ = self.event_tx_tui.send(event.clone()).await;
-        let _ = self.event_tx_storage.send(event).await;
-    }
-}
+        let _ = self.event_tx_storage.send(event.clone()).await;
 
-/// Check if response is SSE based on content-type header
-fn is_sse_response(headers: &reqwest::header::HeaderMap) -> bool {
-    headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(|ct| ct.contains("text/event-stream"))
-        .unwrap_or(false)
-}
-
-/// Parse SSE response into a JSON representation for display
-fn parse_sse_to_json(body: &str) -> Option<serde_json::Value> {
-    use serde_json::json;
-
-    let mut content_blocks = Vec::new();
-    let mut model = String::new();
-    let mut stop_reason: Option<String> = None;
-    let mut usage_data: Option<serde_json::Value> = None;
-
-    for line in body.lines() {
-        let line = line.trim();
-
-        if line.starts_with("data:") {
-            let json_str = line.strip_prefix("data:").unwrap_or("").trim();
-
-            if json_str.is_empty() || json_str == "[DONE]" {
-                continue;
-            }
-
-            if let Ok(data) = serde_json::from_str::<serde_json::Value>(json_str) {
-                let event_type = data.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-                match event_type {
-                    "message_start" => {
-                        if let Some(message) = data.get("message") {
-                            model = message
-                                .get("model")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                        }
-                    }
-                    "content_block_start" => {
-                        if let Some(block) = data.get("content_block") {
-                            content_blocks.push(block.clone());
-                        }
-                    }
-                    "content_block_delta" => {
-                        if let Some(delta) = data.get("delta") {
-                            if let Some(last_block) = content_blocks.last_mut() {
-                                if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
-                                    if let Some(existing_text) = last_block.get_mut("text") {
-                                        if let Some(s) = existing_text.as_str() {
-                                            *existing_text = json!(format!("{}{}", s, text));
-                                        }
-                                    } else if let Some(obj) = last_block.as_object_mut() {
-                                        obj.insert("text".to_string(), json!(text));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    "message_delta" => {
-                        if let Some(delta) = data.get("delta") {
-                            stop_reason = delta
-                                .get("stop_reason")
-                                .and_then(|v| v.as_str())
-                                .map(String::from);
-                        }
-                        if let Some(usage) = data.get("usage") {
-                            usage_data = Some(usage.clone());
-                        }
-                    }
-                    _ => {}
-                }
+        // Also record to user's session if we have a user_id
+        if let Some(uid) = user_id {
+            if let Ok(mut sessions) = self.sessions.lock() {
+                sessions.record_event(&sessions::UserId::new(uid), event);
             }
         }
-    }
-
-    if !content_blocks.is_empty() || !model.is_empty() {
-        Some(json!({
-            "model": model,
-            "content": content_blocks,
-            "stop_reason": stop_reason,
-            "usage": usage_data,
-            "_note": "Assembled from SSE stream"
-        }))
-    } else {
-        None
     }
 }
 
@@ -221,6 +237,17 @@ async fn proxy_handler(
     let headers = req.headers().clone();
     let is_messages_endpoint = uri.path().contains("/messages");
 
+    // Extract user_id early for session tracking (before any events are sent)
+    let user_id = extract_user_id(&headers);
+
+    // Backfill session user_id immediately (before any events are sent)
+    // This ensures events go to the hook-created session, not a new implicit one
+    if let Some(ref uid) = user_id {
+        if let Ok(mut sessions) = state.sessions.lock() {
+            sessions.backfill_user_id(uid);
+        }
+    }
+
     tracing::debug!("Proxying {} {}", method, uri);
 
     // Read the request body (with size limit)
@@ -237,14 +264,17 @@ async fn proxy_handler(
 
     // Emit request event
     state
-        .send_event(ProxyEvent::Request {
-            id: request_id.clone(),
-            timestamp: Utc::now(),
-            method: method.to_string(),
-            path: uri.path().to_string(),
-            body_size: body_bytes.len(),
-            body: request_body,
-        })
+        .send_event(
+            ProxyEvent::Request {
+                id: request_id.clone(),
+                timestamp: Utc::now(),
+                method: method.to_string(),
+                path: uri.path().to_string(),
+                body_size: body_bytes.len(),
+                body: request_body,
+            },
+            user_id.as_deref(),
+        )
         .await;
 
     // Parse request for tool results if this is a messages endpoint
@@ -252,7 +282,7 @@ async fn proxy_handler(
         match state.parser.parse_request(&body_bytes).await {
             Ok(events) => {
                 for event in events {
-                    state.send_event(event).await;
+                    state.send_event(event, user_id.as_deref()).await;
                 }
             }
             Err(e) => {
@@ -270,12 +300,14 @@ async fn proxy_handler(
         format!("{}?{}", forward_url, query)
     };
 
+    // INTERCEPTOR: Request-side injection disabled - using SSE response injection instead
+    // SSE injection is more reliable (no prompt engineering) and appears at end of response
+    // See handle_streaming_response() for the active injection point
+    let final_body = body_bytes.to_vec();
+
     // Build the forwarded request
     // With reqwest 0.12, Method types align with axum (both use http 1.0 crate)
-    let mut forward_req = state
-        .client
-        .request(method, &forward_url)
-        .body(body_bytes.to_vec());
+    let mut forward_req = state.client.request(method, &forward_url).body(final_body);
 
     // Copy relevant headers (types align between axum and reqwest 0.12)
     for (key, value) in headers.iter() {
@@ -291,6 +323,9 @@ async fn proxy_handler(
         .await
         .map_err(|e| ProxyError::Upstream(e.to_string()))?;
 
+    // TTFB: Time to first byte - captured immediately after headers received
+    let ttfb = start.elapsed();
+
     let status = response.status();
     let response_headers = response.headers().clone();
 
@@ -301,70 +336,72 @@ async fn proxy_handler(
 
     // Emit headers captured event early (we have them now)
     state
-        .send_event(ProxyEvent::HeadersCaptured {
-            request_id: request_id.clone(),
-            timestamp: Utc::now(),
-            headers: combined_headers.clone(),
-        })
+        .send_event(
+            ProxyEvent::HeadersCaptured {
+                request_id: request_id.clone(),
+                timestamp: Utc::now(),
+                headers: combined_headers.clone(),
+            },
+            user_id.as_deref(),
+        )
         .await;
 
     // Emit rate limit update if available
     if combined_headers.has_rate_limits() {
         state
-            .send_event(ProxyEvent::RateLimitUpdate {
-                timestamp: Utc::now(),
-                requests_remaining: combined_headers.requests_remaining,
-                requests_limit: combined_headers.requests_limit,
-                tokens_remaining: combined_headers.tokens_remaining,
-                tokens_limit: combined_headers.tokens_limit,
-                reset_time: combined_headers
-                    .requests_reset
-                    .clone()
-                    .or(combined_headers.tokens_reset.clone()),
-            })
+            .send_event(
+                ProxyEvent::RateLimitUpdate {
+                    timestamp: Utc::now(),
+                    requests_remaining: combined_headers.requests_remaining,
+                    requests_limit: combined_headers.requests_limit,
+                    tokens_remaining: combined_headers.tokens_remaining,
+                    tokens_limit: combined_headers.tokens_limit,
+                    reset_time: combined_headers
+                        .requests_reset
+                        .clone()
+                        .or(combined_headers.tokens_reset.clone()),
+                },
+                user_id.as_deref(),
+            )
             .await;
     }
 
+    // Bundle context for handler
+    let ctx = ResponseContext {
+        response,
+        status,
+        headers: response_headers,
+        start,
+        ttfb,
+        request_id,
+        is_messages_endpoint,
+        state,
+        user_id,
+    };
+
     // Decide: streaming (SSE) or buffered (JSON) response handling
-    if is_sse_response(&response_headers) && status.is_success() {
-        // STREAMING PATH: Forward chunks immediately while accumulating for parsing
+    if sse::is_sse_response(&ctx.headers) && ctx.status.is_success() {
         tracing::debug!("Handling SSE streaming response");
-        handle_streaming_response(
-            response,
-            status,
-            response_headers,
-            start,
-            request_id,
-            is_messages_endpoint,
-            state,
-        )
-        .await
+        handle_streaming_response(ctx).await
     } else {
-        // BUFFERED PATH: Small JSON responses can be buffered
         tracing::debug!("Handling buffered (non-streaming) response");
-        handle_buffered_response(
-            response,
-            status,
-            response_headers,
-            start,
-            request_id,
-            is_messages_endpoint,
-            state,
-        )
-        .await
+        handle_buffered_response(ctx).await
     }
 }
 
 /// Handle SSE streaming responses - forward chunks immediately while accumulating
-async fn handle_streaming_response(
-    response: reqwest::Response,
-    status: reqwest::StatusCode,
-    response_headers: reqwest::header::HeaderMap,
-    start: Instant,
-    request_id: String,
-    is_messages_endpoint: bool,
-    state: ProxyState,
-) -> Result<Response<Body>, ProxyError> {
+async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body>, ProxyError> {
+    let ResponseContext {
+        response,
+        status,
+        headers: response_headers,
+        start,
+        ttfb,
+        request_id,
+        is_messages_endpoint,
+        state,
+        user_id,
+    } = ctx;
     // Create channel for streaming to client
     // Buffer size of 64 provides some cushion without excessive memory use
     let (tx, rx) = mpsc::channel::<Result<Bytes, Infallible>>(64);
@@ -374,6 +411,11 @@ async fn handle_streaming_response(
     let event_tx_tui = state.event_tx_tui.clone();
     let event_tx_storage = state.event_tx_storage.clone();
     let request_id_clone = request_id.clone();
+    let streaming_thinking = state.streaming_thinking.clone();
+    let context_state = state.context_state.clone();
+    let augmentation = state.augmentation.clone();
+    let sessions = state.sessions.clone();
+    let user_id_clone = user_id.clone();
 
     // Spawn task to stream response while accumulating
     tokio::spawn(async move {
@@ -382,6 +424,12 @@ async fn handle_streaming_response(
         let mut total_bytes = 0usize;
         // Buffer for incomplete SSE lines across chunks
         let mut line_buffer = String::new();
+        // Track content block index for potential injection
+        let mut max_block_index: u32 = 0;
+        // Track if we've injected this response (only inject once)
+        let mut injected = false;
+        // Track model for injection filtering (skip Haiku utility calls)
+        let mut response_model = String::new();
 
         // Stream chunks to client while accumulating
         while let Some(chunk_result) = byte_stream.next().await {
@@ -399,10 +447,76 @@ async fn handle_streaming_response(
                             // Process complete lines
                             while let Some(newline_pos) = line_buffer.find('\n') {
                                 let line = line_buffer[..newline_pos].trim();
-                                if let Some(tool_info) = extract_tool_use_from_sse_line(line) {
+                                // Register tool_use IDs immediately
+                                if let Some(tool_info) = sse::extract_tool_use(line) {
                                     parser.register_pending_tool(tool_info.0, tool_info.1).await;
                                 }
+                                // Track content block index for injection
+                                if let Some(idx) = sse::extract_content_block_index(line) {
+                                    if idx >= max_block_index {
+                                        max_block_index = idx + 1;
+                                    }
+                                }
+                                // Extract model from message_start (for injection filtering)
+                                if response_model.is_empty() {
+                                    if let Some(model) = sse::extract_model(line) {
+                                        response_model = model;
+                                    }
+                                }
+                                // Emit ThinkingStarted immediately for real-time feedback
+                                if sse::is_thinking_block_start(line) {
+                                    // Clear buffer for new thinking block
+                                    if let Ok(mut buf) = streaming_thinking.lock() {
+                                        buf.clear();
+                                    }
+                                    let _ = event_tx_tui
+                                        .send(ProxyEvent::ThinkingStarted {
+                                            timestamp: chrono::Utc::now(),
+                                        })
+                                        .await;
+                                }
+                                // Stream thinking content in real-time
+                                if let Some(thinking_text) = sse::extract_thinking_delta(line) {
+                                    if let Ok(mut buf) = streaming_thinking.lock() {
+                                        buf.push_str(&thinking_text);
+                                    }
+                                }
                                 line_buffer = line_buffer[newline_pos + 1..].to_string();
+                            }
+                        }
+
+                        // Check if this chunk contains message_delta - inject before forwarding
+                        // Only inject on end_turn responses (not tool_use)
+                        if !injected {
+                            match std::str::from_utf8(&chunk) {
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "SSE injection skipped: UTF-8 decode failed: {}",
+                                        e
+                                    );
+                                }
+                                Ok(chunk_str) => {
+                                    // Check for message_delta to trigger augmentation
+                                    if chunk_str.contains("message_delta") {
+                                        if let Some(stop_reason) = StopReason::from_chunk(chunk_str)
+                                        {
+                                            // Build augmentation context
+                                            let aug_ctx = AugmentationContext {
+                                                model: &response_model,
+                                                stop_reason,
+                                                next_block_index: max_block_index,
+                                                context_state: &context_state,
+                                            };
+
+                                            // Run augmentation pipeline
+                                            if let Some(injection) = augmentation.process(&aug_ctx)
+                                            {
+                                                let _ = tx.send(Ok(Bytes::from(injection))).await;
+                                                injected = true;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -414,14 +528,39 @@ async fn handle_streaming_response(
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Error reading stream chunk: {}", e);
+                    let error_msg = format!("Error reading stream chunk: {}", e);
+                    tracing::error!("{}", error_msg);
+
+                    // Emit error event for observability (JSONL logs + TUI)
+                    let _ = event_tx_tui
+                        .send(ProxyEvent::Error {
+                            timestamp: chrono::Utc::now(),
+                            message: error_msg.clone(),
+                            context: Some(format!(
+                                "request_id: {}, accumulated: {} bytes",
+                                request_id_clone,
+                                accumulated.len()
+                            )),
+                        })
+                        .await;
+                    let _ = event_tx_storage
+                        .send(ProxyEvent::Error {
+                            timestamp: chrono::Utc::now(),
+                            message: error_msg,
+                            context: Some(format!(
+                                "request_id: {}, accumulated: {} bytes",
+                                request_id_clone,
+                                accumulated.len()
+                            )),
+                        })
+                        .await;
                     break;
                 }
             }
         }
         // Process any remaining data in line buffer
         if is_messages_endpoint && !line_buffer.is_empty() {
-            if let Some(tool_info) = extract_tool_use_from_sse_line(line_buffer.trim()) {
+            if let Some(tool_info) = sse::extract_tool_use(line_buffer.trim()) {
                 parser.register_pending_tool(tool_info.0, tool_info.1).await;
             }
         }
@@ -429,20 +568,28 @@ async fn handle_streaming_response(
         // Stream complete - now parse and emit events
         let duration = start.elapsed();
 
-        // Helper to send events
+        // Helper to send events (includes session recording)
         let send_event = |event: ProxyEvent| {
             let tx_tui = event_tx_tui.clone();
             let tx_storage = event_tx_storage.clone();
+            let sessions_ref = sessions.clone();
+            let uid = user_id_clone.clone();
             async move {
                 let _ = tx_tui.send(event.clone()).await;
-                let _ = tx_storage.send(event).await;
+                let _ = tx_storage.send(event.clone()).await;
+                // Also record to user's session
+                if let Some(ref user_id) = uid {
+                    if let Ok(mut sessions) = sessions_ref.lock() {
+                        sessions.record_event(&sessions::UserId::new(user_id), event);
+                    }
+                }
             }
         };
 
         // Parse accumulated response for display
         let parsed_body = if is_messages_endpoint {
             let body_str = std::str::from_utf8(&accumulated).unwrap_or("");
-            parse_sse_to_json(body_str)
+            sse::assemble_to_json(body_str)
         } else {
             None
         };
@@ -453,6 +600,7 @@ async fn handle_streaming_response(
             timestamp: Utc::now(),
             status: status.as_u16(),
             body_size: total_bytes,
+            ttfb,
             duration,
             body: parsed_body,
         })
@@ -462,6 +610,31 @@ async fn handle_streaming_response(
         if is_messages_endpoint {
             if let Ok(events) = parser.parse_response(&accumulated).await {
                 for event in events {
+                    // Update context state when we see ApiUsage (skip Haiku utility calls)
+                    if let ProxyEvent::ApiUsage {
+                        input_tokens,
+                        cache_creation_tokens,
+                        cache_read_tokens,
+                        model,
+                        ..
+                    } = &event
+                    {
+                        if !model.to_lowercase().contains("haiku") {
+                            if let Ok(mut ctx) = context_state.lock() {
+                                ctx.update(
+                                    *input_tokens as u64,
+                                    *cache_creation_tokens as u64,
+                                    *cache_read_tokens as u64,
+                                );
+                            }
+                        }
+                    }
+                    // Reset warnings on context compact
+                    if let ProxyEvent::ContextCompact { .. } = &event {
+                        if let Ok(mut ctx) = context_state.lock() {
+                            ctx.reset_warnings();
+                        }
+                    }
                     send_event(event).await;
                 }
             }
@@ -495,15 +668,18 @@ async fn handle_streaming_response(
 }
 
 /// Handle non-streaming responses (JSON) - buffer and forward
-async fn handle_buffered_response(
-    response: reqwest::Response,
-    status: reqwest::StatusCode,
-    response_headers: reqwest::header::HeaderMap,
-    start: Instant,
-    request_id: String,
-    is_messages_endpoint: bool,
-    state: ProxyState,
-) -> Result<Response<Body>, ProxyError> {
+async fn handle_buffered_response(ctx: ResponseContext) -> Result<Response<Body>, ProxyError> {
+    let ResponseContext {
+        response,
+        status,
+        headers: response_headers,
+        start,
+        ttfb,
+        request_id,
+        is_messages_endpoint,
+        state,
+        user_id,
+    } = ctx;
     // Read full response body
     let response_body = response
         .bytes()
@@ -519,7 +695,7 @@ async fn handle_buffered_response(
         } else {
             let body_str = std::str::from_utf8(&response_body).unwrap_or("");
             if body_str.contains("event:") {
-                parse_sse_to_json(body_str)
+                sse::assemble_to_json(body_str)
             } else {
                 None
             }
@@ -530,21 +706,50 @@ async fn handle_buffered_response(
 
     // Emit response event
     state
-        .send_event(ProxyEvent::Response {
-            request_id: request_id.clone(),
-            timestamp: Utc::now(),
-            status: status.as_u16(),
-            body_size: response_body.len(),
-            duration,
-            body: parsed_response_body,
-        })
+        .send_event(
+            ProxyEvent::Response {
+                request_id: request_id.clone(),
+                timestamp: Utc::now(),
+                status: status.as_u16(),
+                body_size: response_body.len(),
+                ttfb,
+                duration,
+                body: parsed_response_body,
+            },
+            user_id.as_deref(),
+        )
         .await;
 
     // Parse response for tool calls if this is a messages endpoint
     if is_messages_endpoint && status.is_success() {
         if let Ok(events) = state.parser.parse_response(&response_body).await {
             for event in events {
-                state.send_event(event).await;
+                // Update context state when we see ApiUsage (skip Haiku utility calls)
+                if let ProxyEvent::ApiUsage {
+                    input_tokens,
+                    cache_creation_tokens,
+                    cache_read_tokens,
+                    model,
+                    ..
+                } = &event
+                {
+                    if !model.to_lowercase().contains("haiku") {
+                        if let Ok(mut ctx) = state.context_state.lock() {
+                            ctx.update(
+                                *input_tokens as u64,
+                                *cache_creation_tokens as u64,
+                                *cache_read_tokens as u64,
+                            );
+                        }
+                    }
+                }
+                // Reset warnings on context compact
+                if let ProxyEvent::ContextCompact { .. } = &event {
+                    if let Ok(mut ctx) = state.context_state.lock() {
+                        ctx.reset_warnings();
+                    }
+                }
+                state.send_event(event, user_id.as_deref()).await;
             }
         }
     }
@@ -577,6 +782,31 @@ fn merge_headers(mut req: CapturedHeaders, resp: CapturedHeaders) -> CapturedHea
     req
 }
 
+/// Extract user ID (api_key_hash) from request headers
+/// Used early in the handler to associate events with sessions
+fn extract_user_id(headers: &axum::http::HeaderMap) -> Option<String> {
+    // Hash API key or OAuth token for user identity
+    // Note: Hook script can override this by setting user_id in /api/session/start
+    let key_to_hash = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .filter(|s| s.starts_with("Bearer "))
+                .map(|s| s[7..].to_string())
+        });
+
+    key_to_hash.map(|key| {
+        let mut hasher = Sha256::new();
+        hasher.update(key.as_bytes());
+        let hash = hasher.finalize();
+        format!("{:x}", hash)[..16].to_string()
+    })
+}
+
 /// Extract request headers into CapturedHeaders struct
 fn extract_request_headers(headers: &axum::http::HeaderMap) -> CapturedHeaders {
     let mut captured = CapturedHeaders::new();
@@ -592,9 +822,23 @@ fn extract_request_headers(headers: &axum::http::HeaderMap) -> CapturedHeaders {
     }
 
     // Hash the API key for tracking (never log the actual key!)
-    if let Some(api_key) = headers.get("x-api-key") {
+    // Check x-api-key first, then Authorization: Bearer (for OAuth users)
+    let key_to_hash = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            // OAuth: Authorization: Bearer <token>
+            headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .filter(|s| s.starts_with("Bearer "))
+                .map(|s| s[7..].to_string()) // Strip "Bearer " prefix
+        });
+
+    if let Some(key) = key_to_hash {
         let mut hasher = Sha256::new();
-        hasher.update(api_key.as_bytes());
+        hasher.update(key.as_bytes());
         let hash = hasher.finalize();
         captured.api_key_hash = Some(format!("{:x}", hash)[..16].to_string());
     }
@@ -635,43 +879,6 @@ fn extract_response_headers(headers: &reqwest::header::HeaderMap) -> CapturedHea
     }
 
     captured
-}
-
-/// Extract tool_use ID and name from an SSE data line if it's a content_block_start for tool_use
-///
-/// This is used during streaming to register tool_use IDs immediately, before the stream
-/// completes. This prevents a race condition where the next request (with tool_result)
-/// arrives before we've finished parsing the response.
-///
-/// Returns Some((id, name)) if this line starts a tool_use block, None otherwise.
-fn extract_tool_use_from_sse_line(line: &str) -> Option<(String, String)> {
-    // Only process "data:" lines
-    let json_str = line.strip_prefix("data:")?.trim();
-    if json_str.is_empty() || json_str == "[DONE]" {
-        return None;
-    }
-
-    // Parse the JSON
-    let data: serde_json::Value = serde_json::from_str(json_str).ok()?;
-
-    // Check if this is a content_block_start event
-    let event_type = data.get("type")?.as_str()?;
-    if event_type != "content_block_start" {
-        return None;
-    }
-
-    // Check if the content_block is a tool_use
-    let content_block = data.get("content_block")?;
-    let block_type = content_block.get("type")?.as_str()?;
-    if block_type != "tool_use" {
-        return None;
-    }
-
-    // Extract ID and name
-    let id = content_block.get("id")?.as_str()?.to_string();
-    let name = content_block.get("name")?.as_str()?.to_string();
-
-    Some((id, name))
 }
 
 /// Errors that can occur during proxying

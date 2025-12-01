@@ -91,12 +91,6 @@ impl LogBuffer {
         self.entries.lock().unwrap().iter().cloned().collect()
     }
 
-    /// Get the N most recent log entries
-    pub fn get_recent(&self, n: usize) -> Vec<LogEntry> {
-        let entries = self.entries.lock().unwrap();
-        entries.iter().rev().take(n).rev().cloned().collect()
-    }
-
     /// Clear all log entries
     #[allow(dead_code)]
     pub fn clear(&self) {

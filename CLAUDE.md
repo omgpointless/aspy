@@ -10,85 +10,84 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Learning Context:** This is the maintainer's first serious Rust project, coming from a .NET/TypeScript background. Code is primarily AI-generated but must be understood and explainable.
 
-## Build & Development Commands
+---
 
-### Building
+## Architecture Philosophy
+
+**Core Principle:** Composition over inheritance using Rust's trait system. New features MUST compose existing behaviors rather than modify core state containers.
+
+**Layered Architecture:** Kernel (core system) → Userland (optional features) → User Space (custom extensions)
+
+**Key Design Principles:**
+1. **"Ah, Here It Is" Discoverability** - One concept, one place (e.g., scrolling code lives in `tui/traits/scrollable.rs`)
+2. **Traits as Capabilities** - Components gain behavior by implementing traits, not inheritance
+3. **Data vs Rendering** - Views produce layout trees, rendering is a separate pass
+4. **Configuration Over Code Changes** - Userland features MUST be config-toggleable
+
+**See [docs/architecture.md](docs/architecture.md) for detailed patterns, anti-patterns, and examples.**
+
+---
+
+## ⚠️ REQUIRED READING: Architecture Documentation
+
+**CRITICAL:** Before adding features, refactoring, or modifying any code that touches component structure, traits, or app state, you **MUST** read [docs/architecture.md](docs/architecture.md) in full.
+
+### Decision Tree: When to Read Sub-Documentation
+
+```
+┌─ Task involves...
+│
+├─ Adding a feature, refactoring, or modifying component/trait structure?
+│  ├─ YES → READ docs/architecture.md (REQUIRED)
+│  │        - Review patterns to follow (newtypes, traits, composition)
+│  │        - Check anti-patterns to avoid (app.rs bloat, copy-paste)
+│  │        - Understand kernel/userland/user space layers
+│  └─ NO  → Continue
+│
+├─ Working on build setup, running commands, or dev environment?
+│  ├─ YES → READ docs/commands.md
+│  │        - Build commands, demo mode, code quality tools
+│  └─ NO  → Continue
+│
+├─ Working on session tracking, API endpoints, or multi-user features?
+│  ├─ YES → READ docs/sessions.md
+│  │        - Privacy model, session lifecycle, MCP integration
+│  └─ NO  → Continue
+│
+└─ Debugging, analyzing logs, or understanding event structure?
+   ├─ YES → READ docs/log-analysis.md
+   │        - jq queries, context recovery, session profiling
+   └─ NO  → You're good to proceed
+```
+
+**Rule of thumb:** If unsure whether to read a doc, read it. Architectural violations are expensive to fix later.
+
+---
+
+## Quick Start
+
+### Building & Running
 ```bash
 # Development build
 cargo build
 
-# Release build (optimized)
-cargo build --release
-
-# Check compilation without building
-cargo check
-```
-
-### Running
-```bash
-# Run in development mode
-cargo run
-
-# Run in release mode (recommended for actual use)
+# Run in release mode (recommended)
 cargo run --release
 
-# Run in headless mode (no TUI, logs to stdout)
-ANTHROPIC_SPY_NO_TUI=1 cargo run --release
-
-# Run in demo mode (generate mock events for showcasing)
+# Run in demo mode (mock events for showcasing)
 ANTHROPIC_SPY_DEMO=1 cargo run --release
-
-# Run with debug logging
-RUST_LOG=debug cargo run
-```
-
-### Demo Mode
-
-Demo mode generates realistic mock events to showcase the TUI without needing a live Claude Code session. This is useful for:
-- Recording GIFs/videos for documentation
-- Testing UI changes without API costs
-- Demonstrating features to others
-
-The demo simulates a typical Claude Code session including:
-- Thinking blocks showing Claude's reasoning
-- Tool calls (Read, Edit, Bash, Glob, TodoWrite) with realistic inputs
-- API usage events with token counts
-- Progressive task completion
-
-```bash
-# Windows PowerShell
-$env:ANTHROPIC_SPY_DEMO="1"; cargo run --release
-
-# macOS/Linux
-ANTHROPIC_SPY_DEMO=1 cargo run --release
-```
-
-### Code Quality
-```bash
-# Format code
-cargo fmt
-
-# Lint with clippy
-cargo clippy
-
-# Run with all clippy warnings
-cargo clippy -- -W clippy::all
 ```
 
 ### Testing with Claude Code
-After starting the proxy, configure Claude Code in a separate terminal:
-
-```powershell
-# Windows PowerShell
-$env:ANTHROPIC_BASE_URL="http://127.0.0.1:8080"
-claude-code
-```
-
 ```bash
-# macOS/Linux
+# Point Claude Code at the proxy
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
 claude-code
 ```
+
+**See [docs/commands.md](docs/commands.md) for complete build, run, and development commands.**
+
+---
 
 ## Architecture Overview
 
@@ -108,181 +107,132 @@ Event Channels (mpsc)
 TUI       Storage    (Future consumers)
 ```
 
-**Streaming Architecture:** For SSE responses, the proxy immediately streams chunks
-to Claude Code while accumulating a copy in a background task. This preserves
-low-latency token delivery. Parsing and event emission happen after the stream
-completes, ensuring Claude Code receives tokens without waiting for parsing.
+**Streaming Architecture:** For SSE responses, the proxy immediately streams chunks to Claude Code while accumulating a copy in a background task. This preserves low-latency token delivery. Parsing and event emission happen after the stream completes.
 
 ### Core Components
 
-**1. main.rs - Orchestration**
-- Sets up conditional logging (TUI mode vs headless)
-- Creates mpsc channels for event distribution
-- Spawns background tasks: proxy, storage
-- Runs TUI in main task (or waits for Ctrl+C in headless mode)
-- Handles graceful shutdown via oneshot channel
+**1. main.rs** - Orchestration: sets up logging, creates channels, spawns tasks (proxy, storage), runs TUI
 
-**2. proxy/ - HTTP Interception**
-- `mod.rs`: Axum server that forwards all requests to Anthropic API
-- `proxy_handler()`: Routes to streaming or buffered handler based on content-type
-- `handle_streaming_response()`: Tees SSE stream to client + accumulator, parses after completion
-- `handle_buffered_response()`: Buffers small JSON responses for parsing
-- Uses `reqwest` with `bytes_stream()` for SSE streaming
-- 50MB request body limit prevents DoS
-- Headers are extracted and API keys are hashed (SHA-256) for security
+**2. proxy/** - HTTP Interception: Axum server forwarding requests to Anthropic API, handles streaming/buffered responses
 
-**3. parser/ - Protocol Extraction**
-- `Parser` struct maintains state to correlate tool calls with results
-- `parse_request()`: Extracts tool_result blocks from requests
-- `parse_response()`: Extracts tool_use blocks from responses
-- Uses `Arc<Mutex<HashMap>>` to track pending calls across async tasks
-- Calculates duration by matching tool_use_id with timestamps
+**3. parser/** - Protocol Extraction: correlates tool calls with results, tracks pending calls, calculates durations
 
-**4. events.rs - Event System**
-- `ProxyEvent` enum: Tagged union of all event types
-- Types: ToolCall, ToolResult, Request, Response, Error, HeadersCaptured, RateLimitUpdate, ApiUsage, Thinking
-- `Stats` struct: Accumulates metrics (requests, tokens, thinking blocks, success rate, cost)
-- All events are `Clone + Serialize` for broadcasting and logging
+**4. events.rs** - Event System: `ProxyEvent` enum (ToolCall, ToolResult, ApiUsage, Thinking, etc.), `Stats` accumulation
 
-**5. tui/ - Terminal Interface**
-- `mod.rs`: Event loop using tokio::select! (keyboard + events + periodic redraw)
-- `app.rs`: Application state (events list, selection, stats, scroll state)
-- `ui.rs`: Rendering with ratatui (4-section layout: title, main, logs, status)
-- `input.rs`: State-based keyboard handling (tracks pressed keys, no debouncing)
+**5. tui/** - Terminal Interface: event loop (tokio::select!), app state, rendering with ratatui
 
-**6. storage/ - Persistence**
-- Writes events to JSON Lines format (`./logs/anthropic-spy-YYYY-MM-DD.jsonl`)
-- Daily log rotation
-- Runs in background task, receives events via mpsc channel
+**6. storage/** - Persistence: writes events to JSON Lines format, session-based log rotation
 
-**7. logging/ - Custom Tracing**
-- `TuiLogLayer`: Custom tracing::Layer implementation
-- Intercepts log events before they reach stdout
-- Stores in ring buffer (max 1000 entries) shared via `Arc<Mutex<>>`
-- Prevents logs from breaking through TUI alternate screen buffer
+**7. logging/** - Custom Tracing: `TuiLogLayer` captures logs to ring buffer, prevents stdout garbling
 
-### Key Rust Patterns Used
+### Key Rust Patterns
 
 **Async/Await with Tokio:**
 - `#[tokio::main]` for async runtime
-- `tokio::spawn()` for concurrent background tasks
-- `tokio::select!` for multiplexing events in TUI loop
-- `tokio::sync::mpsc` for event channels
-- `tokio::sync::oneshot` for shutdown signal
+- `tokio::spawn()` for concurrent tasks
+- `tokio::select!` for multiplexing events
 
 **Shared State:**
-- `Arc<Mutex<>>` for shared mutable state across tasks (parser's pending_calls, log buffer)
-- `Arc::clone()` to create cheap references (just increments refcount)
-- `.lock().await` for async mutex access
+- `Arc<Mutex<>>` for shared mutable state across tasks
+- `Arc::clone()` for cheap references (refcount increment)
 
 **Error Handling:**
 - `anyhow::Result` for application-level errors
-- `thiserror` for custom error types (if added)
-- `.context()` for adding error context
-- `?` operator for error propagation
+- `.context()` for error context
+- `?` operator for propagation
 
-**Pattern Matching:**
-- Exhaustive `match` on `ProxyEvent` enum
-- `if let` for optional extraction
+---
 
-**Traits:**
-- Custom `Layer<S>` implementation for TuiLogLayer
-- Serde's `Serialize`/`Deserialize` traits
+## Key Systems
 
-## Configuration
+### Multi-User Session Tracking
 
-Environment variables:
+anthropic-spy supports tracking multiple Claude Code instances through a single proxy. Each user is identified by a SHA-256 hash of their API key (truncated to 16 chars). The actual API key is **never stored or logged**.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ANTHROPIC_SPY_BIND` | `127.0.0.1:8080` | Proxy bind address |
-| `ANTHROPIC_API_URL` | `https://api.anthropic.com` | Target API URL |
-| `ANTHROPIC_SPY_LOG_DIR` | `./logs` | Log file directory |
-| `ANTHROPIC_SPY_NO_TUI` | `false` | Disable TUI (headless mode) |
-| `ANTHROPIC_SPY_DEMO` | `false` | Enable demo mode (mock events) |
-| `RUST_LOG` | `anthropic_spy=info` | Logging level |
+**API Endpoints:**
+- `GET /api/stats` - Session statistics (supports `?user=<hash>`)
+- `GET /api/events` - Event buffer (supports `?user=<hash>`)
+- `GET /api/sessions` - All sessions
 
-## Event Correlation System
+**See [docs/sessions.md](docs/sessions.md) for detailed privacy model, lifecycle, and MCP integration.**
 
-**Critical Architecture Detail:**
+### Event Correlation System
 
 The parser maintains state to correlate tool calls with their results:
 
-1. **Tool Call (from API response):**
-   - Extract `tool_use` block with `id`, `name`, `input`
-   - Store in `pending_calls: HashMap<id, (name, timestamp)>`
-   - Emit `ProxyEvent::ToolCall`
-
-2. **Tool Result (from API request):**
-   - Extract `tool_result` block with `tool_use_id`, `content`
-   - Look up in `pending_calls` by `tool_use_id`
-   - Calculate duration: `now - stored_timestamp`
-   - Remove from `pending_calls`
-   - Emit `ProxyEvent::ToolResult`
+1. **Tool Call (from API response):** Extract `tool_use` block with `id`, store in `pending_calls` HashMap, emit event
+2. **Tool Result (from API request):** Extract `tool_result` with `tool_use_id`, look up in `pending_calls`, calculate duration, emit event
 
 This correlation allows measuring how long each tool call takes to execute.
 
-## TUI Input Handling
+### TUI Input Handling
 
-**State-Based Approach (No Debouncing):**
+State-based approach (no debouncing): tracks which keys are currently pressed via `HashSet<KeyCode>`. New presses trigger actions, repeated events while held are ignored.
 
-Instead of debouncing key events, the TUI tracks which keys are currently pressed:
-
-```rust
-// InputHandler maintains: pressed_keys: HashSet<KeyCode>
-
-fn handle_key_press(&mut self, key: KeyCode) -> bool {
-    if self.pressed_keys.contains(&key) {
-        return false;  // Already pressed, ignore
-    }
-    self.pressed_keys.insert(key);
-    true  // New press, trigger action
-}
-
-fn handle_key_release(&mut self, key: KeyCode) {
-    self.pressed_keys.remove(&key);
-}
-```
-
-This prevents double-triggering regardless of poll rate.
-
-## Logging Architecture
+### Logging Architecture
 
 **Two Modes:**
-
-1. **TUI Mode:** Custom `TuiLogLayer` captures logs to `LogBuffer` (ring buffer)
-   - Prevents stdout logs from garbling the TUI
-   - Logs displayed in dedicated panel (bottom 20% of screen)
-
+1. **TUI Mode:** Custom `TuiLogLayer` captures logs to ring buffer (prevents stdout garbling)
 2. **Headless Mode:** Standard `fmt::layer` outputs to stdout
-   - Normal terminal logging behavior
 
-**Implementation:**
-- `TuiLogLayer` implements `tracing_subscriber::Layer<S>`
-- `.on_event()` intercepts log events and stores in buffer
-- Buffer is `Arc<Mutex<VecDeque<LogEntry>>>` for thread-safe access
-- Max 1000 entries (oldest dropped when full)
+---
 
-## Code Style Guidelines
+## Session Log Analysis
 
-**Error Handling:**
-- Prefer `Result<T, E>` with `?` operator
-- Use `.context()` to add error context
-- Avoid `.unwrap()` except where proven safe (rare)
+Session logs are stored in JSON Lines format (`./logs/anthropic-spy-YYYYMMDD-HHMMSS-XXXX.jsonl`). Use `jq` for analysis.
 
-**Async Code:**
-- Use `async fn` for I/O operations
-- `.await` immediately, don't store futures
-- Spawn tasks with `tokio::spawn()` for concurrency
+**Quick queries:**
+```bash
+# Event type distribution
+jq -s 'group_by(.type) | map({type: .[0].type, count: length})' logs/<session>.jsonl
 
-**Comments:**
-- Explain WHY, not WHAT (code should be self-documenting)
-- Document Rust patterns (Arc, Mutex, async boundaries)
-- Include context that can't be inferred from code
+# Cache efficiency
+jq -s '[.[] | select(.type == "ApiUsage")] | {cache_ratio_pct: ((.total_cached / (.total_input + .total_cached)) * 100 | floor)}' logs/<session>.jsonl
 
-**Dependencies:**
+# Tool call distribution
+jq -s '[.[] | select(.type == "ToolCall") | .tool_name] | group_by(.) | map({tool: .[0], calls: length})' logs/<session>.jsonl
+```
+
+**See [docs/log-analysis.md](docs/log-analysis.md) for comprehensive queries, context recovery, and session profiling.**
+
+---
+
+## Development Guidelines
+
+**Code Style:**
+- Prefer `Result<T, E>` with `?` operator for error handling
+- Use `async fn` for I/O operations, `.await` immediately
+- Explain WHY in comments, not WHAT (code should be self-documenting)
 - Each dependency must be purposeful and well-maintained
-- Document why each crate is used (see Cargo.toml comments)
+
+**Commit Conventions:**
+Format: `<type>(<scope>): <description>`
+
+Types: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `perf`
+Scopes: `proxy`, `tui`, `parser`, `storage`, `events`, `deps`
+
+Examples:
+- `feat(tui): add mouse scroll support for event list`
+- `fix(proxy): implement SSE stream-through`
+
+---
+
+## Important Notes
+
+**Security:**
+- API keys are never logged in full - only SHA-256 hash prefix (16 chars)
+- See `proxy/mod.rs::extract_request_headers()`
+
+**Performance:**
+- Proxy overhead is minimal (~1-2ms per request)
+- TUI renders at 10 FPS (100ms intervals)
+- Event channels have buffer of 1000 (backpressure if full)
+
+**Compatibility:**
+- Tested with Claude Code on Windows (PowerShell)
+- Should work on macOS/Linux (standard ANTHROPIC_BASE_URL)
+
+---
 
 ## Current Development Phase
 
@@ -303,38 +253,27 @@ This prevents double-triggering regardless of poll rate.
 - Phase 5: Enhanced dashboard layout
 - Future: Filtering, search, analysis tools
 
-## Important Notes
+---
 
-**Security:**
-- API keys are never logged in full - only SHA-256 hash prefix (16 chars)
-- See `proxy/mod.rs::extract_request_headers()`
+## Documentation Index
 
-**Performance:**
-- Proxy overhead is minimal (~1-2ms per request)
-- TUI renders at 10 FPS (100ms intervals)
-- Event channels have buffer of 1000 (backpressure if full)
+**REQUIRED reading for architectural work:**
+- **[docs/architecture.md](docs/architecture.md)** ⚠️ **MANDATORY** before adding features or refactoring
+  - Architecture patterns, design principles, adding features, anti-patterns, Rust idioms
+  - Kernel/userland/user space layers, composition over inheritance
+  - When to use traits, how to avoid app.rs bloat
 
-**Compatibility:**
-- Tested with Claude Code on Windows (PowerShell)
-- Should work on macOS/Linux (standard ANTHROPIC_BASE_URL)
+**Reference documentation (read as needed):**
+- **[docs/commands.md](docs/commands.md)** - Build, run, code quality commands, configuration, commit conventions
+- **[docs/sessions.md](docs/sessions.md)** - Multi-user session tracking, privacy model, API endpoints, MCP integration
+- **[docs/log-analysis.md](docs/log-analysis.md)** - Session log queries, context recovery, debugging, profiling
 
-## Commit Conventions
+**Legacy docs (deprecated, pending removal):**
+- `.claude/DEVELOPMENT_PHILOSOPHY.md` - Rust concepts
+- `.claude/ARCHITECTURE.md` - Architecture deep dive
+- `.claude/PROJECT_STATUS.md` - Project status
+- `.claude/TONE_GUIDE.md` - Messaging guidelines
 
-This project uses [Conventional Commits](https://www.conventionalcommits.org/).
+---
 
-Format: `<type>(<scope>): <description>`
-
-Types: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `perf`
-Scopes: `proxy`, `tui`, `parser`, `storage`, `events`, `deps`
-
-Examples:
-- `feat(tui): add mouse scroll support for event list`
-- `fix(proxy): implement SSE stream-through`
-- `chore(deps): remove unused dependencies`
-
-## References
-
-- **Rust Concepts:** See `.claude/DEVELOPMENT_PHILOSOPHY.md`
-- **Architecture Deep Dive:** See `.claude/ARCHITECTURE.md`
-- **Project Status:** See `.claude/PROJECT_STATUS.md`
-- **Messaging Guidelines:** See `.claude/TONE_GUIDE.md`
+**Modular Development Note:** We aim to develop in a modular fashion, allowing flexibility and isolation of responsibility. We recognize that `app.rs` historically has "smelt" and we tend to regress. Long term, this is not maintainable for what this project has become.

@@ -41,6 +41,29 @@ Anthropic Spy sits between Claude Code and the Anthropic API as an HTTP proxy, p
 - Complete request/response bodies captured
 - Timing information for every operation
 
+### HTTP API (v0.1.0+)
+- **REST endpoints** for programmatic access to session statistics
+- Query token usage, costs, tool calls, and thinking blocks programmatically
+- Foundation for future MCP server integration and external dashboards
+- See [Extensions Vision](.claude/EXTENSIONS_VISION.md) for roadmap
+
+### Claude Code Plugin (`aspy`)
+
+The **aspy** plugin provides slash commands to query session statistics directly from within Claude Code:
+
+```bash
+# Public install (from GitHub)
+/plugin marketplace add omgpointless/anthropic-spy
+
+# Local development install (from cloned repo)
+/plugin marketplace add /path/to/anthropic-spy
+```
+
+After installation, restart Claude Code. Available commands:
+- `/aspy:stats` - Query real-time session metrics (tokens, costs, tool calls)
+
+The plugin also includes automatic `cargo fmt` hooks for Rust development.
+
 ### Architecture
 ```
 Claude Code ←─── SSE Stream ───→ Anthropic Spy ←─── SSE Stream ───→ Anthropic API

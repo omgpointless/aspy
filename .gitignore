@@ -20,4 +20,5 @@ Cargo.lock
 # OS
 Thumbs.db
 
-.claude/
+# Claude Code - see .claude/.gitignore for details
+# We commit stable docs/commands, ignore session-specific content

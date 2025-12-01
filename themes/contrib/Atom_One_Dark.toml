@@ -1,0 +1,59 @@
+# Atom One Dark theme for anthropic-spy
+# The classic Atom editor dark theme
+
+[meta]
+name = "Atom One Dark"
+version = 1
+author = "iTerm2-Color-Schemes"
+
+[ui]
+background = "#21252b"
+foreground = "#abb2bf"
+border = "#abb2bf"
+border_focused = "#e5c07b"
+title = "#56b6c2"
+status_bar = "#abb2bf"
+selection_bg = "#323844"
+selection_fg = "#abb2bf"
+
+[events]
+tool_call = "#56b6c2"
+tool_result_ok = "#98c379"
+tool_result_fail = "#e06c75"
+request = "#61afef"
+response = "#c678dd"
+error = "#e06c75"
+thinking = "#c678dd"
+api_usage = "#abb2bf"
+headers = "#abb2bf"
+rate_limit = "#abb2bf"
+context_compact = "#e5c07b"
+
+[context_bar]
+fill = "#98c379"
+warn = "#e5c07b"
+danger = "#e06c75"
+
+[panels]
+events = "#56b6c2"
+thinking = "#c678dd"
+logs = "#98c379"
+
+[vhs]
+black = "#21252b"
+red = "#e06c75"
+green = "#98c379"
+yellow = "#e5c07b"
+blue = "#61afef"
+purple = "#c678dd"
+cyan = "#56b6c2"
+white = "#abb2bf"
+bright_black = "#767676"
+bright_red = "#e06c75"
+bright_green = "#98c379"
+bright_yellow = "#e5c07b"
+bright_blue = "#61afef"
+bright_purple = "#c678dd"
+bright_cyan = "#56b6c2"
+bright_white = "#abb2bf"
+cursor = "#abb2bf"

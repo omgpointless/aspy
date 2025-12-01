@@ -819,16 +819,30 @@ impl LifestatsProcessor {
     }
 
     /// Migration from v1 to v2 (adds source column to sessions)
+    ///
+    /// # Idempotency
+    ///
+    /// This migration is idempotent - safe to run multiple times. This is critical
+    /// because if the process crashes between ALTER TABLE and UPDATE metadata,
+    /// the next startup would retry the migration. Without idempotency, SQLite
+    /// would error with "duplicate column name: source".
     fn migrate_v1_to_v2(conn: &Connection) -> anyhow::Result<()> {
-        conn.execute_batch(
-            r#"
-            -- v2: Add source column to sessions (if not exists)
-            ALTER TABLE sessions ADD COLUMN source TEXT;
-
-            -- Update version
-            UPDATE metadata SET value = '2' WHERE key = 'schema_version';
-            "#,
+        // Check if column already exists (idempotent)
+        let has_source: bool = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('sessions') WHERE name='source'",
+            [],
+            |row| row.get(0),
         )?;
+
+        if !has_source {
+            conn.execute("ALTER TABLE sessions ADD COLUMN source TEXT", [])?;
+        }
+
+        conn.execute(
+            "UPDATE metadata SET value = '2' WHERE key = 'schema_version'",
+            [],
+        )?;
+
         tracing::info!("Migrated lifestats database from v1 to v2");
         Ok(())
     }
@@ -1208,7 +1222,8 @@ pub enum SearchMode {
     /// Natural language search - basic operators allowed
     ///
     /// Allows: AND, OR, NOT (case-insensitive), word prefixes (*)
-    /// Escapes: Quotes, parentheses, column prefixes
+    /// Escapes: Quotes (doubled)
+    /// Removes: Parentheses, column prefixes (colon syntax)
     /// Best for: Power users who understand basic boolean logic.
     /// Example: "solarized AND NOT vomit" → solarized AND NOT vomit
     Natural,
@@ -1580,11 +1595,11 @@ impl LifestatsQuery {
 
 ## User Prompt Extraction
 
-**Location:** Parser module (request handling)
+**Location:** Proxy module (`src/proxy/mod.rs`) during request interception
 
 ### Extraction Flow
 
-User prompts are extracted from the **request body** (not the response) during the proxy's request interception. This happens in the parser module when a POST `/messages` request arrives.
+User prompts are extracted from the **request body** (not the response) during the proxy's request interception. This happens in the proxy module when a POST `/messages` request arrives.
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -1635,7 +1650,7 @@ User prompts are extracted from the **request body** (not the response) during t
 ### Implementation
 
 ```rust
-// In parser/mod.rs, when handling POST /messages requests
+// In proxy/mod.rs, when intercepting POST /messages requests
 
 fn extract_user_prompt(body: &serde_json::Value) -> Option<String> {
     // Get the messages array
@@ -1746,11 +1761,15 @@ r2d2_sqlite = "0.24"
 2. Dedicated writer thread with batch buffer
 3. Backpressure handling with metrics
 4. `/api/lifestats/health` endpoint
+5. **TODO**: Wire up `run_retention_cleanup()` - options:
+   - Periodic check in writer thread (e.g., every 24 hours)
+   - CLI command: `anthropic-spy --cleanup`
+   - HTTP endpoint: `POST /api/lifestats/cleanup`
 
 ### Phase 1c: LifestatsProcessor
 1. Connect to writer thread
 2. Event routing logic
-3. User prompt extraction in parser
+3. User prompt extraction in proxy (request interception)
 4. FTS index updates
 
 ### Phase 2: Query Interface

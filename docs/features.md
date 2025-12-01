@@ -4,17 +4,15 @@ A detailed look at what Aspy can do.
 
 ## Real-time Thinking Panel
 
-<!-- TODO: Add screenshot/gif -->
-
 Watch Claude's reasoning stream word-by-word as it thinks through problems. The dedicated thinking panel shows extended thinking blocks in real-time, not after the fact.
 
 - Streams incrementally as tokens arrive
 - Dedicated panel keeps thinking visible while events scroll
 - Renders markdown with inline code and code block highlighting
 
-## Stats Dashboard
+![Real-time thinking demonstrated](images/features/demo/reasoning-001.gif)
 
-<!-- TODO: Add screenshot -->
+## Stats Dashboard
 
 Session analytics at a glance with ratatui widgets:
 
@@ -24,6 +22,8 @@ Session analytics at a glance with ratatui widgets:
 - **Tool breakdown** — Call counts and average durations
 
 Press `s` to switch to Stats view, `Tab` to cycle through tabs.
+
+![Stats dashboard](images/features/stats-001.png)
 
 ## Context Recall
 
@@ -72,8 +72,6 @@ The result is generally quality context retention. For any gaps, use `aspy_searc
 
 ## Theme System
 
-<!-- TODO: Add screenshot of theme selector -->
-
 32 bundled themes plus custom TOML support:
 
 **Bundled themes include:**
@@ -82,6 +80,8 @@ The result is generally quality context retention. For any gaps, use `aspy_searc
 - Catppuccin (Mocha, Latte)
 - Tokyo Night, Synthwave '84
 - And many more...
+
+![Theme switcher](images/features/demo/themes-001.gif)
 
 **Custom themes:** Drop a `.toml` file in `~/.config/aspy/themes/` with your colors.
 

@@ -145,11 +145,7 @@ impl ToolsTabPanel {
             })
             .collect();
 
-        let max_value = top_durations
-            .iter()
-            .map(|(_, ms)| *ms)
-            .max()
-            .unwrap_or(1);
+        let max_value = top_durations.iter().map(|(_, ms)| *ms).max().unwrap_or(1);
 
         let chart = BarChart::default()
             .block(
@@ -186,10 +182,7 @@ impl ToolsTabPanel {
 
         let text = vec![Line::from(vec![
             Span::styled("Total Calls: ", Style::default().fg(theme.foreground)),
-            Span::styled(
-                format!("{}", total_calls),
-                Style::default().fg(Color::Cyan),
-            ),
+            Span::styled(format!("{}", total_calls), Style::default().fg(Color::Cyan)),
             Span::styled("  |  Failed: ", Style::default().fg(theme.foreground)),
             Span::styled(format!("{}", failed_calls), Style::default().fg(Color::Red)),
             Span::styled("  |  Success Rate: ", Style::default().fg(theme.foreground)),

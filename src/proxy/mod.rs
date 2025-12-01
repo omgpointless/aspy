@@ -169,7 +169,10 @@ pub async fn start_proxy(
         .route("/api/context", axum::routing::get(api::get_context))
         // Session management endpoints
         .route("/api/sessions", axum::routing::get(api::get_sessions))
-        .route("/api/session/start", axum::routing::post(api::session_start))
+        .route(
+            "/api/session/start",
+            axum::routing::post(api::session_start),
+        )
         .route("/api/session/end", axum::routing::post(api::session_end))
         // Log search endpoint
         .route("/api/search", axum::routing::post(api::search_logs))

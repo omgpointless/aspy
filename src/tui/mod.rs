@@ -267,13 +267,12 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
                 }
                 // Number keys 1-5 for direct tab selection in Stats view
                 KeyCode::Char('1'..='5') => {
-                    if app.handle_key_press(key)
-                        && app.view == View::Stats {
-                            // Map '1' -> tab 0, '2' -> tab 1, etc.
-                            if let KeyCode::Char(c) = key {
-                                app.stats_selected_tab = (c as usize) - ('1' as usize);
-                            }
+                    if app.handle_key_press(key) && app.view == View::Stats {
+                        // Map '1' -> tab 0, '2' -> tab 1, etc.
+                        if let KeyCode::Char(c) = key {
+                            app.stats_selected_tab = (c as usize) - ('1' as usize);
                         }
+                    }
                     return;
                 }
                 _ => {}

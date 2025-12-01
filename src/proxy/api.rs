@@ -188,7 +188,11 @@ pub async fn get_stats(
 
         let user_id = UserId::new(user_hash);
         if let Some(session) = sessions.get_user_session(&user_id) {
-            (session.stats.clone(), Some(session.started), session.events.len())
+            (
+                session.stats.clone(),
+                Some(session.started),
+                session.events.len(),
+            )
         } else {
             // User not found - return empty stats
             (Stats::default(), None, 0)
@@ -728,10 +732,14 @@ fn parse_time_range(time_range: &str) -> (Option<DateTime<Utc>>, Option<DateTime
     let now = Utc::now();
     // Start of today (midnight UTC)
     let today_start = now
-        .with_hour(0).unwrap()
-        .with_minute(0).unwrap()
-        .with_second(0).unwrap()
-        .with_nanosecond(0).unwrap();
+        .with_hour(0)
+        .unwrap()
+        .with_minute(0)
+        .unwrap()
+        .with_second(0)
+        .unwrap()
+        .with_nanosecond(0)
+        .unwrap();
 
     match time_range.to_lowercase().as_str() {
         "today" => (Some(today_start), None),
@@ -795,11 +803,7 @@ pub async fn search_logs(
     let mut sessions: Vec<_> = fs::read_dir(&state.log_dir)
         .map_err(|e| ApiError::Internal(format!("Failed to read log directory: {}", e)))?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "jsonl")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "jsonl"))
         .collect();
 
     // Sort by filename descending (newest first, since filenames include timestamp)
@@ -905,10 +909,7 @@ fn extract_matching_messages(
     keyword: &str,
     role_filter: Option<&str>,
 ) -> Option<Vec<(String, String)>> {
-    let messages = event
-        .get("body")?
-        .get("messages")?
-        .as_array()?;
+    let messages = event.get("body")?.get("messages")?.as_array()?;
 
     let mut matches = Vec::new();
 
@@ -983,16 +984,14 @@ fn truncate_around_match(text: &str, keyword: &str, max_len: usize) -> String {
 
             // Use .get() instead of indexing - returns None if out of bounds
             match text.get(safe_start..) {
-                Some(slice) => slice
-                    .find(' ')
-                    .map_or(safe_start, |i| safe_start + i + 1),
+                Some(slice) => slice.find(' ').map_or(safe_start, |i| safe_start + i + 1),
                 None => {
                     tracing::warn!(
                         "Failed to slice text at start position {} (text len: {})",
                         safe_start,
                         text.len()
                     );
-                    0  // Fallback to beginning
+                    0 // Fallback to beginning
                 }
             }
         } else {
@@ -1012,7 +1011,7 @@ fn truncate_around_match(text: &str, keyword: &str, max_len: usize) -> String {
                     safe_end,
                     text.len()
                 );
-                text.len()  // Fallback to full length
+                text.len() // Fallback to full length
             }
         };
 
@@ -1029,7 +1028,7 @@ fn truncate_around_match(text: &str, keyword: &str, max_len: usize) -> String {
                     end,
                     text.len()
                 );
-                text  // Fallback to full text
+                text // Fallback to full text
             }
         };
 

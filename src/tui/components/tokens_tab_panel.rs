@@ -146,25 +146,26 @@ impl TokensTabPanel {
         let cache_savings = stats.cache_savings();
         let cache_rate = stats.cache_hit_rate();
 
-        let text = vec![
-            Line::from(vec![
-                Span::styled("Total Cost: ", Style::default().fg(theme.foreground)),
-                Span::styled(
-                    format!("${:.4}", total_cost),
-                    Style::default().fg(Color::Green),
-                ),
-                Span::styled("  |  Cache Savings: ", Style::default().fg(theme.foreground)),
-                Span::styled(
-                    format!("${:.4}", cache_savings),
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::styled("  |  Cache Rate: ", Style::default().fg(theme.foreground)),
-                Span::styled(
-                    format!("{:.1}%", cache_rate),
-                    Style::default().fg(Color::Cyan),
-                ),
-            ]),
-        ];
+        let text = vec![Line::from(vec![
+            Span::styled("Total Cost: ", Style::default().fg(theme.foreground)),
+            Span::styled(
+                format!("${:.4}", total_cost),
+                Style::default().fg(Color::Green),
+            ),
+            Span::styled(
+                "  |  Cache Savings: ",
+                Style::default().fg(theme.foreground),
+            ),
+            Span::styled(
+                format!("${:.4}", cache_savings),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled("  |  Cache Rate: ", Style::default().fg(theme.foreground)),
+            Span::styled(
+                format!("{:.1}%", cache_rate),
+                Style::default().fg(Color::Cyan),
+            ),
+        ])];
 
         let summary = Paragraph::new(text).block(
             Block::default()

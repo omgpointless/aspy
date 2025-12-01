@@ -96,8 +96,7 @@ impl std::fmt::Display for SessionKey {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Current status of a session
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum SessionStatus {
     /// Session is actively receiving events
     #[default]
@@ -115,7 +114,6 @@ pub enum SessionStatus {
         ended: DateTime<Utc>,
     },
 }
-
 
 /// Reason a session ended
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -238,10 +236,9 @@ impl Session {
 
     /// Check if session should be marked idle
     pub fn check_idle(&mut self, timeout: Duration) {
-        if matches!(self.status, SessionStatus::Active)
-            && self.last_activity.elapsed() > timeout {
-                self.status = SessionStatus::Idle { since: Utc::now() };
-            }
+        if matches!(self.status, SessionStatus::Active) && self.last_activity.elapsed() > timeout {
+            self.status = SessionStatus::Idle { since: Utc::now() };
+        }
     }
 
     /// Mark session as ended
@@ -255,9 +252,8 @@ impl Session {
     /// Duration since session started
     pub fn duration(&self) -> Duration {
         self.last_activity.saturating_duration_since(
-            Instant::now() - Duration::from_secs(
-                (Utc::now() - self.started).num_seconds().max(0) as u64
-            )
+            Instant::now()
+                - Duration::from_secs((Utc::now() - self.started).num_seconds().max(0) as u64),
         )
     }
 
@@ -515,11 +511,19 @@ mod tests {
         let user = UserId::new("user1");
 
         // First session
-        manager.start_session(user.clone(), Some("session1".to_string()), SessionSource::Hook);
+        manager.start_session(
+            user.clone(),
+            Some("session1".to_string()),
+            SessionSource::Hook,
+        );
         assert_eq!(manager.active_count(), 1);
 
         // Second session supersedes first
-        manager.start_session(user.clone(), Some("session2".to_string()), SessionSource::Hook);
+        manager.start_session(
+            user.clone(),
+            Some("session2".to_string()),
+            SessionSource::Hook,
+        );
         assert_eq!(manager.active_count(), 1);
         assert_eq!(manager.history.len(), 1);
 

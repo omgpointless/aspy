@@ -37,11 +37,7 @@ impl SessionGaugesPanel {
             70..=89 => Color::Yellow,
             _ => Color::Red,
         };
-        let cache_label = format!(
-            "{:.1}% (${:.3} saved)",
-            cache_rate,
-            stats.cache_savings()
-        );
+        let cache_label = format!("{:.1}% (${:.3} saved)", cache_rate, stats.cache_savings());
         let cache_gauge = Gauge::default()
             .block(
                 Block::default()

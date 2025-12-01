@@ -50,12 +50,7 @@ impl TrendsTabPanel {
         Self::render_tool_calls_sparkline(frame, bottom_cols[1], stats, theme);
     }
 
-    fn render_input_tokens_sparkline(
-        frame: &mut Frame,
-        area: Rect,
-        stats: &Stats,
-        theme: &Theme,
-    ) {
+    fn render_input_tokens_sparkline(frame: &mut Frame, area: Rect, stats: &Stats, theme: &Theme) {
         if stats.token_history.is_empty() {
             Self::render_placeholder(frame, area, "No data yet", " Input Tokens ", theme);
             return;
@@ -91,12 +86,7 @@ impl TrendsTabPanel {
         frame.render_widget(sparkline, area);
     }
 
-    fn render_output_tokens_sparkline(
-        frame: &mut Frame,
-        area: Rect,
-        stats: &Stats,
-        theme: &Theme,
-    ) {
+    fn render_output_tokens_sparkline(frame: &mut Frame, area: Rect, stats: &Stats, theme: &Theme) {
         if stats.token_history.is_empty() {
             Self::render_placeholder(frame, area, "No data yet", " Output Tokens ", theme);
             return;

@@ -288,7 +288,8 @@ impl Stats {
         match event {
             ProxyEvent::ToolCall { .. } => {
                 // === Historical tracking for sparklines ===
-                self.tool_call_history.push_back(self.total_tool_calls as u32);
+                self.tool_call_history
+                    .push_back(self.total_tool_calls as u32);
                 if self.tool_call_history.len() > 30 {
                     self.tool_call_history.pop_front();
                 }
@@ -320,7 +321,8 @@ impl Stats {
             }
             ProxyEvent::Thinking { token_estimate, .. } => {
                 // === Historical tracking for sparklines ===
-                self.thinking_token_history.push_back(*token_estimate as u64);
+                self.thinking_token_history
+                    .push_back(*token_estimate as u64);
                 if self.thinking_token_history.len() > 30 {
                     self.thinking_token_history.pop_front();
                 }
@@ -335,11 +337,7 @@ impl Stats {
             ProxyEvent::Request { .. } => {
                 self.total_requests += 1;
             }
-            ProxyEvent::Response {
-                status,
-                ttfb,
-                ..
-            } => {
+            ProxyEvent::Response { status, ttfb, .. } => {
                 if *status >= 400 {
                     self.failed_requests += 1;
                 }
@@ -351,7 +349,8 @@ impl Stats {
 
                 // === Historical tracking for sparklines ===
                 // Track cumulative tool calls over time
-                self.tool_call_history.push_back(self.total_tool_calls as u32);
+                self.tool_call_history
+                    .push_back(self.total_tool_calls as u32);
                 if self.tool_call_history.len() > 30 {
                     self.tool_call_history.pop_front();
                 }
@@ -371,7 +370,10 @@ impl Stats {
                     .or_default()
                     .push(duration.as_millis() as u64);
                 // Track tool call counts
-                *self.tool_calls_by_name.entry(tool_name.clone()).or_default() += 1;
+                *self
+                    .tool_calls_by_name
+                    .entry(tool_name.clone())
+                    .or_default() += 1;
             }
             ProxyEvent::ApiUsage {
                 model,
@@ -420,13 +422,18 @@ impl Stats {
                     self.cache_rate_history.pop_front();
                 }
             }
-            ProxyEvent::Thinking { token_estimate, content, .. } => {
+            ProxyEvent::Thinking {
+                token_estimate,
+                content,
+                ..
+            } => {
                 self.thinking_blocks += 1;
                 self.thinking_tokens += *token_estimate as u64;
                 self.current_thinking = Some(content.clone());
 
                 // === Historical tracking for sparklines ===
-                self.thinking_token_history.push_back(*token_estimate as u64);
+                self.thinking_token_history
+                    .push_back(*token_estimate as u64);
                 if self.thinking_token_history.len() > 30 {
                     self.thinking_token_history.pop_front();
                 }

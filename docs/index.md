@@ -4,7 +4,7 @@ title: Home
 ---
 
 <div class="hero">
-  <h1 class="hero-title">anthropic-spy</h1>
+  <img src="{{ '/images/aspy-logo-v1-min-small-resized.jpg' | relative_url }}" alt="Aspy - the anthropic-spy mascot" class="hero-logo">
   <p class="hero-tagline">See what Claude sees. Observability proxy for Claude Code.</p>
   <div class="hero-links">
     <a href="https://github.com/omgpointless/anthropic-spy" class="primary">Get Started</a>

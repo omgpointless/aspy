@@ -17,6 +17,7 @@ mod palette;
 mod semantic;
 mod toml_format;
 
+pub use bundled::list_bundled_themes;
 pub use toml_format::TomlTheme;
 
 // Legacy exports (for migration period)

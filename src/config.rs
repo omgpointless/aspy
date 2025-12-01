@@ -266,7 +266,7 @@ impl Config {
         dirs::home_dir().map(|p| p.join(".config").join("anthropic-spy").join("config.toml"))
     }
 
-    /// Create config template if it doesn't exist
+    /// Create config file with defaults if it doesn't exist
     /// Called during startup to help users discover configuration options
     pub fn ensure_config_exists() {
         let Some(path) = Self::config_path() else {
@@ -285,68 +285,10 @@ impl Config {
             }
         }
 
-        let template = r#"# anthropic-spy configuration
-# Uncomment and modify options as needed
+        // Use Config::default().to_toml() as single source of truth
+        let template = Self::default().to_toml();
 
-# Theme: One Half Dark, Dracula, Nord, Gruvbox Dark, Monokai Pro, TokyoNight, etc.
-# See full list in the theme selector (press 't' in the TUI)
-# theme = "One Half Dark"
-
-# Use theme's background color (true) or terminal's default (false)
-# Set to false if you want the TUI to inherit your terminal's background
-# use_theme_background = true
-
-# Context window limit for the gauge (default: 147000)
-# context_limit = 147000
-
-# Proxy bind address (default: 127.0.0.1:8080)
-# bind_addr = "127.0.0.1:8080"
-
-# Log directory for session files (default: ./logs)
-# log_dir = "./logs"
-
-# Feature flags (default: all enabled)
-# [features]
-# storage = true         # Write events to JSONL files
-# thinking_panel = true  # Show Claude's extended thinking
-# stats = true           # Track token counts and costs
-
-# Augmentation (response modifications)
-# [augmentation]
-# context_warning = true              # Inject warnings when context fills up (default: true)
-# context_warning_thresholds = [60, 80, 85, 90, 95]  # Percentages to warn at
-
-# Logging configuration
-# [logging]
-# level = "info"  # trace, debug, info, warn, error (RUST_LOG env var overrides this)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Multi-Client Routing (optional)
-# ─────────────────────────────────────────────────────────────────────────────
-# Configure multiple clients with different provider backends.
-# Each client is accessed via URL prefix: http://localhost:8080/{client_id}/v1/messages
-#
-# Example: Set ANTHROPIC_BASE_URL=http://localhost:8080/dev-1 in Claude Code
-#
-# [clients.dev-1]
-# name = "Dev Laptop"
-# provider = "anthropic"
-# tags = ["dev", "primary"]
-#
-# [clients.ci]
-# name = "CI Runner"
-# provider = "foundry"
-#
-# [providers.anthropic]
-# base_url = "https://api.anthropic.com"
-# name = "Anthropic Direct"
-#
-# [providers.foundry]
-# base_url = "https://api.anthropic.com"  # or your Foundry endpoint
-# name = "Foundry"
-"#;
-
-        // Write template (ignore errors - config is optional)
+        // Write config (ignore errors - config is optional)
         let _ = std::fs::write(&path, template);
     }
 
@@ -370,7 +312,7 @@ impl Config {
         format!(
             r#"# anthropic-spy configuration
 
-# Theme: One Half Dark, Dracula, Nord, Gruvbox Dark, Monokai Pro, TokyoNight, etc.
+# Theme: Spy Dark, Spy Light, One Half Dark, Dracula, Nord, Gruvbox Dark, Monokai Pro, etc.
 # See full list in the theme selector (press 't' in the TUI)
 theme = "{theme}"
 
@@ -478,11 +420,11 @@ level = "{log_level}"
             .or(file.context_limit)
             .unwrap_or(147_000);
 
-        // Theme: env > file > default ("One Half Dark" for consistent RGB colors)
+        // Theme: env > file > default ("Spy Dark" is the project's signature theme)
         let theme = std::env::var("ANTHROPIC_SPY_THEME")
             .ok()
             .or(file.theme)
-            .unwrap_or_else(|| "One Half Dark".to_string());
+            .unwrap_or_else(|| "Spy Dark".to_string());
 
         // Use theme background: file > default (true = use theme's bg color)
         let use_theme_background = file.use_theme_background.unwrap_or(true);
@@ -557,7 +499,7 @@ impl Default for Config {
             enable_tui: true,
             demo_mode: false,
             context_limit: 147_000,
-            theme: "One Half Dark".to_string(),
+            theme: "Spy Dark".to_string(),
             use_theme_background: true,
             preset: "classic".to_string(),
             features: Features::default(),

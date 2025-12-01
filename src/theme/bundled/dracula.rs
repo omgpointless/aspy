@@ -1,0 +1,62 @@
+//! Dracula - Popular purple-accented dark theme
+
+pub const THEME: &str = r##"# Dracula theme for anthropic-spy
+# Popular purple-accented dark theme
+
+[meta]
+name = "Dracula"
+version = 1
+author = "iTerm2-Color-Schemes"
+
+[ui]
+background = "#282a36"
+foreground = "#f8f8f2"
+border = "#f8f8f2"
+border_focused = "#f1fa8c"
+title = "#8be9fd"
+status_bar = "#f8f8f2"
+selection_bg = "#44475a"
+selection_fg = "#f8f8f2"
+
+[events]
+tool_call = "#8be9fd"
+tool_result_ok = "#50fa7b"
+tool_result_fail = "#ff5555"
+request = "#bd93f9"
+response = "#ff79c6"
+error = "#ff5555"
+thinking = "#ff79c6"
+api_usage = "#f8f8f2"
+headers = "#f8f8f2"
+rate_limit = "#f8f8f2"
+context_compact = "#f1fa8c"
+
+[context_bar]
+fill = "#50fa7b"
+warn = "#f1fa8c"
+danger = "#ff5555"
+
+[panels]
+events = "#8be9fd"
+thinking = "#ff79c6"
+logs = "#50fa7b"
+
+[vhs]
+black = "#21222c"
+red = "#ff5555"
+green = "#50fa7b"
+yellow = "#f1fa8c"
+blue = "#bd93f9"
+purple = "#ff79c6"
+cyan = "#8be9fd"
+white = "#f8f8f2"
+bright_black = "#6272a4"
+bright_red = "#ff6e6e"
+bright_green = "#69ff94"
+bright_yellow = "#ffffa5"
+bright_blue = "#d6acff"
+bright_purple = "#ff92df"
+bright_cyan = "#a4ffff"
+bright_white = "#ffffff"
+cursor = "#f8f8f2"
+"##;

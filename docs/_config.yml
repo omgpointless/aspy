@@ -1,0 +1,48 @@
+# anthropic-spy blog
+# GitHub Pages configuration
+
+title: anthropic-spy
+description: >-
+  Observability proxy for Claude Code. See what Claude sees.
+  Workshop warmth with Observatory clarity.
+
+# Build settings
+markdown: kramdown
+highlighter: rouge
+
+# URL settings (update these for your repo)
+baseurl: "/anthropic-spy"
+url: "https://omgpointless.github.io"
+
+# Permalink structure for posts
+permalink: /blog/:year/:month/:title/
+
+# Collections
+collections:
+  posts:
+    output: true
+    permalink: /blog/:year/:month/:title/
+
+# Default front matter
+defaults:
+  - scope:
+      path: ""
+      type: "posts"
+    values:
+      layout: "post"
+  - scope:
+      path: ""
+    values:
+      layout: "default"
+
+# Exclude from build
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - README.md
+  - LICENSE
+
+# Plugins (GitHub Pages supported)
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag

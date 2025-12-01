@@ -1,11 +1,11 @@
 {
   "name": "aspy-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server for anthropic-spy - exposes session stats, events, and context to Claude Code",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "aspy-mcp": "./dist/index.js"
+    "aspy-mcp": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -37,6 +37,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/omgpointless/anthropic-spy"
+    "url": "git+https://github.com/omgpointless/anthropic-spy.git"
   }
 }

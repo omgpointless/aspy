@@ -1,0 +1,11 @@
+# Source files (dist is published)
+src/
+
+# Config files
+tsconfig.json
+.eslintrc*
+.prettierrc*
+
+# Dev files
+*.log
+.DS_Store

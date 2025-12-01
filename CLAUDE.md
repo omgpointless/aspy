@@ -255,43 +255,39 @@ Examples:
 
 ## Current Development Phase
 
-**v0.1.0-alpha: Core Observability Complete**
+**v0.2.0: Views & Statistics Complete**
 
-**Completed:**
-- Phase 3: Token tracking with cost estimation in status bar
-- Phase 4: SSE streaming support with delta accumulation
-- Thinking block capture and dedicated panel display
+**Completed Features:**
+- Views system with Events, Stats, and Settings views
+- Statistics view with 5-tab dashboard (Overview, Models, Tokens, Tools, Trends)
+- Theme system with 32 bundled themes and TOML custom theme support
+- CLI configuration tool (`anthropic-spy config --init/--show/--edit/--update/--reset`)
+- REST API endpoints for programmatic access
+- Multi-client routing with provider configuration
+- Context warning augmentation
 
-**Implementation Highlights:**
-- SSE parser accumulates `content_block_delta` events before emitting complete events
-- Thinking blocks displayed in dedicated right panel (35% width when active)
-- Tool call inputs properly captured from `input_json_delta` events
-- Demo mode for showcasing TUI without live API
-
-**Next Phases:**
-- Phase 5: Enhanced dashboard layout
-- Future: Filtering, search, analysis tools
+**See [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md) for full details.**
 
 ---
 
 ## Documentation Index
 
 **REQUIRED reading for architectural work:**
-- **[docs/architecture.md](docs/architecture.md)** ⚠️ **MANDATORY** before adding features or refactoring
-  - Architecture patterns, design principles, adding features, anti-patterns, Rust idioms
-  - Kernel/userland/user space layers, composition over inheritance
-  - When to use traits, how to avoid app.rs bloat
+- **[docs/architecture.md](docs/architecture.md)** - Architecture patterns, design principles, anti-patterns, Rust idioms
 
 **Reference documentation (read as needed):**
-- **[docs/commands.md](docs/commands.md)** - Build, run, code quality commands, configuration, commit conventions
-- **[docs/sessions.md](docs/sessions.md)** - Multi-client routing, provider configuration, API endpoints, MCP integration
-- **[docs/log-analysis.md](docs/log-analysis.md)** - Session log queries, context recovery, debugging, profiling
+- **[docs/commands.md](docs/commands.md)** - Build, run, code quality commands
+- **[docs/sessions.md](docs/sessions.md)** - Multi-client routing, provider configuration
+- **[docs/api-reference.md](docs/api-reference.md)** - REST API endpoints and responses
+- **[docs/themes.md](docs/themes.md)** - Theme system and custom themes
+- **[docs/cli-reference.md](docs/cli-reference.md)** - CLI configuration commands
+- **[docs/views.md](docs/views.md)** - TUI views and navigation
+- **[docs/log-analysis.md](docs/log-analysis.md)** - Session log queries, context recovery
 
-**Legacy docs (deprecated, pending removal):**
-- `.claude/DEVELOPMENT_PHILOSOPHY.md` - Rust concepts
-- `.claude/ARCHITECTURE.md` - Architecture deep dive
-- `.claude/PROJECT_STATUS.md` - Project status
-- `.claude/TONE_GUIDE.md` - Messaging guidelines
+**Context preservation (not primary docs):**
+- `.claude/PROJECT_STATUS.md` - Development phase notes
+- `.claude/EXTENSIONS_VISION.md` - Future extensibility roadmap
+- `.claude/impl-plans/` - RFC-style implementation plans
 
 ---
 

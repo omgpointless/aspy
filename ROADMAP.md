@@ -6,11 +6,21 @@ A living document capturing the vision and planned iterations for anthropic-spy.
 
 ---
 
-## Current: v0.2.0 - Views & Statistics
+## Released: v0.1.0 - Core Observability
 
-**Status:** Complete
+**Status:** Released 2025-12-01
 
-### Completed Features
+### Core Features
+
+**Observability:**
+- [x] Tool calls and results with timing
+- [x] Thinking blocks with dedicated panel
+- [x] Token usage and cost estimation
+- [x] Request/response headers
+- [x] Real-time TUI display
+- [x] SSE streaming with delta accumulation
+- [x] Demo mode for showcasing
+- [x] JSON Lines logging
 
 **Views System:**
 - [x] `View` enum: Events | Stats | Settings
@@ -46,27 +56,11 @@ A living document capturing the vision and planned iterations for anthropic-spy.
 
 ---
 
-## Released: v0.1.0 - Core Observability
-
-**Status:** Released 2025-11-26
-
-The spy observes and logs all Claude Code ↔ Anthropic API traffic:
-- [x] Tool calls and results with timing
-- [x] Thinking blocks with dedicated panel
-- [x] Token usage and cost estimation
-- [x] Request/response headers
-- [x] Real-time TUI display
-- [x] SSE streaming with delta accumulation
-- [x] Demo mode for showcasing
-- [x] JSON Lines logging
-
----
-
-## Next: v0.3.0 - Analysis & Polish
+## Next: v0.2.0 - Analysis & Polish
 
 **Theme:** "Observation + Analysis in Terminal"
 
-Building on 0.2.0, this release demonstrates that anthropic-spy isn't just a proxy - it's an analysis tool.
+Building on 0.1.0, this release demonstrates that anthropic-spy isn't just a proxy - it's an analysis tool.
 
 ### Potential Features
 - Session profile summary (on exit or dedicated view)
@@ -76,7 +70,7 @@ Building on 0.2.0, this release demonstrates that anthropic-spy isn't just a pro
 - Context warning augmentation improvements
 
 ### UX Iteration
-- Refine navigation based on 0.2.x usage
+- Refine navigation based on 0.1.x usage
 - Mouse support improvements
 - Keyboard shortcut help (`?`)
 - Improved modal dialogs

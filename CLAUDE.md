@@ -49,9 +49,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 │  │        - Build commands, demo mode, code quality tools
 │  └─ NO  → Continue
 │
-├─ Working on session tracking, API endpoints, or multi-user features?
+├─ Working on session tracking, API endpoints, or multi-client routing?
 │  ├─ YES → READ docs/sessions.md
-│  │        - Privacy model, session lifecycle, MCP integration
+│  │        - Client/provider configuration, routing, MCP integration
 │  └─ NO  → Continue
 │
 └─ Debugging, analyzing logs, or understanding event structure?
@@ -80,9 +80,9 @@ ANTHROPIC_SPY_DEMO=1 cargo run --release
 
 ### Testing with Claude Code
 ```bash
-# Point Claude Code at the proxy
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-claude-code
+# Point Claude Code at the proxy with your client ID
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8080/dev-1
+claude
 ```
 
 **See [docs/commands.md](docs/commands.md) for complete build, run, and development commands.**
@@ -145,16 +145,35 @@ TUI       Storage    (Future consumers)
 
 ## Key Systems
 
-### Multi-User Session Tracking
+### Multi-Client Routing
 
-anthropic-spy supports tracking multiple Claude Code instances through a single proxy. Each user is identified by a SHA-256 hash of their API key (truncated to 16 chars). The actual API key is **never stored or logged**.
+anthropic-spy supports tracking multiple Claude Code instances through a single proxy using **named client routing**. Clients are configured in `~/.config/anthropic-spy/config.toml` and connect via URL paths like `http://localhost:8080/<client-id>`.
+
+**Quick Setup:**
+```toml
+# ~/.config/anthropic-spy/config.toml
+[clients.dev-1]
+name = "Dev Laptop"
+provider = "anthropic"
+
+[providers.anthropic]
+base_url = "https://api.anthropic.com"
+```
+
+Then connect: `ANTHROPIC_BASE_URL=http://127.0.0.1:8080/dev-1 claude`
+
+**Key Benefits:**
+- Same API key can track multiple separate sessions
+- Route different clients to different providers (Anthropic, Foundry, Bedrock, etc.)
+- Explicit naming instead of cryptic hashes
 
 **API Endpoints:**
-- `GET /api/stats` - Session statistics (supports `?user=<hash>`)
-- `GET /api/events` - Event buffer (supports `?user=<hash>`)
+- `GET /api/stats` - Session statistics (supports `?client=<id>`)
+- `GET /api/events` - Event buffer (supports `?client=<id>`)
 - `GET /api/sessions` - All sessions
+- `GET /api/clients` - Configured clients
 
-**See [docs/sessions.md](docs/sessions.md) for detailed privacy model, lifecycle, and MCP integration.**
+**See [docs/sessions.md](docs/sessions.md) for detailed configuration, use cases, and MCP integration.**
 
 ### Event Correlation System
 
@@ -265,7 +284,7 @@ Examples:
 
 **Reference documentation (read as needed):**
 - **[docs/commands.md](docs/commands.md)** - Build, run, code quality commands, configuration, commit conventions
-- **[docs/sessions.md](docs/sessions.md)** - Multi-user session tracking, privacy model, API endpoints, MCP integration
+- **[docs/sessions.md](docs/sessions.md)** - Multi-client routing, provider configuration, API endpoints, MCP integration
 - **[docs/log-analysis.md](docs/log-analysis.md)** - Session log queries, context recovery, debugging, profiling
 
 **Legacy docs (deprecated, pending removal):**

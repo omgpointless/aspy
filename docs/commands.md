@@ -83,29 +83,58 @@ See `.claude-plugin/` for plugin manifest and `hooks/spy/` for hook implementati
 
 ## Testing with Claude Code
 
-After starting the proxy, configure Claude Code in a separate terminal:
+After starting the proxy, configure Claude Code in a separate terminal. Include your client ID in the URL path:
 
 ```powershell
 # Windows PowerShell
-$env:ANTHROPIC_BASE_URL="http://127.0.0.1:8080"
-claude-code
+$env:ANTHROPIC_BASE_URL="http://127.0.0.1:8080/dev-1"
+claude
 ```
 
 ```bash
 # macOS/Linux
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-claude-code
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8080/dev-1
+claude
 ```
+
+The client ID (`dev-1` in these examples) must be configured in `~/.config/anthropic-spy/config.toml`. See [sessions.md](sessions.md) for configuration details.
 
 ## Configuration
 
-Environment variables:
+### Config File
+
+The primary configuration is in `~/.config/anthropic-spy/config.toml`:
+
+```toml
+# Proxy settings
+bind_addr = "127.0.0.1:8080"
+log_dir = "./logs"
+
+# Define clients (each gets a unique URL path)
+[clients.dev-1]
+name = "Dev Laptop"
+provider = "anthropic"
+
+[clients.ci]
+name = "CI Runner"
+provider = "foundry"
+
+# Define providers (upstream API endpoints)
+[providers.anthropic]
+base_url = "https://api.anthropic.com"
+
+[providers.foundry]
+base_url = "https://your-instance.services.ai.azure.com/anthropic"
+```
+
+See [sessions.md](sessions.md) for full configuration reference.
+
+### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_SPY_BIND` | `127.0.0.1:8080` | Proxy bind address |
-| `ANTHROPIC_API_URL` | `https://api.anthropic.com` | Target API URL |
-| `ANTHROPIC_SPY_LOG_DIR` | `./logs` | Log file directory |
+| `ANTHROPIC_SPY_BIND` | `127.0.0.1:8080` | Proxy bind address (overrides config) |
+| `ANTHROPIC_SPY_LOG_DIR` | `./logs` | Log file directory (overrides config) |
 | `ANTHROPIC_SPY_NO_TUI` | `false` | Disable TUI (headless mode) |
 | `ANTHROPIC_SPY_DEMO` | `false` | Enable demo mode (mock events) |
 | `RUST_LOG` | `anthropic_spy=info` | Logging level |

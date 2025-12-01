@@ -65,6 +65,35 @@ Once you see the full picture—which tools get called, how tokens flow, when ca
 
 <p class="cta-subtle"><a href="{% post_url 2025-12-01-welcome-to-aspy %}">Read the story behind Aspy →</a></p>
 
+## Documentation
+
+<div class="docs-grid">
+  <div class="docs-section">
+    <h4>Getting Started</h4>
+    <ul>
+      <li><a href="{{ '/features' | relative_url }}">Features</a> — Everything Aspy can do</li>
+      <li><a href="{{ '/commands' | relative_url }}">Commands</a> — Build, run, and develop</li>
+      <li><a href="{{ '/sessions' | relative_url }}">Sessions</a> — Multi-client routing setup</li>
+    </ul>
+  </div>
+  <div class="docs-section">
+    <h4>Using the TUI</h4>
+    <ul>
+      <li><a href="{{ '/views' | relative_url }}">Views</a> — Events, Stats, and Settings</li>
+      <li><a href="{{ '/themes' | relative_url }}">Themes</a> — 32 built-in + custom TOML themes</li>
+      <li><a href="{{ '/cli-reference' | relative_url }}">CLI Reference</a> — Configuration commands</li>
+    </ul>
+  </div>
+  <div class="docs-section">
+    <h4>Advanced</h4>
+    <ul>
+      <li><a href="{{ '/api-reference' | relative_url }}">API Reference</a> — REST endpoints</li>
+      <li><a href="{{ '/log-analysis' | relative_url }}">Log Analysis</a> — jq queries and session recovery</li>
+      <li><a href="{{ '/architecture' | relative_url }}">Architecture</a> — Design patterns and internals</li>
+    </ul>
+  </div>
+</div>
+
 ## Latest Posts
 
 <ul class="post-list">

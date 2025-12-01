@@ -1,3 +1,8 @@
+---
+layout: default
+title: Commands
+---
+
 # Build & Development Commands
 
 ## Building

@@ -1,3 +1,8 @@
+---
+layout: default
+title: CLI Reference
+---
+
 # CLI Reference
 
 aspy provides a command-line interface for configuration management.

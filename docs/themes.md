@@ -1,3 +1,8 @@
+---
+layout: default
+title: Themes
+---
+
 # Theme System
 
 anthropic-spy includes a comprehensive theme system with 32 bundled themes and support for custom themes.

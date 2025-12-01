@@ -1,3 +1,8 @@
+---
+layout: default
+title: Log Analysis
+---
+
 # Analyzing Session Logs
 
 Session logs are stored in JSON Lines format (`./logs/anthropic-spy-YYYYMMDD-HHMMSS-XXXX.jsonl`). Each session creates a new file. Use `jq` to query and analyze them.

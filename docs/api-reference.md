@@ -1,3 +1,8 @@
+---
+layout: default
+title: API Reference
+---
+
 # REST API Reference
 
 anthropic-spy exposes a local HTTP API for programmatic access to session data. All endpoints return JSON and are designed for local consumption only.

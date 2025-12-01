@@ -1,3 +1,8 @@
+---
+layout: default
+title: Sessions
+---
+
 # Multi-Client Routing & Session Tracking
 
 Aspy supports tracking multiple Claude Code instances through a single proxy using **named client routing**. Each client is identified by a configured ID and routed to its designated provider backend.

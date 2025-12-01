@@ -1,3 +1,8 @@
+---
+layout: default
+title: Views
+---
+
 # TUI Views
 
 anthropic-spy's TUI consists of three main views that you can switch between using keyboard shortcuts.

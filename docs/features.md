@@ -1,3 +1,8 @@
+---
+layout: default
+title: Features
+---
+
 # Features
 
 A detailed look at what Aspy can do.

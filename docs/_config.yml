@@ -1,10 +1,10 @@
-# anthropic-spy blog
+# Aspy blog
 # GitHub Pages configuration
 
-title: anthropic-spy
+title: Aspy
 description: >-
-  Observability proxy for Claude Code. See what Claude sees.
-  Workshop warmth with Observatory clarity.
+  Stop guessing. Start seeing.
+  Real-time observability proxy for Claude Code.
 
 # Build settings
 markdown: kramdown

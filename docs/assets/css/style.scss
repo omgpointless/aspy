@@ -123,6 +123,46 @@ small, .text-muted {
   color: $muted;
 }
 
+// Text selection
+::selection {
+  background-color: $selection-bg;
+  color: $selection-fg;
+}
+
+// Lists
+ul, ol {
+  padding-left: 1.5rem;
+  margin-bottom: 1.25rem;
+
+  li {
+    margin-bottom: 0.25rem;
+  }
+
+  li::marker {
+    color: $tool-call;
+  }
+}
+
+// Keyboard keys
+kbd {
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 0.8em;
+  background-color: $background-lighter;
+  color: $foreground;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  border: 1px solid $border;
+  box-shadow: 0 1px 0 $border;
+}
+
+// Highlighted text
+mark {
+  background-color: $selection-bg;
+  color: $selection-fg;
+  padding: 0.1em 0.2em;
+  border-radius: 2px;
+}
+
 blockquote {
   border-left: 4px solid $border-focused;
   margin: 1.5rem 0;
@@ -130,6 +170,10 @@ blockquote {
   background-color: $background-light;
   color: $muted;
   font-style: italic;
+
+  p:first-child {
+    margin-top: 0;
+  }
 
   p:last-child {
     margin-bottom: 0;
@@ -177,14 +221,44 @@ pre {
   background-color: $background-light;
   border-radius: 8px;
 
-  .c, .cm, .c1, .cs { color: $muted; font-style: italic; } // Comments
-  .k, .kd, .kn, .kp, .kr, .kt { color: $thinking; } // Keywords
-  .s, .s1, .s2, .sb, .sc, .sd, .se, .sh, .si, .sx, .sr { color: $logs; } // Strings
-  .n, .na, .nb, .nc, .nd, .ne, .nf, .ni, .nl, .nn, .no, .nt, .nv { color: $foreground; } // Names
+  .c, .cm, .c1, .cs, .cp { color: $muted; font-style: italic; } // Comments & preprocessor
+  .k, .kd, .kn, .kp, .kr, .kt, .kc { color: $thinking; } // Keywords
+  .s, .s1, .s2, .sb, .sc, .sd, .se, .sh, .si, .sx, .sr, .ss { color: $logs; } // Strings
+  .nc, .nd, .ne { color: $request; } // Class names, decorators, exceptions
+  .nf, .fm { color: $tool-call; } // Functions
+  .n, .na, .nb, .ni, .nl, .nn, .no, .nt, .nv, .bp, .vc, .vg, .vi { color: $foreground; } // Names & variables
   .o, .ow { color: $muted; } // Operators
-  .m, .mf, .mh, .mi, .mo { color: $code-inline; } // Numbers
+  .m, .mf, .mh, .mi, .mo, .il { color: $code-inline; } // Numbers
   .p { color: $foreground; } // Punctuation
   .err { color: $error; } // Errors
+  .gd { color: $danger; } // Diff deleted
+  .gi { color: $tool-result-ok; } // Diff inserted
+  .gh, .gu { color: $request; } // Diff headers
+}
+
+// -----------------------------------------------------------------------------
+// Tables
+// -----------------------------------------------------------------------------
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.75rem;
+  border-bottom: 1px solid $border;
+}
+
+th {
+  color: $title;
+  font-weight: 600;
+}
+
+tr:hover {
+  background-color: $background-light;
 }
 
 // -----------------------------------------------------------------------------
@@ -333,6 +407,55 @@ pre {
 .post-list-excerpt {
   color: $muted;
   font-size: 0.95rem;
+}
+
+// -----------------------------------------------------------------------------
+// Callouts
+// -----------------------------------------------------------------------------
+
+.callout {
+  border-left: 4px solid $border;
+  background-color: $background-light;
+  padding: 1rem;
+  margin: 1.5rem 0;
+  border-radius: 0 8px 8px 0;
+
+  p:last-child {
+    margin-bottom: 0;
+  }
+
+  &.note {
+    border-left-color: $request;
+  }
+
+  &.tip {
+    border-left-color: $tool-result-ok;
+  }
+
+  &.warning {
+    border-left-color: $warn;
+  }
+
+  &.danger {
+    border-left-color: $danger;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Image Captions
+// -----------------------------------------------------------------------------
+
+.post-content, .page-content {
+  img + em,
+  p > img + br + em,
+  p:has(> img) + p > em:only-child {
+    display: block;
+    text-align: center;
+    color: $muted;
+    font-size: 0.875rem;
+    margin-top: -1rem;
+    margin-bottom: 1.5rem;
+  }
 }
 
 // -----------------------------------------------------------------------------

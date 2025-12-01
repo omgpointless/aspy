@@ -14,12 +14,17 @@ The `.claude/` directory serves dual purposes:
 These files are tracked in version control as they benefit all contributors:
 
 ### Core Documentation
-- `CLAUDE.md` - Main project instructions and architectural principles
 - `EXTENSIONS_VISION.md` - Future extensibility roadmap (HTTP API, MCP, hooks)
-- `ARCHITECTURE.md` - Deep dive into system design
-- `DEVELOPMENT_PHILOSOPHY.md` - Rust patterns and conventions
 - `PROJECT_STATUS.md` - Current development phase and roadmap
-- `TONE_GUIDE.md` - Communication and messaging guidelines
+- `impl-plans/` - RFC-style implementation plans for upcoming features
+
+### Deprecated (Moved to docs/)
+The following have been superseded by documentation in `docs/`:
+- `ARCHITECTURE.md` - **Deprecated**: See `docs/architecture.md`
+- `DEVELOPMENT_PHILOSOPHY.md` - **Deprecated**: See `docs/architecture.md` and `AGENTS.md`
+- `TONE_GUIDE.md` - **Deprecated**: See `AGENTS.md`
+
+**Note:** The root `CLAUDE.md` is the primary project documentation. Use `docs/` for detailed reference docs.
 
 ### Claude Code Plugin
 - `.claude-plugin/` - Optional development tooling (committed)

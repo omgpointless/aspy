@@ -6,47 +6,63 @@ A living document capturing the vision and planned iterations for anthropic-spy.
 
 ---
 
-## Current: v0.1.0 - Core Observability
+## Current: v0.2.0 - Views & Statistics
 
-**Status:** Polishing, near release
+**Status:** Complete
+
+### Completed Features
+
+**Views System:**
+- [x] `View` enum: Events | Stats | Settings
+- [x] Keyboard navigation between views (1, 2, s)
+- [x] Each view has dedicated render function
+- [x] Settings view with theme/preset selection
+
+**Statistics View (5 tabs):**
+- [x] Overview tab: Session gauges + summary
+- [x] Models tab: API call distribution with BarChart and sparklines
+- [x] Tokens tab: Token usage breakdown with grouped bars
+- [x] Tools tab: Tool call frequency and duration analysis
+- [x] Trends tab: Sparklines grid showing trends over time
+
+**Theme System:**
+- [x] 32 bundled themes (Spy Dark, Dracula, Nord, Catppuccin, etc.)
+- [x] TOML-based custom theme support
+- [x] Theme picker in Settings view
+- [x] Runtime theme switching
+
+**Configuration:**
+- [x] Config file support (`~/.config/anthropic-spy/config.toml`)
+- [x] CLI config management (`--init`, `--show`, `--edit`, `--update`, `--reset`)
+- [x] Multi-client routing with named clients
+- [x] Provider backend configuration
+
+**REST API:**
+- [x] `/api/stats` - Session statistics
+- [x] `/api/events` - Event buffer with filtering
+- [x] `/api/context` - Context window status
+- [x] `/api/sessions` - Active session list
+- [x] `/api/search` - Search past session logs
+
+---
+
+## Released: v0.1.0 - Core Observability
+
+**Status:** Released 2025-11-26
 
 The spy observes and logs all Claude Code ↔ Anthropic API traffic:
-- Tool calls and results with timing
-- Thinking blocks
-- Token usage and cost estimation
-- Request/response headers
-- Real-time TUI display
-
-**Remaining for 0.1.0:**
-- [ ] Session-based log rotation (not daily)
-- [ ] UI polish (in progress in separate session)
-
----
-
-## Next: v0.2.0 - Views & Statistics
-
-**Theme:** Multiple views, initial analytics
-
-### Views System
-- `View` enum: Events | Statistics | Thinking | Logs
-- Tab bar in header for navigation
-- Each view has dedicated render function
-- Foundation for future views (Achievements, Settings, etc.)
-
-### Statistics View
-- Model distribution chart (Haiku vs Opus vs Sonnet)
-- Token breakdown (input / output / cached)
-- Cache efficiency ratio (expect 95-99%)
-- Session cost tracking
-- Tool usage distribution
-
-### Infrastructure
-- Config file support (`~/.config/anthropic-spy/config.toml`)
-- Structured stats data for charting
+- [x] Tool calls and results with timing
+- [x] Thinking blocks with dedicated panel
+- [x] Token usage and cost estimation
+- [x] Request/response headers
+- [x] Real-time TUI display
+- [x] SSE streaming with delta accumulation
+- [x] Demo mode for showcasing
+- [x] JSON Lines logging
 
 ---
 
-## Future: v0.3.0 - Analysis Milestone
+## Next: v0.3.0 - Analysis & Polish
 
 **Theme:** "Observation + Analysis in Terminal"
 
@@ -56,12 +72,14 @@ Building on 0.2.0, this release demonstrates that anthropic-spy isn't just a pro
 - Session profile summary (on exit or dedicated view)
 - CLI query mode (`anthropic-spy analyze <session>`)
 - More chart types (token timeline, tool sequence)
-- Export capabilities
+- Export capabilities (CSV, JSON reports)
+- Context warning augmentation improvements
 
 ### UX Iteration
 - Refine navigation based on 0.2.x usage
 - Mouse support improvements
 - Keyboard shortcut help (`?`)
+- Improved modal dialogs
 
 ---
 

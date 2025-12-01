@@ -175,27 +175,36 @@ Session ends → Archived with full statistics
 
 ## API Endpoints
 
-All endpoints support optional `?client=<id>` filtering:
+All endpoints support optional `?user=<api_key_hash>` filtering:
 
-| Endpoint | Without filter | With `?client=<id>` |
+| Endpoint | Without filter | With `?user=<hash>` |
 |----------|----------------|---------------------|
-| `GET /api/stats` | Global aggregate stats | Client's session stats |
-| `GET /api/events` | Global event buffer | Client's session events |
-| `GET /api/context` | Global context status | Client's context status |
+| `GET /api/stats` | Global aggregate stats | User's session stats |
+| `GET /api/events` | Global event buffer | User's session events |
+| `GET /api/context` | Global context status | User's context status |
 | `GET /api/sessions` | All sessions | All sessions (no filter) |
-| `GET /api/clients` | Configured clients | N/A |
+| `POST /api/session/start` | Register new session | N/A |
+| `POST /api/session/end` | End session | N/A |
+| `POST /api/search` | Search session logs | N/A |
 
 **Examples:**
 ```bash
-# See all configured clients
-curl http://127.0.0.1:8080/api/clients
+# Get global stats
+curl http://127.0.0.1:8080/api/stats
 
-# Get stats for a specific client
-curl "http://127.0.0.1:8080/api/stats?client=dev-1"
+# Get stats for a specific user
+curl "http://127.0.0.1:8080/api/stats?user=b0acf41e12907b7b"
 
 # See all active sessions
 curl http://127.0.0.1:8080/api/sessions
+
+# Search past conversations
+curl -X POST http://127.0.0.1:8080/api/search \
+  -H "Content-Type: application/json" \
+  -d '{"keyword": "refactor", "time_range": "today"}'
 ```
+
+**See [docs/api-reference.md](api-reference.md) for complete API documentation.**
 
 ## MCP Integration
 

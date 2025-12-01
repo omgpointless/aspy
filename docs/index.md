@@ -4,7 +4,7 @@ title: Home
 ---
 
 <div class="hero">
-  <img src="{{ '/images/aspy-logo-v1-min-small-resized.jpg' | relative_url }}" alt="Aspy logo" class="hero-logo">
+  <img src="{{ '/images/aspy-header-logo-v3.webp' | relative_url }}" alt="Aspy logo" class="hero-logo">
   <p class="hero-tagline">Stop guessing. Start seeing.</p>
   <p class="hero-subtitle">Real-time observability proxy for Claude Code</p>
   <div class="hero-links">

@@ -6,7 +6,7 @@ tags: [story]
 ---
 
 One of Aspy's features is the Thinking panel. When Claude uses extended thinking, you see it—the internal reasoning, the weighing of options, the moments of uncertainty. It's fascinating to watch, like reading someone's inner monologue in real-time.
-we 
+
 What I didn't expect was Claude *forgetting* I could see it.
 
 ## The Setup

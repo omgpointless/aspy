@@ -1,0 +1,66 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="40"
+  height="28"
+  viewBox="0 0 70 26"
+  aria-hidden="true"
+>
+  <defs>
+    <!-- Main body gradient - Spy Dark warm tones -->
+    <linearGradient id="asp-tail-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#e8b87a" />
+      <stop offset="45%" stop-color="#c9a66b" />
+      <stop offset="100%" stop-color="#d4a54a" />
+    </linearGradient>
+
+    <!-- Dorsal stripe - muted -->
+    <linearGradient id="asp-tail-dorsal" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#8a8279" />
+      <stop offset="100%" stop-color="#6b5f54" />
+    </linearGradient>
+  </defs>
+
+  <!-- Outer outline -->
+  <path
+    d="
+      M 4 20
+      C 14 9, 22 23, 32 14
+      S 50 10, 60 15
+      C 64 17, 67 15, 66 11
+    "
+    fill="none"
+    stroke="#3a3b40"
+    stroke-width="6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Inner body -->
+  <path
+    d="
+      M 4 20
+      C 14 9, 22 23, 32 14
+      S 50 10, 60 15
+      C 64 17, 67 15, 66 11
+    "
+    fill="none"
+    stroke="url(#asp-tail-gradient)"
+    stroke-width="4"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Dorsal stripe -->
+  <path
+    d="
+      M 8 19
+      C 16 11, 23 22, 32 15
+      S 49 11, 59 15
+      C 62 16, 64 15, 65 12.5
+    "
+    fill="none"
+    stroke="url(#asp-tail-dorsal)"
+    stroke-width="1.4"
+    stroke-linecap="round"
+  />
+</svg>

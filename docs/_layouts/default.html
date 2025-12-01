@@ -25,7 +25,10 @@
 <body>
   <header class="site-header">
     <div class="container header-container">
-      <a href="{{ '/' | relative_url }}" class="site-title">Aspy</a>
+      <a href="{{ '/' | relative_url }}" class="site-title">
+        Aspy
+        <img src="{{ '/images/snake-icon.svg' | relative_url }}" alt="" class="site-logo">
+      </a>
       <nav class="site-nav">
         <a href="{{ '/' | relative_url }}" {% if page.url == '/' %}class="active"{% endif %}>Home</a>
         <a href="{{ '/features' | relative_url }}" {% if page.url == '/features' or page.url == '/features/' %}class="active"{% endif %}>Features</a>
@@ -45,11 +48,15 @@
   <footer class="site-footer">
     <div class="container">
       <p>
-        {{ site.title }} &mdash; Workshop warmth with Observatory clarity.
+        {{ site.title }} &mdash; Stop guessing. Start seeing.
         <br>
         <a href="https://github.com/omgpointless/anthropic-spy">View on GitHub</a>
       </p>
     </div>
   </footer>
+
+  <!-- Image zoom -->
+  <script src="https://cdn.jsdelivr.net/npm/medium-zoom@1.1.0/dist/medium-zoom.min.js"></script>
+  <script>mediumZoom('.page-content img:not(.hero-logo)', { background: 'rgba(40, 41, 45, 0.92)' });</script>
 </body>
 </html>

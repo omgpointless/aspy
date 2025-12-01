@@ -290,6 +290,9 @@ tr:hover {
 }
 
 .site-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   font-family: $font-title;
   font-size: 1.5rem;
   font-weight: 700;
@@ -301,6 +304,11 @@ tr:hover {
     color: $link-hover;
     text-decoration: none;
   }
+}
+
+.site-logo {
+  height: 28px;
+  width: auto;
 }
 
 .site-nav {
@@ -488,13 +496,12 @@ tr:hover {
 .hero {
   text-align: center;
   padding: 3rem 0;
-  border-bottom: 1px solid $border;
   margin-bottom: 2rem;
 }
 
 .hero-logo {
   max-width: 100%;
-  width: 500px;
+  width: 720px;
   height: auto;
   margin-bottom: 1rem;
   border-radius: 12px;

@@ -20,5 +20,9 @@ Cargo.lock
 # OS
 Thumbs.db
 
+docs/.jekyll-cache/
+.jekyll-cache/
+docs/_site/
+
 # Claude Code - see .claude/.gitignore for details
 # We commit stable docs/commands, ignore session-specific content

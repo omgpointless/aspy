@@ -427,6 +427,12 @@ fn event_color_style(event: &ProxyEvent, theme: &Theme) -> Style {
         ProxyEvent::ThinkingStarted { .. } => Style::default()
             .fg(theme.thinking)
             .add_modifier(Modifier::ITALIC),
+        ProxyEvent::UserPrompt { .. } => Style::default()
+            .fg(theme.request)
+            .add_modifier(Modifier::BOLD),
+        ProxyEvent::AssistantResponse { .. } => Style::default()
+            .fg(theme.response)
+            .add_modifier(Modifier::BOLD),
     }
 }
 

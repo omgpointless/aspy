@@ -108,5 +108,42 @@
       );
     }, { margin: '-20px' });
   </script>
+
+  <!-- Mermaid diagrams -->
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      themeVariables: {
+        primaryColor: '#6366f1',
+        primaryTextColor: '#e5e7eb',
+        primaryBorderColor: '#4f46e5',
+        lineColor: '#818cf8',
+        secondaryColor: '#8b5cf6',
+        tertiaryColor: '#a78bfa',
+        background: '#18181b',
+        mainBkg: '#27272a',
+        secondBkg: '#3f3f46',
+        textColor: '#e5e7eb',
+        border1: '#52525b',
+        border2: '#71717a'
+      }
+    });
+
+    // Convert kramdown's <pre><code class="language-mermaid"> to renderable divs
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('pre code.language-mermaid').forEach((block) => {
+        const pre = block.parentElement;
+        const mermaidDiv = document.createElement('div');
+        mermaidDiv.className = 'mermaid';
+        mermaidDiv.textContent = block.textContent;
+        pre.replaceWith(mermaidDiv);
+      });
+
+      mermaid.run();
+    });
+  </script>
 </body>
 </html>

@@ -16,6 +16,7 @@ mod demo;
 mod events;
 mod logging;
 mod parser;
+mod pipeline;
 mod pricing;
 mod proxy;
 mod startup;
@@ -249,26 +250,86 @@ async fn main() -> Result<()> {
     // This runs in the background, handling HTTP requests
     let proxy_config = config.clone();
     let proxy_streaming_thinking = streaming_thinking.clone();
+
+    // Pipeline reference for shutdown (only used in non-demo mode)
+    let pipeline_for_shutdown: Option<std::sync::Arc<pipeline::EventPipeline>>;
+
     let proxy_handle = if config.demo_mode {
         // Demo mode: generate mock events instead of running real proxy
         // Drop storage sender since demo doesn't use it
         drop(event_tx_storage);
         tracing::info!("Running in DEMO MODE - generating mock events");
+        pipeline_for_shutdown = None;
         tokio::spawn(async move {
             demo::run_demo(event_tx_tui, shutdown_rx, proxy_streaming_thinking).await;
         })
     } else {
+        // Initialize event processing pipeline and query interface
+        let (pipeline, lifestats_query) = if config.lifestats.enabled {
+            use pipeline::{lifestats::LifestatsProcessor, lifestats_query::LifestatsQuery, EventPipeline};
+
+            let mut pipeline = EventPipeline::new();
+
+            // Create lifestats config from main config
+            let lifestats_config = pipeline::lifestats::LifestatsConfig {
+                db_path: config.lifestats.db_path.clone(),
+                store_thinking: config.lifestats.store_thinking,
+                store_tool_io: config.lifestats.store_tool_io,
+                max_thinking_size: config.lifestats.max_thinking_size,
+                retention_days: config.lifestats.retention_days,
+                channel_buffer: config.lifestats.channel_buffer,
+                batch_size: config.lifestats.batch_size,
+                flush_interval: std::time::Duration::from_secs(
+                    config.lifestats.flush_interval_secs,
+                ),
+            };
+
+            match LifestatsProcessor::new(lifestats_config) {
+                Ok(processor) => {
+                    pipeline.register(processor);
+
+                    // Initialize query interface (read-only connection pool)
+                    match LifestatsQuery::new(&config.lifestats.db_path) {
+                        Ok(query) => {
+                            tracing::info!(
+                                "Lifestats initialized (SQLite: {})",
+                                config.lifestats.db_path.display()
+                            );
+                            (Some(std::sync::Arc::new(pipeline)), Some(std::sync::Arc::new(query)))
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to initialize lifestats query interface: {}", e);
+                            (Some(std::sync::Arc::new(pipeline)), None)
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to initialize lifestats processor: {}", e);
+                    (None, None)
+                }
+            }
+        } else {
+            tracing::debug!("Lifestats processor disabled in config");
+            (None, None)
+        };
+
         // Bundle channels and shared state for the proxy
         let channels = proxy::EventChannels {
             tui: event_tx_tui,
             storage: event_tx_storage,
         };
+
+        // Clone pipeline Arc before moving into shared (needed for shutdown)
+        pipeline_for_shutdown = pipeline.clone();
+
         let shared = proxy::SharedState {
             stats: shared_stats.clone(),
             events: shared_events.clone(),
             sessions: shared_sessions.clone(),
             context: context_state.clone(),
             streaming_thinking: proxy_streaming_thinking,
+            pipeline,
+            lifestats_query,
         };
         tokio::spawn(async move {
             proxy::start_proxy(proxy_config, channels, shutdown_rx, shared)
@@ -300,6 +361,18 @@ async fn main() -> Result<()> {
     }
 
     tracing::info!("Shutting down...");
+
+    // Shutdown event pipeline explicitly (ensures batch flush before exit)
+    // This must happen BEFORE signaling the proxy, so events in flight can be processed
+    if let Some(pipeline) = pipeline_for_shutdown {
+        tracing::debug!("Shutting down event pipeline...");
+        if let Err(e) = pipeline.shutdown() {
+            tracing::error!("Pipeline shutdown error: {}", e);
+            // Continue shutdown despite pipeline error - other components need cleanup
+        } else {
+            tracing::debug!("Event pipeline shutdown complete");
+        }
+    }
 
     // Signal the proxy to shut down gracefully
     // If the send fails, the proxy has already shut down (which is fine)

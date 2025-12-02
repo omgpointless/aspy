@@ -232,6 +232,22 @@ pub(crate) fn format_event_line(event: &ProxyEvent) -> String {
         ProxyEvent::ThinkingStarted { timestamp } => {
             format!("[{}] 💭 Thinking...", timestamp.format("%H:%M:%S"))
         }
+        ProxyEvent::UserPrompt { timestamp, content } => {
+            let preview = if content.len() > 60 {
+                format!("{}...", &content[..60])
+            } else {
+                content.clone()
+            };
+            format!("[{}] 👤 User: {}", timestamp.format("%H:%M:%S"), preview)
+        }
+        ProxyEvent::AssistantResponse { timestamp, content } => {
+            let preview = if content.len() > 60 {
+                format!("{}...", &content[..60])
+            } else {
+                content.clone()
+            };
+            format!("[{}] 🤖 Assistant: {}", timestamp.format("%H:%M:%S"), preview)
+        }
     }
 }
 
@@ -481,6 +497,20 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
             format!(
                 "💭 Thinking Started\n\nTimestamp: {}\n\nClaude is processing your request...",
                 timestamp.to_rfc3339()
+            )
+        }
+        ProxyEvent::UserPrompt { timestamp, content } => {
+            format!(
+                "👤 User Prompt\n\nTimestamp: {}\n\nContent:\n{}",
+                timestamp.to_rfc3339(),
+                content
+            )
+        }
+        ProxyEvent::AssistantResponse { timestamp, content } => {
+            format!(
+                "🤖 Assistant Response\n\nTimestamp: {}\n\nContent:\n{}",
+                timestamp.to_rfc3339(),
+                content
             )
         }
     }

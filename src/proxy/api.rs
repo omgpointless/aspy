@@ -91,6 +91,8 @@ fn event_type_name(event: &ProxyEvent) -> &'static str {
         ProxyEvent::Thinking { .. } => "Thinking",
         ProxyEvent::ContextCompact { .. } => "ContextCompact",
         ProxyEvent::ThinkingStarted { .. } => "ThinkingStarted",
+        ProxyEvent::UserPrompt { .. } => "UserPrompt",
+        ProxyEvent::AssistantResponse { .. } => "AssistantResponse",
     }
 }
 
@@ -1064,4 +1066,256 @@ fn truncate_around_match(text: &str, keyword: &str, max_len: usize) -> String {
             }
         }
     }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Lifestats Endpoints
+// ═════════════════════════════════════════════════════════════════════════════
+
+use crate::pipeline::lifestats_query::{SearchMode, ThinkingMatch, PromptMatch, ResponseMatch, ContextMatch, LifetimeStats};
+
+/// Response for lifestats health endpoint
+#[derive(Debug, Serialize)]
+pub struct LifestatsHealthResponse {
+    pub status: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query_available: Option<bool>,
+}
+
+/// GET /api/lifestats/health - Get lifestats processor status
+///
+/// Returns status of the lifestats storage and query system
+pub async fn lifestats_health(State(state): State<super::ProxyState>) -> impl IntoResponse {
+    let has_pipeline = state.pipeline.is_some();
+    let has_query = state.lifestats_query.is_some();
+
+    if has_pipeline && has_query {
+        Json(LifestatsHealthResponse {
+            status: "healthy".to_string(),
+            message: "Lifestats storage and query interface operational".to_string(),
+            query_available: Some(true),
+        })
+    } else if has_pipeline {
+        Json(LifestatsHealthResponse {
+            status: "degraded".to_string(),
+            message: "Storage operational but query interface unavailable".to_string(),
+            query_available: Some(false),
+        })
+    } else {
+        Json(LifestatsHealthResponse {
+            status: "disabled".to_string(),
+            message: "Lifestats not configured".to_string(),
+            query_available: None,
+        })
+    }
+}
+
+/// POST /api/lifestats/cleanup - Trigger manual retention cleanup
+///
+/// Deletes old events based on retention policy. Returns number of records deleted.
+/// Note: Automatic cleanup runs every 24 hours in the background.
+pub async fn lifestats_cleanup(
+    State(_state): State<super::ProxyState>,
+) -> Result<impl IntoResponse, StatusCode> {
+    // Phase 2 TODO: Implement manual cleanup trigger
+    // This requires exposing a method on LifestatsProcessor to trigger cleanup
+    // For now, rely on automatic 24h cleanup
+    Ok(Json(serde_json::json!({
+        "status": "not_implemented",
+        "message": "Manual cleanup not yet implemented (automatic cleanup runs every 24h)",
+        "deleted": 0
+    })))
+}
+
+/// Query parameters for lifestats search endpoints
+#[derive(Debug, Deserialize)]
+pub struct LifestatsSearchQuery {
+    /// Search query string
+    #[serde(rename = "q")]
+    pub query: String,
+    /// Maximum results (default: 10, max: 100)
+    #[serde(default = "default_search_limit")]
+    pub limit: usize,
+    /// Search mode: "phrase" (default), "natural", "raw"
+    #[serde(default)]
+    pub mode: SearchMode,
+}
+
+/// Response wrapper for thinking search
+#[derive(Debug, Serialize)]
+pub struct ThinkingSearchResponse {
+    pub query: String,
+    pub mode: String,
+    pub results: Vec<ThinkingMatch>,
+}
+
+/// Response wrapper for prompt search
+#[derive(Debug, Serialize)]
+pub struct PromptSearchResponse {
+    pub query: String,
+    pub mode: String,
+    pub results: Vec<PromptMatch>,
+}
+
+/// Response wrapper for response search
+#[derive(Debug, Serialize)]
+pub struct ResponseSearchResponse {
+    pub query: String,
+    pub mode: String,
+    pub results: Vec<ResponseMatch>,
+}
+
+/// Response wrapper for context recovery
+#[derive(Debug, Serialize)]
+pub struct ContextSearchResponse {
+    pub topic: String,
+    pub mode: String,
+    pub results: Vec<ContextMatch>,
+}
+
+/// GET /api/lifestats/search/thinking - Search thinking blocks
+///
+/// Query params:
+///   - q: Search query (required)
+///   - limit: Max results (default: 10, max: 100)
+///   - mode: phrase|natural|raw (default: phrase)
+pub async fn lifestats_search_thinking(
+    State(state): State<super::ProxyState>,
+    Query(params): Query<LifestatsSearchQuery>,
+) -> Result<Json<ThinkingSearchResponse>, ApiError> {
+    let query_interface = state
+        .lifestats_query
+        .as_ref()
+        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+
+    let limit = params.limit.min(100);
+    let results = query_interface
+        .search_thinking(&params.query, limit, params.mode)
+        .map_err(|e| ApiError::Internal(format!("Search failed: {}", e)))?;
+
+    Ok(Json(ThinkingSearchResponse {
+        query: params.query,
+        mode: format!("{:?}", params.mode),
+        results,
+    }))
+}
+
+/// GET /api/lifestats/search/prompts - Search user prompts
+///
+/// Query params:
+///   - q: Search query (required)
+///   - limit: Max results (default: 10, max: 100)
+///   - mode: phrase|natural|raw (default: phrase)
+pub async fn lifestats_search_prompts(
+    State(state): State<super::ProxyState>,
+    Query(params): Query<LifestatsSearchQuery>,
+) -> Result<Json<PromptSearchResponse>, ApiError> {
+    let query_interface = state
+        .lifestats_query
+        .as_ref()
+        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+
+    let limit = params.limit.min(100);
+    let results = query_interface
+        .search_prompts(&params.query, limit, params.mode)
+        .map_err(|e| ApiError::Internal(format!("Search failed: {}", e)))?;
+
+    Ok(Json(PromptSearchResponse {
+        query: params.query,
+        mode: format!("{:?}", params.mode),
+        results,
+    }))
+}
+
+/// GET /api/lifestats/search/responses - Search assistant responses
+///
+/// Query params:
+///   - q: Search query (required)
+///   - limit: Max results (default: 10, max: 100)
+///   - mode: phrase|natural|raw (default: phrase)
+pub async fn lifestats_search_responses(
+    State(state): State<super::ProxyState>,
+    Query(params): Query<LifestatsSearchQuery>,
+) -> Result<Json<ResponseSearchResponse>, ApiError> {
+    let query_interface = state
+        .lifestats_query
+        .as_ref()
+        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+
+    let limit = params.limit.min(100);
+    let results = query_interface
+        .search_responses(&params.query, limit, params.mode)
+        .map_err(|e| ApiError::Internal(format!("Search failed: {}", e)))?;
+
+    Ok(Json(ResponseSearchResponse {
+        query: params.query,
+        mode: format!("{:?}", params.mode),
+        results,
+    }))
+}
+
+/// Query parameters for context recovery endpoint
+#[derive(Debug, Deserialize)]
+pub struct LifestatsContextQuery {
+    /// Topic to search for
+    pub topic: String,
+    /// Maximum results (default: 10, max: 50)
+    #[serde(default = "default_context_limit")]
+    pub limit: usize,
+    /// Search mode: "phrase" (default), "natural", "raw"
+    #[serde(default)]
+    pub mode: SearchMode,
+}
+
+fn default_context_limit() -> usize {
+    10
+}
+
+/// GET /api/lifestats/context - Combined context recovery
+///
+/// Searches across thinking blocks, user prompts, and assistant responses,
+/// then returns combined results sorted by relevance.
+///
+/// Query params:
+///   - topic: Topic to search for (required)
+///   - limit: Max results (default: 10, max: 50)
+///   - mode: phrase|natural|raw (default: phrase)
+pub async fn lifestats_context(
+    State(state): State<super::ProxyState>,
+    Query(params): Query<LifestatsContextQuery>,
+) -> Result<Json<ContextSearchResponse>, ApiError> {
+    let query_interface = state
+        .lifestats_query
+        .as_ref()
+        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+
+    let limit = params.limit.min(50);
+    let results = query_interface
+        .recover_context(&params.topic, limit, params.mode)
+        .map_err(|e| ApiError::Internal(format!("Context recovery failed: {}", e)))?;
+
+    Ok(Json(ContextSearchResponse {
+        topic: params.topic,
+        mode: format!("{:?}", params.mode),
+        results,
+    }))
+}
+
+/// GET /api/lifestats/stats - Get lifetime statistics
+///
+/// Returns aggregated statistics across all sessions: tokens, costs, tool usage, etc.
+pub async fn lifestats_stats(
+    State(state): State<super::ProxyState>,
+) -> Result<Json<LifetimeStats>, ApiError> {
+    let query_interface = state
+        .lifestats_query
+        .as_ref()
+        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+
+    let stats = query_interface
+        .get_lifetime_stats()
+        .map_err(|e| ApiError::Internal(format!("Failed to get lifetime stats: {}", e)))?;
+
+    Ok(Json(stats))
 }

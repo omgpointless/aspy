@@ -108,6 +108,18 @@ pub enum ProxyEvent {
 
     /// Thinking block started (emitted immediately for real-time feedback)
     ThinkingStarted { timestamp: DateTime<Utc> },
+
+    /// User's prompt extracted from request
+    UserPrompt {
+        timestamp: DateTime<Utc>,
+        content: String,
+    },
+
+    /// Assistant's (Claude's) text response
+    AssistantResponse {
+        timestamp: DateTime<Utc>,
+        content: String,
+    },
 }
 
 /// Summary statistics for the status bar

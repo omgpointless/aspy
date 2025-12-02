@@ -7,7 +7,7 @@
   <meta name="description" content="{{ page.description | default: site.description }}">
 
   <!-- Favicon -->
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐍</text></svg>">
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -31,8 +31,8 @@
       </a>
       <nav class="site-nav">
         <a href="{{ '/' | relative_url }}" {% if page.url == '/' %}class="active"{% endif %}>Home</a>
+        <a href="{{ '/getting-started' | relative_url }}" {% if page.url == '/getting-started' or page.url == '/getting-started/' %}class="active"{% endif %}>Get Started</a>
         <a href="{{ '/features' | relative_url }}" {% if page.url == '/features' or page.url == '/features/' %}class="active"{% endif %}>Features</a>
-        <a href="{{ '/#docs' | relative_url }}">Docs</a>
         <a href="{{ '/blog/' | relative_url }}" {% if page.url contains '/blog' %}class="active"{% endif %}>Blog</a>
         <a href="https://github.com/omgpointless/aspy" target="_blank">GitHub</a>
       </nav>
@@ -58,5 +58,55 @@
   <!-- Image zoom -->
   <script src="https://cdn.jsdelivr.net/npm/medium-zoom@1.1.0/dist/medium-zoom.min.js"></script>
   <script>mediumZoom('.page-content img:not(.hero-logo)', { background: 'rgba(40, 41, 45, 0.92)' });</script>
+
+  <!-- Subtle scroll animations -->
+  <script type="module">
+    import { animate, inView } from "https://cdn.jsdelivr.net/npm/motion@latest/+esm";
+
+    // Hero entrance (staggered fade-in on load)
+    const heroElements = document.querySelectorAll('.hero > *');
+    heroElements.forEach((el, i) => {
+      const isLogo = el.classList.contains('hero-logo');
+      el.style.opacity = '0';
+      if (!isLogo) el.style.transform = 'translateY(10px)';
+      animate(el,
+        isLogo
+          ? { opacity: 1 }
+          : { opacity: 1, transform: 'translateY(0)' },
+        { duration: isLogo ? 0.6 : 0.5, delay: i * 0.1, easing: 'ease-out' }
+      );
+    });
+
+    // Feature cards cascade on scroll
+    const featureCards = document.querySelectorAll('.feature-card');
+    featureCards.forEach(el => {
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(8px)';
+    });
+    inView('.feature-grid', () => {
+      featureCards.forEach((el, i) => {
+        animate(el,
+          { opacity: 1, transform: 'translateY(0)' },
+          { duration: 0.5, delay: i * 0.1, easing: 'ease-out' }
+        );
+      });
+    }, { margin: '-50px' });
+
+    // Docs sections reveal on scroll
+    inView('.docs-section', (info) => {
+      animate(info.target,
+        { opacity: [0, 1], transform: ['translateY(15px)', 'translateY(0)'] },
+        { duration: 0.4, easing: 'ease-out' }
+      );
+    }, { margin: '-30px' });
+
+    // Post list items reveal
+    inView('.post-list-item', (info) => {
+      animate(info.target,
+        { opacity: [0, 1], transform: ['translateY(15px)', 'translateY(0)'] },
+        { duration: 0.35, easing: 'ease-out' }
+      );
+    }, { margin: '-20px' });
+  </script>
 </body>
 </html>

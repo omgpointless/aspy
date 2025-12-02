@@ -10,10 +10,10 @@ layout: default
         {{ page.date | date: "%B %-d, %Y" }}
       </time>
       {% if page.author %}
-        &bull; {{ page.author }}
+      <span>&bull;</span> <span>{{ page.author }}</span>
       {% endif %}
       {% if page.tags %}
-        &bull;
+        <span>&bull;</span>
         {% for tag in page.tags %}
           <span class="tag tag-{{ tag | slugify }}">{{ tag }}</span>
         {% endfor %}

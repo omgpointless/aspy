@@ -8,8 +8,8 @@ title: Home
   <p class="hero-tagline">Stop guessing. Start seeing.</p>
   <p class="hero-subtitle">Real-time observability proxy for Claude Code</p>
   <div class="hero-links">
-    <a href="https://github.com/omgpointless/aspy" class="primary">Get Started</a>
-    <a href="{{ '/blog/' | relative_url }}">Read the Blog</a>
+    <a href="{{ '/getting-started' | relative_url }}" class="primary">Get Started</a>
+    <a href="https://github.com/omgpointless/aspy">GitHub</a>
   </div>
 </div>
 
@@ -19,8 +19,8 @@ title: Home
 
 <div class="terminal-block">
 <span class="comment"># Point Claude Code at the proxy</span>
-<span class="prompt">$</span> export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-<span class="prompt">$</span> claude
+<div><span class="prompt">$</span> export ANTHROPIC_BASE_URL=http://127.0.0.1:8080</div>
+<div><span class="prompt">$</span> claude</div>
 </div>
 
 <div class="feature-grid">
@@ -71,8 +71,8 @@ Once you see the full picture—which tools get called, how tokens flow, when ca
   <div class="docs-section">
     <h4>Getting Started</h4>
     <ul>
+      <li><a href="{{ '/getting-started' | relative_url }}">Quick Start</a> — Install and run in 5 minutes</li>
       <li><a href="{{ '/features' | relative_url }}">Features</a> — Everything Aspy can do</li>
-      <li><a href="{{ '/commands' | relative_url }}">Commands</a> — Build, run, and develop</li>
       <li><a href="{{ '/sessions' | relative_url }}">Sessions</a> — Multi-client routing setup</li>
     </ul>
   </div>

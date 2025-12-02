@@ -198,7 +198,7 @@ hr {
 
 code {
   font-family: $font-mono;
-  font-size: 0.875em;
+  font-size: 0.95em;
   background-color: $background-light;
   color: $code-inline;
   padding: 0.2em 0.4em;
@@ -207,7 +207,7 @@ code {
 
 pre {
   font-family: $font-mono;
-  font-size: 0.875rem;
+  font-size: 0.95rem;
   background-color: $background-light;
   border: 1px solid $border;
   border-radius: 8px;
@@ -366,6 +366,13 @@ tr:hover {
 .post-meta {
   color: $muted;
   font-size: 0.9rem;
+  display: flex;
+  gap: 10px;
+
+  time {
+    line-height: 1.6rem;
+  }
+
 }
 
 .post-content {
@@ -477,7 +484,7 @@ tr:hover {
   display: inline-block;
   background-color: $background-lighter;
   color: $tool-call;
-  padding: 0.2rem 0.6rem;
+  padding: 0.075rem 0.6rem;
   border-radius: 4px;
   font-size: 0.75rem;
   margin-right: 0.25rem;
@@ -504,7 +511,7 @@ tr:hover {
   width: 720px;
   height: auto;
   margin-bottom: 1rem;
-  border-radius: 12px;
+  border-radius: 24px;
 }
 
 .hero-title {
@@ -514,7 +521,7 @@ tr:hover {
 
 .hero-tagline {
   color: $muted;
-  font-size: 1.125rem;
+  font-size: 1.215rem;
   margin-bottom: 1.5rem;
 }
 
@@ -595,7 +602,7 @@ tr:hover {
   border-radius: 8px;
   padding: 1rem;
   font-family: $font-mono;
-  font-size: 0.8rem;
+  font-size: 0.95rem;
   overflow-x: auto;
   color: $tool-call;
 
@@ -605,6 +612,7 @@ tr:hover {
 
   .comment {
     color: $muted;
+    display: block;
   }
 }
 

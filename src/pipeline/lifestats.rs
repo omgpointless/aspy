@@ -906,7 +906,7 @@ impl LifestatsProcessor {
                 let content = if content.len() > config.max_thinking_size {
                     format!(
                         "{}... [truncated, {} bytes total]",
-                        truncate_utf8_safe(&content, config.max_thinking_size),
+                        truncate_utf8_safe(content, config.max_thinking_size),
                         content.len()
                     )
                 } else {

@@ -325,7 +325,6 @@ pub struct Config {
 
     /// API translation settings (OpenAI ↔ Anthropic)
     pub translation: Translation,
-
     /// Client and provider configuration for multi-user routing
     pub clients: ClientsConfig,
 }
@@ -385,7 +384,6 @@ struct FileTranslation {
     #[serde(default)]
     model_mapping: HashMap<String, String>,
 }
-
 /// Config file structure (subset of Config that makes sense to persist)
 #[derive(Debug, Deserialize, Default)]
 struct FileConfig {
@@ -414,7 +412,6 @@ struct FileConfig {
 
     /// Optional [translation] section
     translation: Option<FileTranslation>,
-
     /// Optional [clients.X] sections for multi-user routing
     #[serde(default)]
     clients: HashMap<String, ClientConfig>,
@@ -620,7 +617,6 @@ auto_detect = {translation_auto_detect}
 # "gpt-4" = "claude-sonnet-4-20250514"
 # "gpt-4-turbo" = "claude-sonnet-4-20250514"
 # "gpt-3.5-turbo" = "claude-3-haiku-20240307"
-
 # ─────────────────────────────────────────────────────────────────────────────
 # MULTI-CLIENT ROUTING (Optional)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -836,7 +832,6 @@ auto_detect = {translation_auto_detect}
                 file_translation.model_mapping
             },
         };
-
         // Client/provider config: file only
         let clients = ClientsConfig {
             clients: file.clients,

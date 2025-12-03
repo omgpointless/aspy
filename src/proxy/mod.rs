@@ -115,10 +115,10 @@ pub struct ProxyState {
     pipeline: Option<Arc<EventPipeline>>,
     /// Query interface for lifestats database (optional, requires lifestats enabled)
     pub lifestats_query: Option<Arc<crate::pipeline::lifestats_query::LifestatsQuery>>,
-    /// Handle to the embedding indexer (optional, requires embeddings enabled)
-    pub embedding_indexer: Option<crate::pipeline::embedding_indexer::IndexerHandle>,
     /// Translation pipeline for OpenAI ↔ Anthropic format conversion
     translation: Arc<TranslationPipeline>,
+    /// Handle to the embedding indexer (optional, requires embeddings enabled)
+    pub embedding_indexer: Option<crate::pipeline::embedding_indexer::IndexerHandle>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -246,7 +246,7 @@ pub async fn start_proxy(
         pipeline: shared.pipeline,
         lifestats_query: shared.lifestats_query,
         embedding_indexer: shared.embedding_indexer,
-        translation,
+        translation
     };
 
     // Build the router - API endpoints + proxy handler

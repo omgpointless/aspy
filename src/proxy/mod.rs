@@ -480,10 +480,6 @@ async fn proxy_handler(
         .clone()
         .or_else(|| extract_user_id(&headers));
 
-    // Check original path to detect if this is a messages-like endpoint
-    // (for session backfill, which happens before translation)
-    let _original_is_messages = routing.api_path.contains("/messages");
-
     // Backfill session user_id immediately (before any events are sent)
     // This ensures events go to the hook-created session, not a new implicit one
     if let Some(ref uid) = user_id {

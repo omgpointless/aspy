@@ -255,7 +255,7 @@ ASPY_DEMO=1 aspy
 The theme system exposes these functions in Rust:
 
 ```rust
-use anthropic_spy::theme::Theme;
+use aspy::theme::Theme;
 
 // Load by name
 let theme = Theme::by_name("Spy Dark");
@@ -264,7 +264,7 @@ let theme = Theme::by_name("Spy Dark");
 let themes: Vec<String> = Theme::list_available();
 
 // Load with custom config
-use anthropic_spy::theme::ThemeConfig;
+use aspy::theme::ThemeConfig;
 let config = ThemeConfig { use_theme_background: false };
 let theme = Theme::by_name_with_config("Spy Dark", &config);
 ```

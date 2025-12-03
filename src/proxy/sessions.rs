@@ -394,6 +394,15 @@ impl SessionManager {
         self.sessions.get_mut(&key)
     }
 
+    /// Get session ID for a user (for ProcessContext)
+    ///
+    /// Returns the session ID string if the user has an active session.
+    /// This is used to populate ProcessContext when sending events through the pipeline.
+    pub fn get_session_id(&self, user_id: &UserId) -> Option<String> {
+        self.get_user_session(user_id)
+            .map(|session| session.key.as_str().to_string())
+    }
+
     /// List all active sessions
     pub fn active_sessions(&self) -> impl Iterator<Item = &Session> {
         self.sessions.values().filter(|s| s.is_active())

@@ -292,3 +292,4 @@ Examples:
 ---
 
 **Modular Development Note:** We aim to develop in a modular fashion, allowing flexibility and isolation of responsibility. We recognize that `app.rs` historically has "smelt" and we tend to regress. Long term, this is not maintainable for what this project has become.
+- If user tries to make database migration for the sqlite server, verify that they aren't running the proxy

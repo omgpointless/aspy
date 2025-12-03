@@ -142,7 +142,7 @@ See [sessions.md](sessions.md) for full configuration reference.
 | `ASPY_LOG_DIR` | `./logs` | Log file directory (overrides config) |
 | `ASPY_NO_TUI` | `false` | Disable TUI (headless mode) |
 | `ASPY_DEMO` | `false` | Enable demo mode (mock events) |
-| `RUST_LOG` | `anthropic_spy=info` | Logging level |
+| `RUST_LOG` | `aspy=info` | Logging level |
 
 ## Code Style Guidelines
 

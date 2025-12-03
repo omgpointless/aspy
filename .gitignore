@@ -17,6 +17,9 @@ Cargo.lock
 *~
 .DS_Store
 
+# Local data
+data/
+
 # OS
 Thumbs.db
 

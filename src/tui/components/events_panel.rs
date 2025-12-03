@@ -27,6 +27,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 
 /// Events panel component
 ///
@@ -131,15 +132,25 @@ impl EventsPanel {
                 let mut line = format_event_line(event);
 
                 // Truncate with ellipsis if line exceeds available width
-                // Use unicode ellipsis (…) to signal "press Enter for details"
-                if line.len() > content_width {
-                    // Account for emoji width (can be 2 columns) - conservative estimate
-                    let truncate_at = content_width.saturating_sub(2);
-                    line.truncate(truncate_at);
-                    // Find last char boundary to avoid cutting unicode
-                    while !line.is_char_boundary(line.len()) && !line.is_empty() {
-                        line.pop();
+                // Use unicode display width (not byte length) for accurate column calculation
+                let display_width = line.width();
+                if display_width > content_width {
+                    // Target width leaves room for ellipsis (1 column)
+                    let target_width = content_width.saturating_sub(1);
+
+                    // Find truncation point by accumulating display widths
+                    let mut current_width = 0;
+                    let mut truncate_at = 0;
+                    for (i, c) in line.char_indices() {
+                        let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                        if current_width + char_width > target_width {
+                            break;
+                        }
+                        current_width += char_width;
+                        truncate_at = i + c.len_utf8();
                     }
+
+                    line.truncate(truncate_at);
                     line.push('…');
                 }
 
@@ -427,6 +438,12 @@ fn event_color_style(event: &ProxyEvent, theme: &Theme) -> Style {
         ProxyEvent::ThinkingStarted { .. } => Style::default()
             .fg(theme.thinking)
             .add_modifier(Modifier::ITALIC),
+        ProxyEvent::UserPrompt { .. } => Style::default()
+            .fg(theme.request)
+            .add_modifier(Modifier::BOLD),
+        ProxyEvent::AssistantResponse { .. } => Style::default()
+            .fg(theme.response)
+            .add_modifier(Modifier::BOLD),
     }
 }
 

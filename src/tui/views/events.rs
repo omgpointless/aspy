@@ -21,6 +21,36 @@ use ratatui::{
 // Import shared utilities from components
 use super::super::components::format_number;
 
+// ============================================================================
+// Detail content types
+// ============================================================================
+
+/// Content for detail view rendering, indicating how it should be displayed.
+///
+/// Follows the "Data vs Rendering" principle: the formatter decides what kind
+/// of content this is, the renderer decides how to display it.
+pub(crate) enum RenderableContent {
+    /// Markdown content - wrap text at word boundaries, render formatting
+    /// (headings, inline code, code blocks, lists). Used for human-readable
+    /// content like thinking, assistant responses, user prompts.
+    Markdown(String),
+
+    /// Structured content - preserve formatting exactly (JSON, code output).
+    /// May require horizontal scrolling for wide content.
+    #[allow(dead_code)] // Reserved for future use (raw logs, non-wrapped content)
+    Structured(String),
+}
+
+impl RenderableContent {
+    /// Get the raw string content for clipboard operations
+    pub fn as_str(&self) -> &str {
+        match self {
+            RenderableContent::Markdown(s) => s,
+            RenderableContent::Structured(s) => s,
+        }
+    }
+}
+
 /// Main render function for the Events view
 pub fn render(f: &mut Frame, area: Rect, app: &mut App) {
     let bp = Breakpoint::from_width(area.width);
@@ -83,6 +113,26 @@ fn render_thinking_panel(f: &mut Frame, area: Rect, app: &mut App) {
 // ============================================================================
 // Event formatting
 // ============================================================================
+
+/// Sanitize content for single-line display
+///
+/// Replaces newlines, tabs, and control characters with spaces to prevent
+/// rendering artifacts in list items. Collapses multiple whitespace to single space.
+fn sanitize_preview(content: &str) -> String {
+    content
+        .chars()
+        .map(|c| {
+            if c.is_control() || c == '\n' || c == '\r' || c == '\t' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 /// Format an event as a single line for the list view
 pub(crate) fn format_event_line(event: &ProxyEvent) -> String {
@@ -232,11 +282,37 @@ pub(crate) fn format_event_line(event: &ProxyEvent) -> String {
         ProxyEvent::ThinkingStarted { timestamp } => {
             format!("[{}] 💭 Thinking...", timestamp.format("%H:%M:%S"))
         }
+        ProxyEvent::UserPrompt { timestamp, content } => {
+            let sanitized = sanitize_preview(content);
+            let preview = if sanitized.chars().count() > 60 {
+                format!("{}...", sanitized.chars().take(60).collect::<String>())
+            } else {
+                sanitized
+            };
+            format!("[{}] 👤 User: {}", timestamp.format("%H:%M:%S"), preview)
+        }
+        ProxyEvent::AssistantResponse { timestamp, content } => {
+            let sanitized = sanitize_preview(content);
+            let preview = if sanitized.chars().count() > 60 {
+                format!("{}...", sanitized.chars().take(60).collect::<String>())
+            } else {
+                sanitized
+            };
+            format!(
+                "[{}] 🤖 Assistant: {}",
+                timestamp.format("%H:%M:%S"),
+                preview
+            )
+        }
     }
 }
 
-/// Format an event as detailed text for the detail view
-pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
+/// Format an event as detailed content for the detail view
+///
+/// Returns `RenderableContent` to indicate how the content should be displayed:
+/// - `Markdown`: Human-readable content (thinking, responses, prompts)
+/// - `Structured`: Machine-formatted content (JSON, code output)
+pub(crate) fn format_event_detail(event: &ProxyEvent) -> RenderableContent {
     match event {
         ProxyEvent::ToolCall {
             id,
@@ -244,13 +320,18 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
             tool_name,
             input,
         } => {
-            format!(
-                "Tool Call\n\nID: {}\nTimestamp: {}\nTool: {}\n\nInput:\n{}",
+            RenderableContent::Markdown(format!(
+                "## 🔧 Tool Call\n\n\
+                **ID:** {}  \n\
+                **Timestamp:** {}  \n\
+                **Tool:** `{}`\n\n\
+                ---\n\n\
+                ```json\n{}\n```",
                 id,
                 timestamp.to_rfc3339(),
                 tool_name,
                 serde_json::to_string_pretty(input).unwrap_or_else(|_| "N/A".to_string())
-            )
+            ))
         }
         ProxyEvent::ToolResult {
             id,
@@ -260,15 +341,24 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
             duration,
             success,
         } => {
-            format!(
-                "Tool Result\n\nID: {}\nTimestamp: {}\nTool: {}\nSuccess: {}\nDuration: {:.2}s\n\nOutput:\n{}",
+            let status_icon = if *success { "✓" } else { "✗" };
+            RenderableContent::Markdown(format!(
+                "## {} Tool Result\n\n\
+                **ID:** {}  \n\
+                **Timestamp:** {}  \n\
+                **Tool:** `{}`  \n\
+                **Success:** {}  \n\
+                **Duration:** {:.2}s\n\n\
+                ---\n\n\
+                ```json\n{}\n```",
+                status_icon,
                 id,
                 timestamp.to_rfc3339(),
                 tool_name,
                 success,
                 duration.as_secs_f64(),
                 serde_json::to_string_pretty(output).unwrap_or_else(|_| "N/A".to_string())
-            )
+            ))
         }
         ProxyEvent::Request {
             id,
@@ -280,7 +370,7 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
         } => {
             let body_content = if let Some(json_body) = body {
                 format!(
-                    "\n\nRequest Body:\n{}",
+                    "\n\n---\n\n```json\n{}\n```",
                     serde_json::to_string_pretty(json_body)
                         .unwrap_or_else(|_| "Failed to format".to_string())
                 )
@@ -288,15 +378,20 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
                 String::new()
             };
 
-            format!(
-                "HTTP Request\n\nID: {}\nTimestamp: {}\nMethod: {}\nPath: {}\nBody Size: {} bytes{}",
+            RenderableContent::Markdown(format!(
+                "## ← HTTP Request\n\n\
+                **ID:** {}  \n\
+                **Timestamp:** {}  \n\
+                **Method:** {}  \n\
+                **Path:** {}  \n\
+                **Body Size:** {} bytes{}",
                 id,
                 timestamp.to_rfc3339(),
                 method,
                 path,
                 body_size,
                 body_content
-            )
+            ))
         }
         ProxyEvent::Response {
             request_id,
@@ -309,7 +404,7 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
         } => {
             let body_content = if let Some(json_body) = body {
                 format!(
-                    "\n\nResponse Body:\n{}",
+                    "\n\n---\n\n```json\n{}\n```",
                     serde_json::to_string_pretty(json_body)
                         .unwrap_or_else(|_| "Failed to format".to_string())
                 )
@@ -317,8 +412,14 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
                 String::new()
             };
 
-            format!(
-                "HTTP Response\n\nRequest ID: {}\nTimestamp: {}\nStatus: {}\nBody Size: {} bytes\nTTFB: {}ms\nTotal Duration: {:.2}s{}",
+            RenderableContent::Markdown(format!(
+                "## → HTTP Response\n\n\
+                **Request ID:** {}  \n\
+                **Timestamp:** {}  \n\
+                **Status:** {}  \n\
+                **Body Size:** {} bytes  \n\
+                **TTFB:** {}ms  \n\
+                **Total Duration:** {:.2}s{}",
                 request_id,
                 timestamp.to_rfc3339(),
                 status,
@@ -326,19 +427,22 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
                 ttfb.as_millis(),
                 duration.as_secs_f64(),
                 body_content
-            )
+            ))
         }
         ProxyEvent::Error {
             timestamp,
             message,
             context,
         } => {
-            format!(
-                "Error\n\nTimestamp: {}\nMessage: {}\nContext: {}",
+            RenderableContent::Markdown(format!(
+                "## ❌ Error\n\n\
+                **Timestamp:** {}  \n\
+                **Message:** {}  \n\
+                **Context:** {}",
                 timestamp.to_rfc3339(),
                 message,
                 context.as_deref().unwrap_or("N/A")
-            )
+            ))
         }
         ProxyEvent::HeadersCaptured {
             timestamp, headers, ..
@@ -349,8 +453,21 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
                 "None".to_string()
             };
 
-            format!(
-                "Headers Captured\n\nTimestamp: {}\n\nRequest Headers:\nAPI Version: {}\nBeta Features: {}\nAPI Key Hash: {}\n\nResponse Headers:\nRequest ID: {}\nOrg ID: {}\n\nRate Limits:\nRequests: {}/{} ({}%)\nTokens: {}/{} ({}%)\nReset: {}",
+            RenderableContent::Markdown(format!(
+                "## 📋 Headers Captured\n\n\
+                **Timestamp:** {}\n\n\
+                ---\n\n\
+                ### Request Headers\n\n\
+                **API Version:** {}  \n\
+                **Beta Features:** {}  \n\
+                **API Key Hash:** `{}`\n\n\
+                ### Response Headers\n\n\
+                **Request ID:** {}  \n\
+                **Org ID:** {}\n\n\
+                ### Rate Limits\n\n\
+                **Requests:** {}/{} ({}%)  \n\
+                **Tokens:** {}/{} ({}%)  \n\
+                **Reset:** {}",
                 timestamp.to_rfc3339(),
                 headers.anthropic_version.as_deref().unwrap_or("N/A"),
                 beta_features,
@@ -364,7 +481,7 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
                 headers.tokens_limit.map(|l| l.to_string()).unwrap_or("?".to_string()),
                 headers.tokens_usage_pct().map(|p| format!("{:.1}", p * 100.0)).unwrap_or("?".to_string()),
                 headers.requests_reset.as_deref().or(headers.tokens_reset.as_deref()).unwrap_or("N/A")
-            )
+            ))
         }
         ProxyEvent::RateLimitUpdate {
             timestamp,
@@ -374,8 +491,13 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
             tokens_limit,
             reset_time,
         } => {
-            format!(
-                "Rate Limit Update\n\nTimestamp: {}\n\nRequests: {}/{}\nTokens: {}/{}\nReset: {}",
+            RenderableContent::Markdown(format!(
+                "## ⚖️ Rate Limit Update\n\n\
+                **Timestamp:** {}\n\n\
+                ---\n\n\
+                **Requests:** {}/{}  \n\
+                **Tokens:** {}/{}  \n\
+                **Reset:** {}",
                 timestamp.to_rfc3339(),
                 requests_remaining
                     .map(|r| r.to_string())
@@ -390,7 +512,7 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
                     .map(|l| l.to_string())
                     .unwrap_or("?".to_string()),
                 reset_time.as_deref().unwrap_or("N/A")
-            )
+            ))
         }
         ProxyEvent::ApiUsage {
             timestamp,
@@ -417,7 +539,10 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
 
             let cache_info = if *cache_read_tokens > 0 || *cache_creation_tokens > 0 {
                 format!(
-                    "\n\nCache Statistics:\nCache Creation: {} tokens\nCache Read: {} tokens\nCache Savings: ${:.4} (vs regular input)",
+                    "\n\n### Cache Statistics\n\n\
+                    **Cache Creation:** {} tokens  \n\
+                    **Cache Read:** {} tokens  \n\
+                    **Cache Savings:** ${:.4} (vs regular input)",
                     format_number(*cache_creation_tokens as u64),
                     format_number(*cache_read_tokens as u64),
                     cache_savings
@@ -426,8 +551,16 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
                 String::new()
             };
 
-            format!(
-                "API Usage\n\nTimestamp: {}\nModel: {}\n\nToken Breakdown:\nInput: {} tokens\nOutput: {} tokens\nTotal: {} tokens\n\nEstimated Cost: ${:.4}{}",
+            RenderableContent::Markdown(format!(
+                "## 📊 API Usage\n\n\
+                **Timestamp:** {}  \n\
+                **Model:** `{}`\n\n\
+                ---\n\n\
+                ### Token Breakdown\n\n\
+                **Input:** {} tokens  \n\
+                **Output:** {} tokens  \n\
+                **Total:** {} tokens\n\n\
+                **Estimated Cost:** ${:.4}{}",
                 timestamp.to_rfc3339(),
                 model,
                 format_number(*input_tokens as u64),
@@ -435,19 +568,19 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
                 format_number(total as u64),
                 cost,
                 cache_info
-            )
+            ))
         }
         ProxyEvent::Thinking {
             timestamp,
             content,
             token_estimate,
         } => {
-            format!(
-                "💭 Claude's Thinking\n\nTimestamp: {}\nEstimated Tokens: ~{}\n\n─────────────────────────────────────\n\n{}",
+            RenderableContent::Markdown(format!(
+                "## 💭 Claude's Thinking\n\n**Timestamp:** {}  \n**Estimated Tokens:** ~{}\n\n---\n\n{}",
                 timestamp.to_rfc3339(),
                 token_estimate,
                 content
-            )
+            ))
         }
         ProxyEvent::ContextCompact {
             timestamp,
@@ -460,13 +593,13 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
             } else {
                 0.0
             };
-            format!(
-                "📦 Context Compaction Detected\n\n\
-                Timestamp: {}\n\n\
-                Previous Context: {} tokens ({:.1}K)\n\
-                New Context: {} tokens ({:.1}K)\n\
-                Reduction: {} tokens ({:.1}%)\n\n\
-                Claude Code triggered a context window compaction to\n\
+            RenderableContent::Markdown(format!(
+                "## 📦 Context Compaction Detected\n\n\
+                **Timestamp:** {}\n\n\
+                **Previous Context:** {} tokens ({:.1}K)  \n\
+                **New Context:** {} tokens ({:.1}K)  \n\
+                **Reduction:** {} tokens ({:.1}%)\n\n\
+                Claude Code triggered a context window compaction to \
                 reduce memory usage and stay within limits.",
                 timestamp.to_rfc3339(),
                 previous_context,
@@ -475,13 +608,27 @@ pub(crate) fn format_event_detail(event: &ProxyEvent) -> String {
                 *new_context as f64 / 1000.0,
                 reduction,
                 reduction_pct
-            )
+            ))
         }
         ProxyEvent::ThinkingStarted { timestamp } => {
-            format!(
-                "💭 Thinking Started\n\nTimestamp: {}\n\nClaude is processing your request...",
+            RenderableContent::Markdown(format!(
+                "## 💭 Thinking Started\n\n**Timestamp:** {}\n\nClaude is processing your request...",
                 timestamp.to_rfc3339()
-            )
+            ))
+        }
+        ProxyEvent::UserPrompt { timestamp, content } => {
+            RenderableContent::Markdown(format!(
+                "## 👤 User Prompt\n\n**Timestamp:** {}\n\n---\n\n{}",
+                timestamp.to_rfc3339(),
+                content
+            ))
+        }
+        ProxyEvent::AssistantResponse { timestamp, content } => {
+            RenderableContent::Markdown(format!(
+                "## 🤖 Assistant Response\n\n**Timestamp:** {}\n\n---\n\n{}",
+                timestamp.to_rfc3339(),
+                content
+            ))
         }
     }
 }

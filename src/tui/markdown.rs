@@ -5,7 +5,7 @@
 // Future: headers, emphasis, lists.
 
 use crate::theme::Theme;
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -38,6 +38,31 @@ pub enum StyledSegment {
     },
     /// End of list item
     ListItemEnd,
+    /// Bold text: **like this**
+    Bold(String),
+    /// Italic text: *like this*
+    Italic(String),
+    /// Strikethrough text: ~~like this~~
+    Strikethrough(String),
+    /// Start of blockquote (> prefix)
+    BlockQuoteStart,
+    /// End of blockquote
+    BlockQuoteEnd,
+    /// Horizontal rule (---)
+    Rule,
+    /// Link: [text](url)
+    Link { text: String, url: String },
+    /// Table start with column alignments
+    TableStart {
+        #[allow(dead_code)] // Future: use for text alignment in cells
+        alignments: Vec<pulldown_cmark::Alignment>,
+    },
+    /// Table header row
+    TableHead(Vec<String>),
+    /// Table body row
+    TableRow(Vec<String>),
+    /// Table end
+    TableEnd,
 }
 
 /// Parse markdown into styled segments
@@ -51,7 +76,29 @@ pub fn parse_markdown(markdown: &str) -> Vec<StyledSegment> {
     // List tracking: stack of (ordered, current_number) for nested lists
     let mut list_stack: Vec<(bool, u32)> = Vec::new();
 
-    for event in Parser::new(markdown) {
+    // Inline formatting state (for bold, italic, strikethrough)
+    let mut in_bold = false;
+    let mut in_italic = false;
+    let mut in_strikethrough = false;
+    let mut bold_content = String::new();
+    let mut italic_content = String::new();
+    let mut strikethrough_content = String::new();
+
+    // Link state
+    let mut in_link = false;
+    let mut link_url = String::new();
+    let mut link_text = String::new();
+
+    // Enable extensions: strikethrough (~~text~~) and tables (| col | col |)
+    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
+
+    // Table state
+    let mut in_table = false;
+    let mut table_alignments: Vec<pulldown_cmark::Alignment> = Vec::new();
+    let mut in_table_head = false;
+    let mut current_row: Vec<String> = Vec::new();
+    let mut current_cell = String::new();
+    for event in Parser::new_ext(markdown, options) {
         match event {
             // Inline code: `filename.rs`
             Event::Code(code) => {
@@ -111,6 +158,31 @@ pub fn parse_markdown(markdown: &str) -> Vec<StyledSegment> {
             // Text inside heading - accumulate
             Event::Text(text) if in_heading.is_some() => {
                 heading_content.push_str(&text);
+            }
+
+            // Text inside link - accumulate
+            Event::Text(text) if in_link => {
+                link_text.push_str(&text);
+            }
+
+            // Text inside bold - accumulate
+            Event::Text(text) if in_bold => {
+                bold_content.push_str(&text);
+            }
+
+            // Text inside italic - accumulate
+            Event::Text(text) if in_italic => {
+                italic_content.push_str(&text);
+            }
+
+            // Text inside strikethrough - accumulate
+            Event::Text(text) if in_strikethrough => {
+                strikethrough_content.push_str(&text);
+            }
+
+            // Text in table cell - must come before general Text handler
+            Event::Text(text) if in_table => {
+                current_cell.push_str(&text);
             }
 
             // Regular text
@@ -177,6 +249,137 @@ pub fn parse_markdown(markdown: &str) -> Vec<StyledSegment> {
             // List item end
             Event::End(TagEnd::Item) => {
                 segments.push(StyledSegment::ListItemEnd);
+            }
+
+            // Bold start
+            Event::Start(Tag::Strong) => {
+                in_bold = true;
+                bold_content.clear();
+            }
+
+            // Bold end
+            Event::End(TagEnd::Strong) => {
+                if !bold_content.is_empty() {
+                    segments.push(StyledSegment::Bold(bold_content.clone()));
+                }
+                bold_content.clear();
+                in_bold = false;
+            }
+
+            // Italic start
+            Event::Start(Tag::Emphasis) => {
+                in_italic = true;
+                italic_content.clear();
+            }
+
+            // Italic end
+            Event::End(TagEnd::Emphasis) => {
+                if !italic_content.is_empty() {
+                    segments.push(StyledSegment::Italic(italic_content.clone()));
+                }
+                italic_content.clear();
+                in_italic = false;
+            }
+
+            // Strikethrough start
+            Event::Start(Tag::Strikethrough) => {
+                in_strikethrough = true;
+                strikethrough_content.clear();
+            }
+
+            // Strikethrough end
+            Event::End(TagEnd::Strikethrough) => {
+                if !strikethrough_content.is_empty() {
+                    segments.push(StyledSegment::Strikethrough(strikethrough_content.clone()));
+                }
+                strikethrough_content.clear();
+                in_strikethrough = false;
+            }
+
+            // Blockquote start
+            Event::Start(Tag::BlockQuote) => {
+                segments.push(StyledSegment::BlockQuoteStart);
+            }
+
+            // Blockquote end
+            Event::End(TagEnd::BlockQuote) => {
+                segments.push(StyledSegment::BlockQuoteEnd);
+            }
+
+            // Horizontal rule
+            Event::Rule => {
+                segments.push(StyledSegment::Rule);
+            }
+
+            // Link start
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                in_link = true;
+                link_url = dest_url.to_string();
+                link_text.clear();
+            }
+
+            // Link end
+            Event::End(TagEnd::Link) => {
+                segments.push(StyledSegment::Link {
+                    text: link_text.clone(),
+                    url: link_url.clone(),
+                });
+                link_text.clear();
+                link_url.clear();
+                in_link = false;
+            }
+
+            // Table start
+            Event::Start(Tag::Table(alignments)) => {
+                in_table = true;
+                table_alignments = alignments.to_vec();
+                segments.push(StyledSegment::TableStart {
+                    alignments: table_alignments.clone(),
+                });
+            }
+
+            // Table end
+            Event::End(TagEnd::Table) => {
+                segments.push(StyledSegment::TableEnd);
+                in_table = false;
+                table_alignments.clear();
+            }
+
+            // Table head start
+            Event::Start(Tag::TableHead) => {
+                in_table_head = true;
+                current_row.clear();
+            }
+
+            // Table head end
+            Event::End(TagEnd::TableHead) => {
+                segments.push(StyledSegment::TableHead(current_row.clone()));
+                current_row.clear();
+                in_table_head = false;
+            }
+
+            // Table row start
+            Event::Start(Tag::TableRow) => {
+                current_row.clear();
+            }
+
+            // Table row end
+            Event::End(TagEnd::TableRow) => {
+                if !in_table_head {
+                    segments.push(StyledSegment::TableRow(current_row.clone()));
+                }
+                current_row.clear();
+            }
+
+            // Table cell start
+            Event::Start(Tag::TableCell) => {
+                current_cell.clear();
+            }
+
+            // Table cell end
+            Event::End(TagEnd::TableCell) => {
+                current_row.push(current_cell.clone());
+                current_cell.clear();
             }
 
             _ => {}
@@ -302,20 +505,29 @@ pub fn segments_to_lines(
                 current_width += code.len();
             }
 
-            StyledSegment::CodeBlock { lang: _, code } => {
+            StyledSegment::CodeBlock { lang, code } => {
                 // Flush current line before code block
                 flush_line(&mut lines, &mut current_spans);
                 current_width = 0;
 
-                // Code blocks: use dedicated code_block color with dim modifier
-                // Don't wrap code - preserve formatting
+                // Check if this is JSON - if so, use syntax highlighting
+                let is_json = lang.as_ref().map(|l| l == "json").unwrap_or(false);
+
                 for line in code.lines() {
-                    lines.push(Line::from(Span::styled(
-                        format!("  {}", line),
-                        Style::default()
-                            .fg(theme.code_block)
-                            .add_modifier(Modifier::DIM),
-                    )));
+                    if is_json {
+                        // JSON syntax highlighting
+                        let mut spans = vec![Span::raw("  ")]; // Indent
+                        spans.extend(highlight_json_line(line, theme));
+                        lines.push(Line::from(spans));
+                    } else {
+                        // Default: code_block color with dim modifier
+                        lines.push(Line::from(Span::styled(
+                            format!("  {}", line),
+                            Style::default()
+                                .fg(theme.code_block)
+                                .add_modifier(Modifier::DIM),
+                        )));
+                    }
                 }
             }
 
@@ -383,6 +595,106 @@ pub fn segments_to_lines(
                 flush_line(&mut lines, &mut current_spans);
                 current_width = 0;
             }
+
+            StyledSegment::Bold(text) => {
+                // Bold text - use BOLD modifier
+                current_spans.push(Span::styled(
+                    text.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+                current_width += text.len();
+            }
+
+            StyledSegment::Italic(text) => {
+                // Italic text - use ITALIC modifier
+                current_spans.push(Span::styled(
+                    text.clone(),
+                    Style::default().add_modifier(Modifier::ITALIC),
+                ));
+                current_width += text.len();
+            }
+
+            StyledSegment::Strikethrough(text) => {
+                // Strikethrough - use CROSSED_OUT modifier with dimmed color
+                current_spans.push(Span::styled(
+                    text.clone(),
+                    Style::default()
+                        .add_modifier(Modifier::CROSSED_OUT)
+                        .add_modifier(Modifier::DIM),
+                ));
+                current_width += text.len();
+            }
+
+            StyledSegment::BlockQuoteStart => {
+                // Start blockquote - flush and begin indentation
+                flush_line(&mut lines, &mut current_spans);
+                // Add quote marker
+                current_spans.push(Span::styled(
+                    "│ ".to_string(),
+                    Style::default().fg(theme.border),
+                ));
+                current_width = 2;
+            }
+
+            StyledSegment::BlockQuoteEnd => {
+                // End blockquote - flush and add spacing
+                flush_line(&mut lines, &mut current_spans);
+                lines.push(Line::from(""));
+                current_width = 0;
+            }
+
+            StyledSegment::Rule => {
+                // Horizontal rule - flush and add separator line
+                flush_line(&mut lines, &mut current_spans);
+                // Create a line of ─ characters that spans most of the width
+                let rule_width = width.saturating_sub(4).max(10);
+                let rule = "─".repeat(rule_width);
+                lines.push(Line::from(Span::styled(
+                    rule,
+                    Style::default().fg(theme.border),
+                )));
+                current_width = 0;
+            }
+
+            StyledSegment::Link { text, url } => {
+                // Link - show text with underline, URL in parentheses if different
+                let display = if text.is_empty() || text == url {
+                    url.clone()
+                } else {
+                    format!("{} ({})", text, url)
+                };
+                current_spans.push(Span::styled(
+                    display.clone(),
+                    Style::default()
+                        .fg(theme.highlight)
+                        .add_modifier(Modifier::UNDERLINED),
+                ));
+                current_width += display.len();
+            }
+
+            StyledSegment::TableStart { .. } => {
+                // Flush before table
+                flush_line(&mut lines, &mut current_spans);
+                current_width = 0;
+            }
+
+            StyledSegment::TableHead(cells) => {
+                // Render header row with box characters
+                let rendered = render_table_row(cells, theme, true);
+                lines.extend(rendered);
+            }
+
+            StyledSegment::TableRow(cells) => {
+                // Render body row
+                let rendered = render_table_row(cells, theme, false);
+                lines.extend(rendered);
+            }
+
+            StyledSegment::TableEnd => {
+                // Add spacing after table
+                lines.push(Line::from(""));
+                current_width = 0;
+            }
         }
     }
 
@@ -398,6 +710,275 @@ pub fn segments_to_lines(
 pub fn render_markdown(markdown: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let segments = parse_markdown(markdown);
     segments_to_lines(&segments, width, theme)
+}
+
+// ============================================================================
+// Table Rendering
+// ============================================================================
+
+/// Render a table row with box-drawing characters
+///
+/// For headers: renders with bold text and a separator line below
+/// For body rows: renders with normal text
+fn render_table_row(cells: &[String], theme: &Theme, is_header: bool) -> Vec<Line<'static>> {
+    let mut result = Vec::new();
+
+    // Calculate column widths (minimum 3 chars for readability)
+    let col_widths: Vec<usize> = cells.iter().map(|c| c.len().max(3)).collect();
+
+    // Build the row content
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::styled(
+        "│ ".to_string(),
+        Style::default().fg(theme.border),
+    ));
+
+    for (i, cell) in cells.iter().enumerate() {
+        let width = col_widths.get(i).copied().unwrap_or(3);
+        let padded = format!("{:<width$}", cell, width = width);
+
+        let style = if is_header {
+            Style::default()
+                .fg(theme.tool_call)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.foreground)
+        };
+
+        spans.push(Span::styled(padded, style));
+        spans.push(Span::styled(
+            " │ ".to_string(),
+            Style::default().fg(theme.border),
+        ));
+    }
+
+    result.push(Line::from(spans));
+
+    // Add separator line after header
+    if is_header {
+        let mut sep = String::from("├─");
+        for (i, &width) in col_widths.iter().enumerate() {
+            sep.push_str(&"─".repeat(width));
+            if i < col_widths.len() - 1 {
+                sep.push_str("─┼─");
+            }
+        }
+        sep.push_str("─┤");
+        result.push(Line::from(Span::styled(
+            sep,
+            Style::default().fg(theme.border),
+        )));
+    }
+
+    result
+}
+
+// ============================================================================
+// JSON Syntax Highlighting
+// ============================================================================
+
+/// Token types for JSON syntax highlighting
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum JsonToken {
+    Key,         // "field":
+    String,      // "value"
+    Number,      // 123, -45.67, 1e10
+    Bool,        // true, false
+    Null,        // null
+    Punctuation, // { } [ ] : ,
+    Whitespace,  // spaces, newlines
+}
+
+/// Highlight a line of JSON and return styled spans
+///
+/// Uses theme colors:
+/// - Keys: tool_call (stands out like function names)
+/// - Strings: foreground (normal text)
+/// - Numbers: highlight (accent)
+/// - Bools/Null: thinking (special values)
+/// - Punctuation: border + dim (structural, subdued)
+fn highlight_json_line(line: &str, theme: &Theme) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut chars = line.chars().peekable();
+    let mut current = String::new();
+    let mut in_string = false;
+
+    // Helper to flush accumulated content
+    let flush = |spans: &mut Vec<Span<'static>>, content: &str, token: JsonToken, theme: &Theme| {
+        if content.is_empty() {
+            return;
+        }
+        let style = match token {
+            JsonToken::Key => Style::default().fg(theme.tool_call),
+            JsonToken::String => Style::default().fg(theme.foreground),
+            JsonToken::Number => Style::default().fg(theme.highlight),
+            JsonToken::Bool | JsonToken::Null => Style::default().fg(theme.thinking),
+            JsonToken::Punctuation => Style::default()
+                .fg(theme.border)
+                .add_modifier(Modifier::DIM),
+            JsonToken::Whitespace => Style::default(),
+        };
+        spans.push(Span::styled(content.to_string(), style));
+    };
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            current.push(ch);
+            if ch == '"' && !current.ends_with("\\\"") {
+                // End of string - determine if it's a key or value
+                // Look ahead for colon (after optional whitespace)
+                let mut lookahead = chars.clone();
+                let mut is_key = false;
+                while let Some(&next) = lookahead.peek() {
+                    if next.is_whitespace() {
+                        lookahead.next();
+                    } else {
+                        is_key = next == ':';
+                        break;
+                    }
+                }
+                let token = if is_key {
+                    JsonToken::Key
+                } else {
+                    JsonToken::String
+                };
+                flush(&mut spans, &current, token, theme);
+                current.clear();
+                in_string = false;
+            }
+        } else {
+            match ch {
+                '"' => {
+                    // Flush any pending content
+                    if !current.is_empty() {
+                        // Determine token type for accumulated content
+                        let token = classify_token(&current);
+                        flush(&mut spans, &current, token, theme);
+                        current.clear();
+                    }
+                    current.push(ch);
+                    in_string = true;
+                }
+                '{' | '}' | '[' | ']' | ':' | ',' => {
+                    // Flush pending content first
+                    if !current.is_empty() {
+                        let token = classify_token(&current);
+                        flush(&mut spans, &current, token, theme);
+                        current.clear();
+                    }
+                    flush(&mut spans, &ch.to_string(), JsonToken::Punctuation, theme);
+                }
+                ' ' | '\t' => {
+                    // Flush pending content
+                    if !current.is_empty() {
+                        let token = classify_token(&current);
+                        flush(&mut spans, &current, token, theme);
+                        current.clear();
+                    }
+                    // Accumulate whitespace
+                    let mut ws = String::from(ch);
+                    while let Some(&next) = chars.peek() {
+                        if next == ' ' || next == '\t' {
+                            ws.push(chars.next().unwrap());
+                        } else {
+                            break;
+                        }
+                    }
+                    flush(&mut spans, &ws, JsonToken::Whitespace, theme);
+                }
+                _ => {
+                    current.push(ch);
+                }
+            }
+        }
+    }
+
+    // Flush remaining content
+    if !current.is_empty() {
+        let token = if in_string {
+            JsonToken::String // Unclosed string
+        } else {
+            classify_token(&current)
+        };
+        flush(&mut spans, &current, token, theme);
+    }
+
+    spans
+}
+
+/// Classify a non-string token
+fn classify_token(s: &str) -> JsonToken {
+    let trimmed = s.trim();
+    match trimmed {
+        "true" | "false" => JsonToken::Bool,
+        "null" => JsonToken::Null,
+        _ if looks_like_number(trimmed) => JsonToken::Number,
+        _ => JsonToken::String, // Fallback
+    }
+}
+
+/// Check if string looks like a JSON number
+fn looks_like_number(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut chars = s.chars().peekable();
+
+    // Optional minus
+    if chars.peek() == Some(&'-') {
+        chars.next();
+    }
+
+    // Must have at least one digit
+    let mut has_digit = false;
+    while let Some(&ch) = chars.peek() {
+        if ch.is_ascii_digit() {
+            has_digit = true;
+            chars.next();
+        } else {
+            break;
+        }
+    }
+
+    if !has_digit {
+        return false;
+    }
+
+    // Optional decimal part
+    if chars.peek() == Some(&'.') {
+        chars.next();
+        while let Some(&ch) = chars.peek() {
+            if ch.is_ascii_digit() {
+                chars.next();
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Optional exponent
+    if let Some(&ch) = chars.peek() {
+        if ch == 'e' || ch == 'E' {
+            chars.next();
+            // Optional sign
+            if let Some(&sign) = chars.peek() {
+                if sign == '+' || sign == '-' {
+                    chars.next();
+                }
+            }
+            // Exponent digits
+            while let Some(&ch) = chars.peek() {
+                if ch.is_ascii_digit() {
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Should have consumed everything
+    chars.peek().is_none()
 }
 
 #[cfg(test)]
@@ -432,5 +1013,124 @@ mod tests {
         let lines = render_markdown(md, 80, &theme);
 
         assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn test_hard_break_parsing() {
+        // Two trailing spaces before newline should create a hard break
+        let md = "**ID:** test-id  \n**Timestamp:** 2024-01-01  \n**Method:** POST";
+        let segments = parse_markdown(md);
+
+        println!("Segments for hard break test:");
+        for (i, seg) in segments.iter().enumerate() {
+            println!("  {}: {:?}", i, seg);
+        }
+
+        // Should have HardBreak segments between the bold fields
+        let hard_break_count = segments
+            .iter()
+            .filter(|s| matches!(s, StyledSegment::HardBreak))
+            .count();
+        assert!(
+            hard_break_count >= 2,
+            "Expected at least 2 hard breaks, got {}",
+            hard_break_count
+        );
+    }
+
+    #[test]
+    fn test_actual_request_format() {
+        // Test with the EXACT format string pattern from events.rs
+        let md = format!(
+            "## 📥 HTTP Request\n\n\
+            **ID:** {}  \n\
+            **Timestamp:** {}  \n\
+            **Method:** {}  \n\
+            **Path:** {}  \n\
+            **Body Size:** {} bytes",
+            "test-id", "2024-01-01T00:00:00Z", "POST", "/v1/messages", 1234
+        );
+
+        println!("Actual format string:");
+        println!("{:?}", md);
+        println!("\nSegments:");
+        let segments = parse_markdown(&md);
+        for (i, seg) in segments.iter().enumerate() {
+            println!("  {}: {:?}", i, seg);
+        }
+
+        // Count hard breaks - should have 4 (between ID/Timestamp, Timestamp/Method, Method/Path, Path/BodySize)
+        let hard_break_count = segments
+            .iter()
+            .filter(|s| matches!(s, StyledSegment::HardBreak))
+            .count();
+        println!("\nHard break count: {}", hard_break_count);
+        assert!(
+            hard_break_count >= 4,
+            "Expected at least 4 hard breaks, got {}",
+            hard_break_count
+        );
+
+        // Also verify rendering produces multiple lines
+        let theme = Theme::default();
+        let lines = segments_to_lines(&segments, 80, &theme);
+        println!("\nRendered lines ({} total):", lines.len());
+        for (i, line) in lines.iter().enumerate() {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            println!("  {}: {:?}", i, text);
+        }
+        // Should have: heading, blank, ID, Timestamp, Method, Path, BodySize, blank = 8+ lines
+        assert!(
+            lines.len() >= 6,
+            "Expected at least 6 lines, got {}",
+            lines.len()
+        );
+    }
+
+    #[test]
+    fn test_response_with_json_body() {
+        // Test with JSON body content appended - exactly what Request/Response do
+        // NOTE: Must use \n\n before --- to prevent setext heading interpretation!
+        let body_content = "\n\n---\n\n```json\n{\"key\": \"value\"}\n```";
+        let md = format!(
+            "## 📤 HTTP Response\n\n\
+            **Request ID:** {}  \n\
+            **Timestamp:** {}  \n\
+            **Status:** {}  \n\
+            **Body Size:** {} bytes  \n\
+            **TTFB:** {}ms  \n\
+            **Total Duration:** {:.2}s{}",
+            "test-id", "2024-01-01T00:00:00Z", 200, 1234, 100, 3.81, body_content
+        );
+
+        println!("Format string with JSON body:");
+        println!("{:?}", md);
+        println!("\nSegments:");
+        let segments = parse_markdown(&md);
+        for (i, seg) in segments.iter().enumerate() {
+            println!("  {}: {:?}", i, seg);
+        }
+
+        // Count hard breaks - should have 5
+        let hard_break_count = segments
+            .iter()
+            .filter(|s| matches!(s, StyledSegment::HardBreak))
+            .count();
+        println!("\nHard break count: {}", hard_break_count);
+
+        // Verify rendering
+        let theme = Theme::default();
+        let lines = segments_to_lines(&segments, 80, &theme);
+        println!("\nRendered lines ({} total):", lines.len());
+        for (i, line) in lines.iter().enumerate() {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            println!("  {}: {:?}", i, text);
+        }
+
+        assert!(
+            hard_break_count >= 5,
+            "Expected at least 5 hard breaks, got {}",
+            hard_break_count
+        );
     }
 }

@@ -50,6 +50,27 @@ I built Aspy to understand what Claude Code was doing under the hood. Tool calls
 
 But moments like this reveal something else. When you can see the thinking, the relationship changes. It's more collaborative. More honest. You're not just receiving Claude's output—you're watching it *think*, second-guess itself, course-correct.
 
+```mermaid
+mindmap
+  root((Aspy<br/>Observability))
+    Operational
+      API calls
+      Token usage
+      Tool execution
+      Cache efficiency
+    Behavioral
+      Thinking patterns
+      Decision making
+      Error recovery
+      Course correction
+    Meta
+      Assumptions revealed
+      Blind spots exposed
+      Trust through transparency
+      Collaborative debugging
+```
+<p style="text-align: center; font-size: 0.9em; color: #a1a1aa; margin-top: -10px;"><em>Layers of observability: from API metrics to meta-awareness</em></p>
+
 And sometimes, you catch it assuming you can't see something you're actively reading.
 
 The spy always knows.

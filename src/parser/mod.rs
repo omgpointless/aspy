@@ -222,6 +222,28 @@ impl Parser {
             });
         }
 
+        // Extract assistant text content from response
+        let text_blocks: Vec<String> = response
+            .content
+            .iter()
+            .filter_map(|block| {
+                if let models::ContentBlock::Text { text } = block {
+                    Some(text.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Emit a single AssistantResponse event with all text combined
+        if !text_blocks.is_empty() {
+            let combined_text = text_blocks.join("\n\n");
+            events.push(ProxyEvent::AssistantResponse {
+                timestamp: Utc::now(),
+                content: combined_text,
+            });
+        }
+
         // Extract usage information if present
         if let Some(usage) = response.usage {
             let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
@@ -361,6 +383,10 @@ impl Parser {
                                 content: String::new(),
                                 timestamp: Utc::now(),
                             },
+                            "text" => PartialContentBlock::Text {
+                                content: String::new(),
+                                timestamp: Utc::now(),
+                            },
                             _ => PartialContentBlock::Other,
                         };
 
@@ -397,6 +423,12 @@ impl Parser {
                                         delta.get("thinking").and_then(|v| v.as_str())
                                     {
                                         content.push_str(thinking);
+                                    }
+                                }
+                                (PartialContentBlock::Text { content, .. }, "text_delta") => {
+                                    // Accumulate assistant response text
+                                    if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                                        content.push_str(text);
                                     }
                                 }
                                 _ => {}
@@ -445,6 +477,12 @@ impl Parser {
                                         content,
                                         token_estimate,
                                     });
+                                }
+                            }
+                            PartialContentBlock::Text { content, timestamp } => {
+                                if !content.is_empty() {
+                                    events
+                                        .push(ProxyEvent::AssistantResponse { timestamp, content });
                                 }
                             }
                             PartialContentBlock::Other => {}
@@ -500,6 +538,11 @@ impl Parser {
                         });
                     }
                 }
+                PartialContentBlock::Text { content, timestamp } => {
+                    if !content.is_empty() {
+                        events.push(ProxyEvent::AssistantResponse { timestamp, content });
+                    }
+                }
                 PartialContentBlock::Other => {}
             }
         }
@@ -549,6 +592,11 @@ enum PartialContentBlock {
     },
     /// Thinking block: accumulate thinking text
     Thinking {
+        content: String,
+        timestamp: chrono::DateTime<Utc>,
+    },
+    /// Text block: accumulate assistant response text
+    Text {
         content: String,
         timestamp: chrono::DateTime<Utc>,
     },

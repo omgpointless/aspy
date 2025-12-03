@@ -193,8 +193,9 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
                                         app.detail_panel.reset();
                                         // Populate cached content for clipboard copy
                                         if let Some(event) = app.events.get(idx) {
-                                            let content = format_event_detail(event);
-                                            app.detail_panel.set_content(content);
+                                            let renderable = format_event_detail(event);
+                                            app.detail_panel
+                                                .set_content(renderable.as_str().to_string());
                                         }
                                         app.modal = Some(Modal::detail(idx));
                                     }
@@ -299,14 +300,24 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
 fn handle_mouse_event(app: &mut App, mouse_event: MouseEvent) {
     match mouse_event.kind {
         MouseEventKind::ScrollUp => {
-            // Synthesize Up key event for trait dispatch
-            let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
-            app.dispatch_to_focused(key_event);
+            // If modal is open, scroll the detail panel directly
+            if app.modal.is_some() {
+                app.detail_panel.scroll_up();
+            } else {
+                // Synthesize Up key event for trait dispatch
+                let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+                app.dispatch_to_focused(key_event);
+            }
         }
         MouseEventKind::ScrollDown => {
-            // Synthesize Down key event for trait dispatch
-            let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
-            app.dispatch_to_focused(key_event);
+            // If modal is open, scroll the detail panel directly
+            if app.modal.is_some() {
+                app.detail_panel.scroll_down();
+            } else {
+                // Synthesize Down key event for trait dispatch
+                let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+                app.dispatch_to_focused(key_event);
+            }
         }
         _ => {}
     }

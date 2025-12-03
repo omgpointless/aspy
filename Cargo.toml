@@ -45,11 +45,19 @@ bytes = "1"                                                     # Efficient byte
 dirs = "5"                                                      # Platform-specific config directories
 toml = "0.8"                                                    # TOML config file parsing
 
+# Database - SQLite for lifetime statistics storage
+rusqlite = { version = "0.31", features = ["bundled"] }         # SQLite with FTS5 built-in
+r2d2 = "0.8"                                                    # Connection pooling
+r2d2_sqlite = "0.24"                                            # SQLite connection manager for r2d2
+
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }                 # Command-line argument parser
 
 # Markdown parsing for thinking panel
 pulldown-cmark = "0.10"                                         # Streaming markdown parser
+
+# Unicode display width calculation for TUI truncation
+unicode-width = "0.2"                                           # Correct width for emojis and CJK
 
 # Clipboard access
 arboard = "3"                                                   # Cross-platform clipboard (Windows/macOS/Linux)

@@ -19,18 +19,29 @@ const API_BASE = process.env.ASPY_API_URL ?? "http://127.0.0.1:8080";
 // ============================================================================
 
 /**
- * Compute user ID from API key/auth token (SHA-256, first 16 hex chars)
- * Matches the Rust proxy's hashing algorithm for consistency.
+ * Get user ID for session isolation.
  *
- * Tries: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN (OAuth)
- * Returns null if no auth token available (MCP server sandboxed)
+ * Priority order:
+ * 1. ASPY_CLIENT_ID - Explicit client ID (matches proxy's URL path routing)
+ *    Use this when connecting via http://localhost:8080/foundry/ etc.
+ * 2. ANTHROPIC_API_KEY/AUTH_TOKEN hash - Fallback for bare URL users
+ *    Use this when connecting via http://localhost:8080/ without client path
+ *
+ * Returns null if no identity can be determined.
  */
 let cachedUserId: string | null = null;
 
 function getUserId(): string | null {
   if (cachedUserId !== null) return cachedUserId;
 
-  // Try API key first, then OAuth token
+  // Priority 1: Explicit client ID (supports multi-client same-API-key setups)
+  // This matches the proxy's routing: /foundry/v1/messages → user_id = "foundry"
+  if (process.env.ASPY_CLIENT_ID) {
+    cachedUserId = process.env.ASPY_CLIENT_ID;
+    return cachedUserId;
+  }
+
+  // Priority 2: API key hash (fallback for users not using client routing)
   const authToken =
     process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
 
@@ -194,6 +205,102 @@ interface SearchResponse {
     role: string;
     text: string;
   }>;
+}
+
+// ============================================================================
+// Lifestats Type Definitions (matching Rust API responses)
+// ============================================================================
+
+interface ThinkingMatch {
+  session_id: string | null;
+  timestamp: string;
+  content: string;
+  tokens: number | null;
+  rank: number;
+}
+
+interface PromptMatch {
+  session_id: string | null;
+  timestamp: string;
+  content: string;
+  rank: number;
+}
+
+interface ResponseMatch {
+  session_id: string | null;
+  timestamp: string;
+  content: string;
+  rank: number;
+}
+
+type MatchType = "thinking" | "user_prompt" | "assistant_response";
+
+interface ContextMatch {
+  match_type: MatchType;
+  session_id: string | null;
+  timestamp: string;
+  content: string;
+  rank: number;
+}
+
+interface ThinkingSearchResponse {
+  [key: string]: unknown;
+  query: string;
+  mode: string;
+  results: ThinkingMatch[];
+}
+
+interface PromptSearchResponse {
+  [key: string]: unknown;
+  query: string;
+  mode: string;
+  results: PromptMatch[];
+}
+
+interface ResponseSearchResponse {
+  [key: string]: unknown;
+  query: string;
+  mode: string;
+  results: ResponseMatch[];
+}
+
+interface ContextSearchResponse {
+  [key: string]: unknown;
+  topic: string;
+  mode: string;
+  results: ContextMatch[];
+}
+
+interface ModelStats {
+  [key: string]: unknown;
+  model: string;
+  tokens: number;
+  cost_usd: number;
+  calls: number;
+}
+
+interface ToolStats {
+  [key: string]: unknown;
+  tool: string;
+  calls: number;
+  avg_duration_ms: number;
+  success_rate: number;
+  rejections: number;
+  errors: number;
+}
+
+interface LifetimeStats {
+  [key: string]: unknown;
+  total_sessions: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  total_tool_calls: number;
+  total_thinking_blocks: number;
+  total_prompts: number;
+  first_session: string | null;
+  last_session: string | null;
+  by_model: ModelStats[];
+  by_tool: ToolStats[];
 }
 
 // ============================================================================
@@ -589,6 +696,529 @@ server.registerTool(
         { type: "text" as const, text: JSON.stringify(data, null, 2) },
       ],
       structuredContent: data,
+    };
+  }
+);
+
+// ============================================================================
+// Lifestats Tools (FTS5 Search - Cross-Session Context Recovery)
+// ============================================================================
+
+// Helper: Format match type for display
+function formatMatchType(matchType: MatchType): string {
+  switch (matchType) {
+    case "thinking":
+      return "💭 Thinking";
+    case "user_prompt":
+      return "👤 User";
+    case "assistant_response":
+      return "🤖 Assistant";
+    default:
+      return matchType;
+  }
+}
+
+// Helper: Truncate content for summary display
+function truncateContent(content: string, maxLen: number = 200): string {
+  if (content.length <= maxLen) return content;
+  return content.slice(0, maxLen) + "...";
+}
+
+// Tool: aspy_lifestats_search_thinking
+server.registerTool(
+  "aspy_lifestats_search_thinking",
+  {
+    title: "Search Thinking Blocks (FTS5)",
+    description:
+      "Search Claude's thinking blocks across all your sessions using FTS5 full-text search. Returns results ranked by BM25 relevance. Use this to find past reasoning, analysis, and internal deliberation.",
+    inputSchema: {
+      q: z.string().min(2).describe("Search query (min 2 characters)"),
+      limit: z
+        .number()
+        .min(1)
+        .max(100)
+        .default(10)
+        .describe("Maximum results (default: 10, max: 100)"),
+      mode: z
+        .enum(["phrase", "natural", "raw"])
+        .default("phrase")
+        .describe(
+          "Search mode: phrase (exact match), natural (AND/OR/NOT operators), raw (full FTS5 syntax)"
+        ),
+    },
+    outputSchema: {
+      query: z.string(),
+      mode: z.string(),
+      results: z.array(
+        z.object({
+          session_id: z.string().nullable(),
+          timestamp: z.string(),
+          content: z.string(),
+          tokens: z.number().nullable(),
+          rank: z.number(),
+        })
+      ),
+    },
+  },
+  async ({ q, limit = 10, mode = "phrase" }) => {
+    const userId = getUserId();
+    if (!userId) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Error: Cannot determine user identity. Ensure ANTHROPIC_API_KEY is set.",
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const params = new URLSearchParams();
+    params.set("q", q);
+    params.set("limit", String(limit));
+    params.set("mode", mode);
+
+    const result = await fetchApi<ThinkingSearchResponse>(
+      `/api/lifestats/search/user/${userId}/thinking?${params}`
+    );
+
+    if (!result.ok) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${result.error.error}` }],
+        isError: true,
+      };
+    }
+
+    const data = result.data;
+
+    // Build human-readable summary
+    const summaryParts = [
+      `💭 Found ${data.results.length} thinking block(s) for "${data.query}" (mode: ${data.mode}):`,
+    ];
+
+    if (data.results.length === 0) {
+      summaryParts.push("\nNo matches found. Try different keywords or search mode.");
+    } else {
+      summaryParts.push("");
+      for (const r of data.results) {
+        const session = r.session_id?.slice(0, 8) ?? "unknown";
+        const date = r.timestamp.split("T")[0];
+        summaryParts.push(`**[${date}]** (session: ${session}, rank: ${r.rank.toFixed(2)})`);
+        summaryParts.push(`${truncateContent(r.content)}\n`);
+      }
+    }
+
+    return {
+      content: [
+        { type: "text" as const, text: summaryParts.join("\n") },
+        { type: "text" as const, text: JSON.stringify(data, null, 2) },
+      ],
+      structuredContent: data,
+    };
+  }
+);
+
+// Tool: aspy_lifestats_search_prompts
+server.registerTool(
+  "aspy_lifestats_search_prompts",
+  {
+    title: "Search User Prompts (FTS5)",
+    description:
+      "Search your past prompts/messages across all sessions using FTS5 full-text search. Returns results ranked by BM25 relevance. Use this to find what you asked previously.",
+    inputSchema: {
+      q: z.string().min(2).describe("Search query (min 2 characters)"),
+      limit: z
+        .number()
+        .min(1)
+        .max(100)
+        .default(10)
+        .describe("Maximum results (default: 10, max: 100)"),
+      mode: z
+        .enum(["phrase", "natural", "raw"])
+        .default("phrase")
+        .describe(
+          "Search mode: phrase (exact match), natural (AND/OR/NOT operators), raw (full FTS5 syntax)"
+        ),
+    },
+    outputSchema: {
+      query: z.string(),
+      mode: z.string(),
+      results: z.array(
+        z.object({
+          session_id: z.string().nullable(),
+          timestamp: z.string(),
+          content: z.string(),
+          rank: z.number(),
+        })
+      ),
+    },
+  },
+  async ({ q, limit = 10, mode = "phrase" }) => {
+    const userId = getUserId();
+    if (!userId) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Error: Cannot determine user identity. Ensure ANTHROPIC_API_KEY is set.",
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const params = new URLSearchParams();
+    params.set("q", q);
+    params.set("limit", String(limit));
+    params.set("mode", mode);
+
+    const result = await fetchApi<PromptSearchResponse>(
+      `/api/lifestats/search/user/${userId}/prompts?${params}`
+    );
+
+    if (!result.ok) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${result.error.error}` }],
+        isError: true,
+      };
+    }
+
+    const data = result.data;
+
+    // Build human-readable summary
+    const summaryParts = [
+      `👤 Found ${data.results.length} user prompt(s) for "${data.query}" (mode: ${data.mode}):`,
+    ];
+
+    if (data.results.length === 0) {
+      summaryParts.push("\nNo matches found. Try different keywords or search mode.");
+    } else {
+      summaryParts.push("");
+      for (const r of data.results) {
+        const session = r.session_id?.slice(0, 8) ?? "unknown";
+        const date = r.timestamp.split("T")[0];
+        summaryParts.push(`**[${date}]** (session: ${session}, rank: ${r.rank.toFixed(2)})`);
+        summaryParts.push(`${truncateContent(r.content)}\n`);
+      }
+    }
+
+    return {
+      content: [
+        { type: "text" as const, text: summaryParts.join("\n") },
+        { type: "text" as const, text: JSON.stringify(data, null, 2) },
+      ],
+      structuredContent: data,
+    };
+  }
+);
+
+// Tool: aspy_lifestats_search_responses
+server.registerTool(
+  "aspy_lifestats_search_responses",
+  {
+    title: "Search Assistant Responses (FTS5)",
+    description:
+      "Search Claude's past responses across all your sessions using FTS5 full-text search. Returns results ranked by BM25 relevance. Use this to find previous explanations, code, or answers.",
+    inputSchema: {
+      q: z.string().min(2).describe("Search query (min 2 characters)"),
+      limit: z
+        .number()
+        .min(1)
+        .max(100)
+        .default(10)
+        .describe("Maximum results (default: 10, max: 100)"),
+      mode: z
+        .enum(["phrase", "natural", "raw"])
+        .default("phrase")
+        .describe(
+          "Search mode: phrase (exact match), natural (AND/OR/NOT operators), raw (full FTS5 syntax)"
+        ),
+    },
+    outputSchema: {
+      query: z.string(),
+      mode: z.string(),
+      results: z.array(
+        z.object({
+          session_id: z.string().nullable(),
+          timestamp: z.string(),
+          content: z.string(),
+          rank: z.number(),
+        })
+      ),
+    },
+  },
+  async ({ q, limit = 10, mode = "phrase" }) => {
+    const userId = getUserId();
+    if (!userId) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Error: Cannot determine user identity. Ensure ANTHROPIC_API_KEY is set.",
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const params = new URLSearchParams();
+    params.set("q", q);
+    params.set("limit", String(limit));
+    params.set("mode", mode);
+
+    const result = await fetchApi<ResponseSearchResponse>(
+      `/api/lifestats/search/user/${userId}/responses?${params}`
+    );
+
+    if (!result.ok) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${result.error.error}` }],
+        isError: true,
+      };
+    }
+
+    const data = result.data;
+
+    // Build human-readable summary
+    const summaryParts = [
+      `🤖 Found ${data.results.length} assistant response(s) for "${data.query}" (mode: ${data.mode}):`,
+    ];
+
+    if (data.results.length === 0) {
+      summaryParts.push("\nNo matches found. Try different keywords or search mode.");
+    } else {
+      summaryParts.push("");
+      for (const r of data.results) {
+        const session = r.session_id?.slice(0, 8) ?? "unknown";
+        const date = r.timestamp.split("T")[0];
+        summaryParts.push(`**[${date}]** (session: ${session}, rank: ${r.rank.toFixed(2)})`);
+        summaryParts.push(`${truncateContent(r.content)}\n`);
+      }
+    }
+
+    return {
+      content: [
+        { type: "text" as const, text: summaryParts.join("\n") },
+        { type: "text" as const, text: JSON.stringify(data, null, 2) },
+      ],
+      structuredContent: data,
+    };
+  }
+);
+
+// Tool: aspy_lifestats_context (MOST IMPORTANT - Combined Context Recovery)
+server.registerTool(
+  "aspy_lifestats_context",
+  {
+    title: "Context Recovery (FTS5)",
+    description:
+      "RECOMMENDED: Combined context recovery searching across thinking blocks, user prompts, AND assistant responses simultaneously. Returns unified results ranked by BM25 relevance. Best tool for recovering lost context after session compaction.",
+    inputSchema: {
+      topic: z.string().min(2).describe("Topic to search for (min 2 characters)"),
+      limit: z
+        .number()
+        .min(1)
+        .max(100)
+        .default(10)
+        .describe("Maximum total results (default: 10, max: 100)"),
+      mode: z
+        .enum(["phrase", "natural", "raw"])
+        .default("phrase")
+        .describe(
+          "Search mode: phrase (exact match), natural (AND/OR/NOT operators), raw (full FTS5 syntax)"
+        ),
+    },
+    outputSchema: {
+      topic: z.string(),
+      mode: z.string(),
+      results: z.array(
+        z.object({
+          match_type: z.string(),
+          session_id: z.string().nullable(),
+          timestamp: z.string(),
+          content: z.string(),
+          rank: z.number(),
+        })
+      ),
+    },
+  },
+  async ({ topic, limit = 10, mode = "phrase" }) => {
+    const userId = getUserId();
+    if (!userId) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Error: Cannot determine user identity. Ensure ANTHROPIC_API_KEY is set.",
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const params = new URLSearchParams();
+    params.set("topic", topic);
+    params.set("limit", String(limit));
+    params.set("mode", mode);
+
+    const result = await fetchApi<ContextSearchResponse>(
+      `/api/lifestats/context/user/${userId}?${params}`
+    );
+
+    if (!result.ok) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${result.error.error}` }],
+        isError: true,
+      };
+    }
+
+    const data = result.data;
+
+    // Build human-readable summary with source type indicators
+    const summaryParts = [
+      `🔍 Context Recovery: Found ${data.results.length} match(es) for "${data.topic}" (mode: ${data.mode}):`,
+    ];
+
+    if (data.results.length === 0) {
+      summaryParts.push("\nNo matches found. Try:");
+      summaryParts.push("  - Different keywords");
+      summaryParts.push('  - mode: "natural" with AND/OR operators');
+      summaryParts.push("  - Broader search terms");
+    } else {
+      summaryParts.push("");
+      for (const r of data.results) {
+        const session = r.session_id?.slice(0, 8) ?? "unknown";
+        const date = r.timestamp.split("T")[0];
+        const typeLabel = formatMatchType(r.match_type);
+        summaryParts.push(
+          `${typeLabel} **[${date}]** (session: ${session}, rank: ${r.rank.toFixed(2)})`
+        );
+        summaryParts.push(`${truncateContent(r.content)}\n`);
+      }
+    }
+
+    return {
+      content: [
+        { type: "text" as const, text: summaryParts.join("\n") },
+        { type: "text" as const, text: JSON.stringify(data, null, 2) },
+      ],
+      structuredContent: data,
+    };
+  }
+);
+
+// Tool: aspy_lifestats_stats
+server.registerTool(
+  "aspy_lifestats_stats",
+  {
+    title: "Lifetime Statistics",
+    description:
+      "Get your lifetime usage statistics across all sessions: total tokens, costs, tool usage, model breakdown, and time range. Your personal Claude Code time machine summary.",
+    inputSchema: {},
+    outputSchema: {
+      total_sessions: z.number(),
+      total_tokens: z.number(),
+      total_cost_usd: z.number(),
+      total_tool_calls: z.number(),
+      total_thinking_blocks: z.number(),
+      total_prompts: z.number(),
+      first_session: z.string().nullable(),
+      last_session: z.string().nullable(),
+      by_model: z.array(
+        z.object({
+          model: z.string(),
+          tokens: z.number(),
+          cost_usd: z.number(),
+          calls: z.number(),
+        })
+      ),
+      by_tool: z.array(
+        z.object({
+          tool: z.string(),
+          calls: z.number(),
+          avg_duration_ms: z.number(),
+          success_rate: z.number(),
+          rejections: z.number(),
+          errors: z.number(),
+        })
+      ),
+    },
+  },
+  async () => {
+    const userId = getUserId();
+    if (!userId) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Error: Cannot determine user identity. Ensure ANTHROPIC_API_KEY is set.",
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const result = await fetchApi<LifetimeStats>(
+      `/api/lifestats/stats/user/${userId}`
+    );
+
+    if (!result.ok) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${result.error.error}` }],
+        isError: true,
+      };
+    }
+
+    const stats = result.data;
+
+    // Build human-readable summary
+    const summaryParts = ["📊 **Your Claude Code Lifetime Stats**\n"];
+
+    // Overview
+    summaryParts.push(`**Sessions:** ${stats.total_sessions}`);
+    summaryParts.push(`**Total Tokens:** ${(stats.total_tokens / 1_000_000).toFixed(2)}M`);
+    summaryParts.push(`**Total Cost:** $${stats.total_cost_usd.toFixed(2)}`);
+    summaryParts.push(`**Tool Calls:** ${stats.total_tool_calls.toLocaleString()}`);
+    summaryParts.push(`**Thinking Blocks:** ${stats.total_thinking_blocks.toLocaleString()}`);
+
+    // Time range
+    if (stats.first_session && stats.last_session) {
+      const first = stats.first_session.split("T")[0];
+      const last = stats.last_session.split("T")[0];
+      summaryParts.push(`\n**Time Range:** ${first} → ${last}`);
+    }
+
+    // Top models
+    if (stats.by_model.length > 0) {
+      summaryParts.push("\n**By Model:**");
+      for (const m of stats.by_model.slice(0, 5)) {
+        summaryParts.push(
+          `  - ${m.model}: ${(m.tokens / 1_000_000).toFixed(2)}M tokens, $${m.cost_usd.toFixed(2)}`
+        );
+      }
+    }
+
+    // Top tools
+    if (stats.by_tool.length > 0) {
+      summaryParts.push("\n**Top Tools:**");
+      for (const t of stats.by_tool.slice(0, 5)) {
+        const failures = t.rejections + t.errors;
+        const failureDetail = failures > 0
+          ? ` [${t.rejections} rejected, ${t.errors} errors]`
+          : "";
+        summaryParts.push(
+          `  - ${t.tool}: ${t.calls} calls (avg ${t.avg_duration_ms.toFixed(0)}ms, ${(t.success_rate * 100).toFixed(0)}% success)${failureDetail}`
+        );
+      }
+    }
+
+    return {
+      content: [
+        { type: "text" as const, text: summaryParts.join("\n") },
+        { type: "text" as const, text: JSON.stringify(stats, null, 2) },
+      ],
+      structuredContent: stats,
     };
   }
 );

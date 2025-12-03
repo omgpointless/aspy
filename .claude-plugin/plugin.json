@@ -15,7 +15,10 @@
   "mcpServers": {
     "aspy": {
       "command": "npx",
-      "args": ["-y", "aspy-mcp"]
+      "args": ["-y", "aspy-mcp"],
+      "env": {
+        "ASPY_CLIENT_ID": "${ASPY_CLIENT_ID}"
+      }
     }
   }
 }

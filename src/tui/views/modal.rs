@@ -6,6 +6,7 @@
 
 use crate::tui::app::App;
 use crate::tui::components::scrollbar::{render_scrollbar_raw, ScrollbarStyle};
+use crate::tui::markdown;
 use crate::tui::modal::Modal;
 use crate::tui::traits::{Copyable, Scrollable};
 use ratatui::{
@@ -15,6 +16,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
+
+use super::events::RenderableContent;
 
 /// Render a modal dialog as a centered overlay
 pub fn render(f: &mut Frame, modal: &Modal, app: &mut App) {
@@ -118,7 +121,11 @@ fn render_help(f: &mut Frame, app: &App) {
     f.render_widget(paragraph, area);
 }
 
-/// Render the detail modal overlay with 2D scrolling
+/// Render the detail modal overlay
+///
+/// Dispatches on RenderableContent type:
+/// - Markdown: text wrapping + markdown formatting, vertical scroll only
+/// - Structured: preserve formatting, 2D scrolling for wide content (JSON)
 fn render_detail(f: &mut Frame, app: &mut App, event_idx: usize) {
     use super::format_event_detail;
 
@@ -128,9 +135,7 @@ fn render_detail(f: &mut Frame, app: &mut App, event_idx: usize) {
         return;
     };
 
-    let content = format_event_detail(event);
-    let lines: Vec<&str> = content.lines().collect();
-    let total_lines = lines.len();
+    let renderable = format_event_detail(event);
 
     // Use nearly full screen (90% width, 85% height)
     let frame_area = f.area();
@@ -144,6 +149,87 @@ fn render_detail(f: &mut Frame, app: &mut App, event_idx: usize) {
     // Calculate viewport dimensions (subtract borders)
     let viewport_height = area.height.saturating_sub(2) as usize;
     let viewport_width = area.width.saturating_sub(2) as usize;
+
+    match renderable {
+        RenderableContent::Markdown(content) => {
+            render_markdown_detail(f, app, area, &content, viewport_width, viewport_height);
+        }
+        RenderableContent::Structured(content) => {
+            render_structured_detail(f, app, area, &content, viewport_width, viewport_height);
+        }
+    }
+}
+
+/// Render markdown content with text wrapping (vertical scroll only)
+fn render_markdown_detail(
+    f: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    content: &str,
+    viewport_width: usize,
+    viewport_height: usize,
+) {
+    // Use markdown renderer for text wrapping and formatting
+    let lines = markdown::render_markdown(content, viewport_width, &app.theme);
+    let total_lines = lines.len();
+
+    // Update scroll dimensions
+    app.detail_panel
+        .scroll_state_mut()
+        .update_dimensions(total_lines, viewport_height);
+
+    let vertical_offset = app.detail_panel.scroll_state().offset();
+    let v_start = vertical_offset.min(total_lines.saturating_sub(viewport_height));
+
+    // Scroll info
+    let scroll_info = if total_lines > viewport_height {
+        format!(" ({}/{}) ", v_start + 1, total_lines)
+    } else {
+        String::new()
+    };
+
+    let paragraph = Paragraph::new(lines)
+        .style(
+            Style::default()
+                .fg(app.theme.foreground)
+                .bg(app.theme.background),
+        )
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(app.theme.border_type)
+                .border_style(Style::default().fg(app.theme.highlight))
+                .title(format!(" Event Details{} ", scroll_info))
+                .title_bottom(
+                    Line::from(" ↑↓:scroll  PgUp/Dn:page  y:copy  Esc:close ").centered(),
+                ),
+        )
+        .scroll((v_start as u16, 0));
+
+    f.render_widget(paragraph, area);
+
+    // Render vertical scrollbar only
+    render_scrollbar_raw(
+        f,
+        area,
+        total_lines,
+        viewport_height,
+        v_start,
+        ScrollbarStyle::Arrows,
+    );
+}
+
+/// Render structured content with 2D scrolling (for JSON, code output)
+fn render_structured_detail(
+    f: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    content: &str,
+    viewport_width: usize,
+    viewport_height: usize,
+) {
+    let lines: Vec<&str> = content.lines().collect();
+    let total_lines = lines.len();
 
     // Update detail panel scroll dimensions
     app.detail_panel

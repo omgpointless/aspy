@@ -17,6 +17,7 @@ use crate::config::{ClientsConfig, Config};
 use crate::events::{generate_id, ProxyEvent};
 use crate::parser::models::CapturedHeaders;
 use crate::parser::Parser;
+use crate::pipeline::{EventPipeline, ProcessContext};
 use crate::{SharedContextState, StreamingThinking};
 use anyhow::{Context, Result};
 use augmentation::{AugmentationContext, AugmentationPipeline, StopReason};
@@ -41,6 +42,43 @@ use tokio_stream::wrappers::ReceiverStream;
 
 /// Maximum request body size (50MB) - prevents DoS via huge uploads
 const MAX_REQUEST_BODY_SIZE: usize = 50 * 1024 * 1024;
+
+/// Extract user prompt from request body
+///
+/// Finds the last user message in the messages array and returns its content.
+/// Handles both string and array (multipart) content formats.
+fn extract_user_prompt(body: &serde_json::Value) -> Option<String> {
+    // Get the messages array
+    let messages = body.get("messages")?.as_array()?;
+
+    // Find the last user message (iterate in reverse)
+    for message in messages.iter().rev() {
+        if message.get("role")?.as_str()? == "user" {
+            // Handle both string and array content formats
+            match message.get("content")? {
+                serde_json::Value::String(s) => return Some(s.clone()),
+                serde_json::Value::Array(parts) => {
+                    // Concatenate text parts
+                    let text: Vec<&str> = parts
+                        .iter()
+                        .filter_map(|p| {
+                            if p.get("type")?.as_str()? == "text" {
+                                p.get("text")?.as_str()
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if !text.is_empty() {
+                        return Some(text.join("\n"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
 
 /// Shared state for the proxy server
 #[derive(Clone)]
@@ -71,6 +109,10 @@ pub struct ProxyState {
     pub log_dir: std::path::PathBuf,
     /// Client and provider configuration for multi-user routing
     clients: ClientsConfig,
+    /// Event processing pipeline (optional, for lifestats storage and other processors)
+    pipeline: Option<Arc<EventPipeline>>,
+    /// Query interface for lifestats database (optional, requires lifestats enabled)
+    pub lifestats_query: Option<Arc<crate::pipeline::lifestats_query::LifestatsQuery>>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,6 +146,10 @@ pub struct SharedState {
     pub context: SharedContextState,
     /// Buffer for streaming thinking content to TUI
     pub streaming_thinking: StreamingThinking,
+    /// Event processing pipeline (optional)
+    pub pipeline: Option<Arc<EventPipeline>>,
+    /// Query interface for lifestats database (optional, requires lifestats enabled)
+    pub lifestats_query: Option<Arc<crate::pipeline::lifestats_query::LifestatsQuery>>,
 }
 
 /// Context for handling an API response
@@ -179,6 +225,8 @@ pub async fn start_proxy(
         sessions: shared.sessions,
         log_dir: config.log_dir.clone(),
         clients: config.clients.clone(),
+        pipeline: shared.pipeline,
+        lifestats_query: shared.lifestats_query,
     };
 
     // Build the router - API endpoints + proxy handler
@@ -196,6 +244,56 @@ pub async fn start_proxy(
         .route("/api/session/end", axum::routing::post(api::session_end))
         // Log search endpoint
         .route("/api/search", axum::routing::post(api::search_logs))
+        // Lifestats endpoints
+        .route(
+            "/api/lifestats/health",
+            axum::routing::get(api::lifestats_health),
+        )
+        .route(
+            "/api/lifestats/cleanup",
+            axum::routing::post(api::lifestats_cleanup),
+        )
+        .route(
+            "/api/lifestats/search/thinking",
+            axum::routing::get(api::lifestats_search_thinking),
+        )
+        .route(
+            "/api/lifestats/search/prompts",
+            axum::routing::get(api::lifestats_search_prompts),
+        )
+        .route(
+            "/api/lifestats/search/responses",
+            axum::routing::get(api::lifestats_search_responses),
+        )
+        .route(
+            "/api/lifestats/context",
+            axum::routing::get(api::lifestats_context),
+        )
+        .route(
+            "/api/lifestats/stats",
+            axum::routing::get(api::lifestats_stats),
+        )
+        // User-scoped lifestats endpoints
+        .route(
+            "/api/lifestats/search/user/:user_id/thinking",
+            axum::routing::get(api::lifestats_search_user_thinking),
+        )
+        .route(
+            "/api/lifestats/search/user/:user_id/prompts",
+            axum::routing::get(api::lifestats_search_user_prompts),
+        )
+        .route(
+            "/api/lifestats/search/user/:user_id/responses",
+            axum::routing::get(api::lifestats_search_user_responses),
+        )
+        .route(
+            "/api/lifestats/context/user/:user_id",
+            axum::routing::get(api::lifestats_context_user),
+        )
+        .route(
+            "/api/lifestats/stats/user/:user_id",
+            axum::routing::get(api::lifestats_stats_user),
+        )
         // Proxy handler (catch-all)
         .route("/*path", any(proxy_handler))
         .with_state(state);
@@ -223,16 +321,42 @@ pub async fn start_proxy(
 
 impl ProxyState {
     /// Send an event to TUI, storage, and user's session
-    /// We ignore errors here to avoid blocking the proxy if a receiver is slow or closed
+    ///
+    /// Events are processed through the pipeline (if configured) before dispatch.
+    /// We ignore errors here to avoid blocking the proxy if a receiver is slow or closed.
     async fn send_event(&self, event: ProxyEvent, user_id: Option<&str>) {
+        // Build ProcessContext for pipeline
+        let session_id = user_id.and_then(|uid| {
+            self.sessions
+                .lock()
+                .ok()
+                .and_then(|sessions| sessions.get_session_id(&sessions::UserId::new(uid)))
+        });
+
+        let ctx = ProcessContext::new(
+            session_id.as_deref(),
+            user_id,
+            false, // is_demo = false for real traffic
+        );
+
+        // Process through pipeline if available
+        let final_event = if let Some(pipeline) = &self.pipeline {
+            match pipeline.process(&event, &ctx) {
+                Some(processed) => processed.into_owned(),
+                None => return, // Event was filtered out
+            }
+        } else {
+            event
+        };
+
         // Send to TUI and storage channels
-        let _ = self.event_tx_tui.send(event.clone()).await;
-        let _ = self.event_tx_storage.send(event.clone()).await;
+        let _ = self.event_tx_tui.send(final_event.clone()).await;
+        let _ = self.event_tx_storage.send(final_event.clone()).await;
 
         // Also record to user's session if we have a user_id
         if let Some(uid) = user_id {
             if let Ok(mut sessions) = self.sessions.lock() {
-                sessions.record_event(&sessions::UserId::new(uid), event);
+                sessions.record_event(&sessions::UserId::new(uid), final_event);
             }
         }
     }
@@ -370,6 +494,23 @@ async fn proxy_handler(
     } else {
         None
     };
+
+    // Extract and emit user prompt from request (if POST to /messages)
+    if is_messages_endpoint && method == "POST" {
+        if let Some(ref body) = request_body {
+            if let Some(user_prompt) = extract_user_prompt(body) {
+                state
+                    .send_event(
+                        ProxyEvent::UserPrompt {
+                            timestamp: Utc::now(),
+                            content: user_prompt,
+                        },
+                        user_id.as_deref(),
+                    )
+                    .await;
+            }
+        }
+    }
 
     // Emit request event (use original path for logging, not stripped path)
     state
@@ -523,7 +664,7 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
     let streaming_thinking = state.streaming_thinking.clone();
     let context_state = state.context_state.clone();
     let augmentation = state.augmentation.clone();
-    let sessions = state.sessions.clone();
+    let _sessions = state.sessions.clone();
     let user_id_clone = user_id.clone();
 
     // Spawn task to stream response while accumulating
@@ -677,21 +818,12 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
         // Stream complete - now parse and emit events
         let duration = start.elapsed();
 
-        // Helper to send events (includes session recording)
+        // Helper to send events through pipeline (includes session recording, lifestats, etc.)
         let send_event = |event: ProxyEvent| {
-            let tx_tui = event_tx_tui.clone();
-            let tx_storage = event_tx_storage.clone();
-            let sessions_ref = sessions.clone();
+            let state_ref = state.clone();
             let uid = user_id_clone.clone();
             async move {
-                let _ = tx_tui.send(event.clone()).await;
-                let _ = tx_storage.send(event.clone()).await;
-                // Also record to user's session
-                if let Some(ref user_id) = uid {
-                    if let Ok(mut sessions) = sessions_ref.lock() {
-                        sessions.record_event(&sessions::UserId::new(user_id), event);
-                    }
-                }
+                state_ref.send_event(event, uid.as_deref()).await;
             }
         };
 

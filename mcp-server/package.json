@@ -1,7 +1,7 @@
 {
   "name": "aspy-mcp",
-  "version": "0.1.1",
-  "description": "MCP server for aspy - exposes session stats, events, and context to Claude Code",
+  "version": "0.2.0",
+  "description": "MCP server for aspy - exposes session stats, events, context, and FTS5 search to Claude Code",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -20,9 +20,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0",
     "eslint": "^9.0.0",
-    "prettier": "^3.4.0"
+    "prettier": "^3.4.0",
+    "typescript": "^5.7.0"
   },
   "engines": {
     "node": ">=18.0.0"

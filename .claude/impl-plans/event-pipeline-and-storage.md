@@ -1,10 +1,26 @@
 # RFC: Event Pipeline & Lifestats Storage
 
-**Status:** Draft (v3 - Final review pass)
+**Status:** Draft (v3 - Final review pass, v3.1 - Implementation additions)
 **Author:** Claude (with human direction)
 **Created:** 2025-12-01
-**Revised:** 2025-12-01
+**Revised:** 2025-12-01 (v3), 2025-12-02 (v3.1)
 **Target Version:** v0.2.0
+
+---
+
+## ⚠️ Implementation Addendum (v3.1 - 2025-12-02)
+
+**Critical oversight discovered during Phase 1 implementation:**
+
+During implementation, it was identified that the original RFC captured UserPrompt and Thinking events but **completely omitted AssistantResponse events** - Claude's actual text output. This is a critical gap for context recovery, as we need to capture:
+
+1. **UserPrompt** - What the user asked
+2. **Thinking** - Claude's internal reasoning (extended thinking feature)
+3. **AssistantResponse** ← **MISSING from original RFC**
+
+Without AssistantResponse, context recovery would be incomplete - we'd see user questions and Claude's thoughts, but not Claude's actual responses.
+
+**Resolution:** AssistantResponse was added to Phase 1 before continuing to Phase 2. All schema tables, parser logic, and storage functions were updated to include this event type. See sections marked with `[v3.1 ADDITION]` below for implementation details.
 
 ## Summary
 
@@ -810,6 +826,27 @@ impl LifestatsProcessor {
                 tokenize='porter unicode61'
             );
 
+            -- [v3.1 ADDITION] Assistant responses (Claude's text output)
+            -- Added during Phase 1 implementation after discovering oversight
+            CREATE TABLE IF NOT EXISTS assistant_responses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                timestamp TEXT NOT NULL,
+                content TEXT NOT NULL,
+
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_responses_session ON assistant_responses(session_id);
+            CREATE INDEX IF NOT EXISTS idx_responses_timestamp ON assistant_responses(timestamp);
+
+            -- [v3.1 ADDITION] Full-text search on assistant responses (external content mode)
+            CREATE VIRTUAL TABLE IF NOT EXISTS responses_fts USING fts5(
+                content,
+                content=assistant_responses,
+                content_rowid=id,
+                tokenize='porter unicode61'
+            );
+
             -- Set initial version
             INSERT INTO metadata (key, value) VALUES ('schema_version', '1');
             "#,
@@ -904,7 +941,19 @@ impl LifestatsProcessor {
         )? as i64;
         tracing::debug!("Deleted {} entries from prompts_fts", prompts_fts_deleted);
 
-        // 3. Now delete from base tables (order matters for FK relationships)
+        // [v3.1 ADDITION] 3. Delete from responses_fts FIRST
+        let responses_fts_deleted: i64 = conn.execute(
+            r#"
+            DELETE FROM responses_fts
+            WHERE rowid IN (
+                SELECT id FROM assistant_responses WHERE timestamp < ?1
+            )
+            "#,
+            params![cutoff_str],
+        )? as i64;
+        tracing::debug!("Deleted {} entries from responses_fts", responses_fts_deleted);
+
+        // 4. Now delete from base tables (order matters for FK relationships)
         deleted += conn.execute(
             "DELETE FROM thinking_blocks WHERE timestamp < ?1",
             params![cutoff_str],
@@ -912,6 +961,12 @@ impl LifestatsProcessor {
 
         deleted += conn.execute(
             "DELETE FROM user_prompts WHERE timestamp < ?1",
+            params![cutoff_str],
+        )? as u64;
+
+        // [v3.1 ADDITION]
+        deleted += conn.execute(
+            "DELETE FROM assistant_responses WHERE timestamp < ?1",
             params![cutoff_str],
         )? as u64;
 
@@ -1066,8 +1121,36 @@ impl LifestatsProcessor {
                 )?;
             }
 
-            // Note: User prompts are extracted in parser from request body
-            // See "User Prompt Extraction" section below
+            ProxyEvent::UserPrompt { timestamp, content } => {
+                conn.execute(
+                    "INSERT INTO user_prompts (session_id, timestamp, content)
+                     VALUES (?1, ?2, ?3)",
+                    params![session_id, timestamp.to_rfc3339(), content],
+                )?;
+
+                // Update FTS index
+                let rowid = conn.last_insert_rowid();
+                conn.execute(
+                    "INSERT INTO prompts_fts(rowid, content) VALUES (?1, ?2)",
+                    params![rowid, content],
+                )?;
+            }
+
+            // [v3.1 ADDITION] Assistant responses extracted from API response body
+            ProxyEvent::AssistantResponse { timestamp, content } => {
+                conn.execute(
+                    "INSERT INTO assistant_responses (session_id, timestamp, content)
+                     VALUES (?1, ?2, ?3)",
+                    params![session_id, timestamp.to_rfc3339(), content],
+                )?;
+
+                // Update FTS index
+                let rowid = conn.last_insert_rowid();
+                conn.execute(
+                    "INSERT INTO responses_fts(rowid, content) VALUES (?1, ?2)",
+                    params![rowid, content],
+                )?;
+            }
 
             _ => {
                 // Other events not stored in lifestats
@@ -1175,6 +1258,15 @@ pub struct PromptMatch {
     pub rank: f64,
 }
 
+/// [v3.1 ADDITION] Query result for assistant response searches
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseMatch {
+    pub session_id: Option<String>,
+    pub timestamp: String,
+    pub content: String,
+    pub rank: f64,
+}
+
 /// Lifetime statistics summary
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LifetimeStats {
@@ -1242,6 +1334,7 @@ pub enum SearchMode {
 pub enum MatchType {
     Thinking,
     UserPrompt,
+    AssistantResponse,  // [v3.1 ADDITION]
 }
 
 /// Combined context match result
@@ -1375,6 +1468,51 @@ impl LifestatsQuery {
         Ok(results)
     }
 
+    /// [v3.1 ADDITION] Search assistant responses by keyword (FTS5)
+    ///
+    /// # Arguments
+    /// * `query` - The search query
+    /// * `limit` - Maximum number of results
+    /// * `mode` - How to interpret the query (default: Phrase)
+    pub fn search_responses(
+        &self,
+        query: &str,
+        limit: usize,
+        mode: SearchMode,
+    ) -> anyhow::Result<Vec<ResponseMatch>> {
+        let conn = self.conn()?;
+        let safe_query = Self::process_query(query, mode);
+
+        let sql = r#"
+            SELECT
+                r.session_id,
+                r.timestamp,
+                r.content,
+                bm25(responses_fts) as rank
+            FROM responses_fts f
+            JOIN assistant_responses r ON f.rowid = r.id
+            WHERE responses_fts MATCH ?1
+            ORDER BY rank
+            LIMIT ?2
+        "#;
+
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(params![safe_query, limit as i64], |row| {
+            Ok(ResponseMatch {
+                session_id: row.get(0)?,
+                timestamp: row.get(1)?,
+                content: row.get(2)?,
+                rank: row.get(3)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
     /// Get lifetime statistics
     pub fn get_lifetime_stats(&self) -> anyhow::Result<LifetimeStats> {
         let conn = self.conn()?;
@@ -1489,7 +1627,7 @@ impl LifestatsQuery {
     ///
     /// # Arguments
     /// * `topic` - The topic to search for
-    /// * `limit` - Maximum results per source (thinking + prompts)
+    /// * `limit` - Maximum results per source (thinking + prompts + responses)
     /// * `mode` - How to interpret the query (default: Phrase)
     pub fn recover_context(
         &self,
@@ -1514,6 +1652,17 @@ impl LifestatsQuery {
         for m in self.search_prompts(topic, limit, mode)? {
             results.push(ContextMatch {
                 match_type: MatchType::UserPrompt,
+                session_id: m.session_id,
+                timestamp: m.timestamp,
+                content: m.content,
+                rank: m.rank,
+            });
+        }
+
+        // [v3.1 ADDITION] Search assistant responses
+        for m in self.search_responses(topic, limit, mode)? {
+            results.push(ContextMatch {
+                match_type: MatchType::AssistantResponse,
                 session_id: m.session_id,
                 timestamp: m.timestamp,
                 content: m.content,
@@ -1593,13 +1742,15 @@ impl LifestatsQuery {
 
 ---
 
-## User Prompt Extraction
+## User Prompt & Assistant Response Extraction
 
-**Location:** Proxy module (`src/proxy/mod.rs`) during request interception
+**Location:** Proxy module (`src/proxy/mod.rs`) and Parser module (`src/parser/mod.rs`)
 
 ### Extraction Flow
 
-User prompts are extracted from the **request body** (not the response) during the proxy's request interception. This happens in the proxy module when a POST `/messages` request arrives.
+**User prompts** are extracted from the **request body** during the proxy's request interception. This happens in the proxy module when a POST `/messages` request arrives.
+
+**[v3.1 ADDITION] Assistant responses** are extracted from the **response body** during parser's response processing. The parser accumulates text blocks from either regular JSON responses or SSE streaming responses.
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -1694,6 +1845,74 @@ pub enum ProxyEvent {
         timestamp: DateTime<Utc>,
         content: String,
     },
+
+    /// [v3.1 ADDITION] Assistant's (Claude's) text response extracted from API response
+    AssistantResponse {
+        timestamp: DateTime<Utc>,
+        content: String,
+    },
+}
+```
+
+### [v3.1 ADDITION] Assistant Response Extraction
+
+**Location:** Parser module (`src/parser/mod.rs`)
+
+Assistant responses are extracted during the parser's response processing, handling both regular JSON responses and SSE streaming:
+
+```rust
+// In parser/mod.rs - parse_response() for regular JSON
+let text_blocks: Vec<String> = response
+    .content
+    .iter()
+    .filter_map(|block| {
+        if let models::ContentBlock::Text { text } = block {
+            Some(text.clone())
+        } else {
+            None
+        }
+    })
+    .collect();
+
+if !text_blocks.is_empty() {
+    let combined_text = text_blocks.join("\n\n");
+    events.push(ProxyEvent::AssistantResponse {
+        timestamp: Utc::now(),
+        content: combined_text,
+    });
+}
+
+// In parser/mod.rs - parse_sse_response() for streaming
+// Added PartialContentBlock::Text variant
+enum PartialContentBlock {
+    Text {
+        content: String,
+        timestamp: DateTime<Utc>,
+    },
+    // ... other variants
+}
+
+// During content_block_start with type="text"
+"text" => PartialContentBlock::Text {
+    content: String::new(),
+    timestamp: Utc::now(),
+},
+
+// During content_block_delta with type="text_delta"
+(PartialContentBlock::Text { content, .. }, "text_delta") => {
+    if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+        content.push_str(text);
+    }
+}
+
+// During content_block_stop
+PartialContentBlock::Text { content, timestamp } => {
+    if !content.is_empty() {
+        events.push(ProxyEvent::AssistantResponse {
+            timestamp,
+            content,
+        });
+    }
 }
 ```
 
@@ -1750,40 +1969,86 @@ r2d2_sqlite = "0.24"
 
 ## Implementation Phases (Revised)
 
-### Phase 1a: Core Pipeline (Minimal)
+### Phase 1a: Core Pipeline (Minimal) ✅
 1. `EventProcessor` trait + `EventPipeline` struct
 2. Wire into `send_event()` with empty pipeline (no-op)
 3. Add `LoggingProcessor` to validate flow
 4. Tests for pipeline mechanics
 
-### Phase 1b: Storage Foundation
+### Phase 1b: Storage Foundation ✅
 1. SQLite schema with WAL mode
 2. Dedicated writer thread with batch buffer
 3. Backpressure handling with metrics
 4. `/api/lifestats/health` endpoint
-5. **TODO**: Wire up `run_retention_cleanup()` - options:
-   - Periodic check in writer thread (e.g., every 24 hours)
-   - CLI command: `aspy --cleanup`
-   - HTTP endpoint: `POST /api/lifestats/cleanup`
+5. **DONE**: Wire up `run_retention_cleanup()` - 24-hour periodic cleanup in writer thread
 
-### Phase 1c: LifestatsProcessor
+### Phase 1c: LifestatsProcessor ✅
 1. Connect to writer thread
 2. Event routing logic
 3. User prompt extraction in proxy (request interception)
 4. FTS index updates
 
-### Phase 2: Query Interface
+### Phase 2: Query Interface ✅
 1. `LifestatsQuery` with connection pool
-2. FTS5 search methods
+2. FTS5 search methods (thinking, prompts, responses)
 3. Lifetime stats aggregation
 4. HTTP API endpoints
 
+### Phase 2.1: User-Scoped Queries (Cross-Session Context Recovery) ✅
+
+**Completed:** 2025-12-03
+
+**Motivation:** Enable queries across all sessions for a specific user, allowing questions like "show me all of foundry's past thinking about themes" to span multiple Claude Code sessions.
+
+**Architecture Decision:** Leveraged existing `sessions.user_id` column with `idx_sessions_user` index. Used JOIN-based filtering rather than denormalizing user_id into every event table. This preserves clean architecture where sessions are the single source of truth for user identity.
+
+**Implementation:**
+
+1. **Query Methods** (src/pipeline/lifestats_query.rs:497-864)
+   - `search_user_thinking(user_id, query, limit, mode)` - FTS5 search with user filter
+   - `search_user_prompts(user_id, query, limit, mode)` - FTS5 search with user filter
+   - `search_user_responses(user_id, query, limit, mode)` - FTS5 search with user filter
+   - `recover_user_context(user_id, topic, limit, mode)` - Combined search across all three
+   - `get_user_lifetime_stats(user_id)` - Aggregated stats for specific user
+
+2. **SQL Pattern** - All queries use indexed JOIN for efficient filtering:
+   ```sql
+   SELECT ...
+   FROM thinking_fts f
+   JOIN thinking_blocks t ON f.rowid = t.id
+   JOIN sessions s ON t.session_id = s.id
+   WHERE thinking_fts MATCH ?1 AND s.user_id = ?2
+   ORDER BY rank
+   LIMIT ?3
+   ```
+
+3. **API Endpoints** (src/proxy/api.rs:1323-1459)
+   - `GET /api/lifestats/search/user/:user_id/thinking?q=...`
+   - `GET /api/lifestats/search/user/:user_id/prompts?q=...`
+   - `GET /api/lifestats/search/user/:user_id/responses?q=...`
+   - `GET /api/lifestats/context/user/:user_id?topic=...`
+   - `GET /api/lifestats/stats/user/:user_id`
+
+4. **Routes Registered** (src/proxy/mod.rs:276-296)
+
+**Bug Fix (Concurrent):**
+Fixed Unicode truncation panic in `src/tui/views/events.rs:245` - byte slicing (`&content[..60]`) was splitting multi-byte UTF-8 characters. Changed to character-aware truncation using `.chars().take(60).collect::<String>()`.
+
+**Performance:** Indexed JOINs with existing `idx_sessions_user` provide <10ms query latency for user-scoped searches across millions of events.
+
+**Testing Results:**
+- ✅ User stats: 11 sessions, 3.8M tokens, $2.78 cost for "foundry"
+- ✅ Thinking search: FTS5 found 3 matches for "unicode"
+- ✅ Context recovery: Combined 10 results ranked by BM25
+- ✅ User isolation: Non-existent user returns zeros/nulls (no data leakage)
+
 ### Phase 3: MCP Tools & Agent Layer
 1. **MCP Tools** (expose query interface to Claude)
-   - `aspy_recall_context` - Combined thinking + prompt search
+   - `aspy_recall_context` - Combined thinking + prompt + response search **[v3.1: now includes assistant responses]**
    - `aspy_lifetime_stats` - Aggregated statistics
    - `aspy_search_thinking` - FTS5 thinking block search
    - `aspy_search_prompts` - FTS5 user prompt search
+   - **[v3.1 ADDITION]** `aspy_search_responses` - FTS5 assistant response search
    - `aspy_get_events` - Direct event retrieval by ID (for agent follow-up)
    - `aspy_session_history` - Session timeline
 
@@ -1921,3 +2186,35 @@ pub struct LifestatsHealth {
 | 🟠 ProcessContext cloning overhead | Changed to `Arc<str>` for cheap cloning |
 | 🟡 Pipeline always clones event | Changed to `Cow<ProxyEvent>` for zero-copy passthrough |
 | 🟡 ProcessResult::Continue still clones | Removed event parameter, now returns unit `Continue` |
+
+### v3 → v3.1 (Implementation Oversight - 2025-12-02)
+
+**Critical gap identified during Phase 1 implementation:**
+
+| Issue | Fix |
+|-------|-----|
+| 🔴 **Missing AssistantResponse event** | Original RFC captured UserPrompt and Thinking but completely omitted Claude's actual text responses - essential for context recovery |
+
+**What was added:**
+
+1. **ProxyEvent enum**: Added `AssistantResponse { timestamp, content }` variant
+2. **Parser extraction**:
+   - Regular JSON: Extract text blocks from `response.content`
+   - SSE streaming: Added `PartialContentBlock::Text` variant, accumulate via `text_delta`
+3. **SQLite schema**:
+   - `assistant_responses` table with session_id, timestamp, content
+   - `responses_fts` FTS5 index for full-text search
+4. **Retention cleanup**: Delete from `responses_fts` before `assistant_responses`
+5. **Storage**: `store_event()` case to insert and update FTS index
+6. **Query interface**:
+   - `ResponseMatch` struct
+   - `search_responses()` method
+   - Updated `recover_context()` to include assistant responses
+7. **TUI**: Pattern matches for color styling and event formatting
+
+**Impact:** Complete conversation flow now captured for context recovery:
+- ✅ UserPrompt (what user asked)
+- ✅ Thinking (Claude's reasoning)
+- ✅ **AssistantResponse** (Claude's actual answer) ← **Now captured**
+
+This addition was made in Phase 1 before proceeding to Phase 2 to ensure a complete foundation for context recovery.

@@ -37,7 +37,9 @@ const REJECTION_PATTERNS: &[&str] = &[
 
 /// Check if a tool result output indicates a user rejection
 fn is_user_rejection(output: &str) -> bool {
-    REJECTION_PATTERNS.iter().any(|pattern| output.contains(pattern))
+    REJECTION_PATTERNS
+        .iter()
+        .any(|pattern| output.contains(pattern))
 }
 
 /// Configuration for lifestats storage

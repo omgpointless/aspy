@@ -837,7 +837,11 @@ fn highlight_json_line(line: &str, theme: &Theme) -> Vec<Span<'static>> {
                         break;
                     }
                 }
-                let token = if is_key { JsonToken::Key } else { JsonToken::String };
+                let token = if is_key {
+                    JsonToken::Key
+                } else {
+                    JsonToken::String
+                };
                 flush(&mut spans, &current, token, theme);
                 current.clear();
                 in_string = false;
@@ -1023,8 +1027,15 @@ mod tests {
         }
 
         // Should have HardBreak segments between the bold fields
-        let hard_break_count = segments.iter().filter(|s| matches!(s, StyledSegment::HardBreak)).count();
-        assert!(hard_break_count >= 2, "Expected at least 2 hard breaks, got {}", hard_break_count);
+        let hard_break_count = segments
+            .iter()
+            .filter(|s| matches!(s, StyledSegment::HardBreak))
+            .count();
+        assert!(
+            hard_break_count >= 2,
+            "Expected at least 2 hard breaks, got {}",
+            hard_break_count
+        );
     }
 
     #[test]
@@ -1037,11 +1048,7 @@ mod tests {
             **Method:** {}  \n\
             **Path:** {}  \n\
             **Body Size:** {} bytes",
-            "test-id",
-            "2024-01-01T00:00:00Z",
-            "POST",
-            "/v1/messages",
-            1234
+            "test-id", "2024-01-01T00:00:00Z", "POST", "/v1/messages", 1234
         );
 
         println!("Actual format string:");
@@ -1053,9 +1060,16 @@ mod tests {
         }
 
         // Count hard breaks - should have 4 (between ID/Timestamp, Timestamp/Method, Method/Path, Path/BodySize)
-        let hard_break_count = segments.iter().filter(|s| matches!(s, StyledSegment::HardBreak)).count();
+        let hard_break_count = segments
+            .iter()
+            .filter(|s| matches!(s, StyledSegment::HardBreak))
+            .count();
         println!("\nHard break count: {}", hard_break_count);
-        assert!(hard_break_count >= 4, "Expected at least 4 hard breaks, got {}", hard_break_count);
+        assert!(
+            hard_break_count >= 4,
+            "Expected at least 4 hard breaks, got {}",
+            hard_break_count
+        );
 
         // Also verify rendering produces multiple lines
         let theme = Theme::default();
@@ -1066,7 +1080,11 @@ mod tests {
             println!("  {}: {:?}", i, text);
         }
         // Should have: heading, blank, ID, Timestamp, Method, Path, BodySize, blank = 8+ lines
-        assert!(lines.len() >= 6, "Expected at least 6 lines, got {}", lines.len());
+        assert!(
+            lines.len() >= 6,
+            "Expected at least 6 lines, got {}",
+            lines.len()
+        );
     }
 
     #[test]
@@ -1082,13 +1100,7 @@ mod tests {
             **Body Size:** {} bytes  \n\
             **TTFB:** {}ms  \n\
             **Total Duration:** {:.2}s{}",
-            "test-id",
-            "2024-01-01T00:00:00Z",
-            200,
-            1234,
-            100,
-            3.81,
-            body_content
+            "test-id", "2024-01-01T00:00:00Z", 200, 1234, 100, 3.81, body_content
         );
 
         println!("Format string with JSON body:");
@@ -1100,7 +1112,10 @@ mod tests {
         }
 
         // Count hard breaks - should have 5
-        let hard_break_count = segments.iter().filter(|s| matches!(s, StyledSegment::HardBreak)).count();
+        let hard_break_count = segments
+            .iter()
+            .filter(|s| matches!(s, StyledSegment::HardBreak))
+            .count();
         println!("\nHard break count: {}", hard_break_count);
 
         // Verify rendering
@@ -1112,6 +1127,10 @@ mod tests {
             println!("  {}: {:?}", i, text);
         }
 
-        assert!(hard_break_count >= 5, "Expected at least 5 hard breaks, got {}", hard_break_count);
+        assert!(
+            hard_break_count >= 5,
+            "Expected at least 5 hard breaks, got {}",
+            hard_break_count
+        );
     }
 }

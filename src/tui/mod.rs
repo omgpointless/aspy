@@ -194,7 +194,8 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
                                         // Populate cached content for clipboard copy
                                         if let Some(event) = app.events.get(idx) {
                                             let renderable = format_event_detail(event);
-                                            app.detail_panel.set_content(renderable.as_str().to_string());
+                                            app.detail_panel
+                                                .set_content(renderable.as_str().to_string());
                                         }
                                         app.modal = Some(Modal::detail(idx));
                                     }

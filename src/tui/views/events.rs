@@ -121,7 +121,13 @@ fn render_thinking_panel(f: &mut Frame, area: Rect, app: &mut App) {
 fn sanitize_preview(content: &str) -> String {
     content
         .chars()
-        .map(|c| if c.is_control() || c == '\n' || c == '\r' || c == '\t' { ' ' } else { c })
+        .map(|c| {
+            if c.is_control() || c == '\n' || c == '\r' || c == '\t' {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()

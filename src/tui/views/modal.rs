@@ -200,7 +200,9 @@ fn render_markdown_detail(
                 .border_type(app.theme.border_type)
                 .border_style(Style::default().fg(app.theme.highlight))
                 .title(format!(" Event Details{} ", scroll_info))
-                .title_bottom(Line::from(" ↑↓:scroll  PgUp/Dn:page  y:copy  Esc:close ").centered()),
+                .title_bottom(
+                    Line::from(" ↑↓:scroll  PgUp/Dn:page  y:copy  Esc:close ").centered(),
+                ),
         )
         .scroll((v_start as u16, 0));
 

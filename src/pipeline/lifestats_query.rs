@@ -129,8 +129,7 @@ impl SearchMode {
                     // Escape quotes and parentheses
                     let escaped = base
                         .replace('"', "\"\"")
-                        .replace('(', "")
-                        .replace(')', "")
+                        .replace(['(', ')'], "")
                         .replace(':', " "); // Remove column prefixes
 
                     result.push_str(&escaped);

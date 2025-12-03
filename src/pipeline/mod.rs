@@ -30,9 +30,9 @@ pub mod logging;
 pub enum ProcessResult {
     /// Event continues unchanged (side-effect only processor)
     Continue,
-    /// Event was transformed - use this new version
+    /// Event was transformed - use this new version (boxed to reduce enum size)
     #[allow(dead_code)] // Phase 2: Redaction/transformation processors
-    Transform(ProxyEvent),
+    Transform(Box<ProxyEvent>),
     /// Event should be dropped (filtered out)
     #[allow(dead_code)] // Phase 2: Filtering processors
     Drop,
@@ -46,6 +46,7 @@ pub enum ProcessResult {
 /// Uses `Arc<str>` for cheap cloning - processor side-effects often need
 /// to clone context for async operations, and Arc clone is just a refcount bump.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ProcessContext {
     /// Current session ID (if known)
     pub session_id: Option<Arc<str>>,
@@ -67,15 +68,6 @@ impl ProcessContext {
     }
 }
 
-impl Default for ProcessContext {
-    fn default() -> Self {
-        Self {
-            session_id: None,
-            user_id: None,
-            is_demo: false,
-        }
-    }
-}
 
 /// Trait for event processors
 ///
@@ -168,8 +160,8 @@ impl EventPipeline {
                     // No change, keep current (borrowed or owned)
                 }
                 ProcessResult::Transform(new_event) => {
-                    // Processor transformed the event
-                    current = Cow::Owned(new_event);
+                    // Processor transformed the event (unbox from heap)
+                    current = Cow::Owned(*new_event);
                 }
                 ProcessResult::Drop => {
                     tracing::trace!("Event dropped by processor '{}'", processor.name());

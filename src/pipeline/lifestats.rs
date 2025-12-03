@@ -128,7 +128,7 @@ pub struct MetricsSnapshot {
 
 /// Commands sent to the writer thread
 enum WriterCommand {
-    Store(ProxyEvent, ProcessContext),
+    Store(Box<ProxyEvent>, ProcessContext),
     Shutdown,
 }
 
@@ -264,7 +264,7 @@ impl LifestatsProcessor {
             // Wait for event with timeout (for periodic flush)
             match rx.recv_timeout(config.flush_interval) {
                 Ok(WriterCommand::Store(event, ctx)) => {
-                    batch.push((event, ctx));
+                    batch.push((*event, ctx));
                     metrics
                         .batch_pending
                         .store(batch.len() as u64, Ordering::Relaxed);
@@ -935,7 +935,7 @@ impl EventProcessor for LifestatsProcessor {
         // Try to send to writer thread
         match self
             .tx
-            .try_send(WriterCommand::Store(event.clone(), ctx.clone()))
+            .try_send(WriterCommand::Store(Box::new(event.clone()), ctx.clone()))
         {
             Ok(()) => {
                 // Successfully queued

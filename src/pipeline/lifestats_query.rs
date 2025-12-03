@@ -226,6 +226,8 @@ pub struct ToolStats {
     pub calls: i64,
     pub avg_duration_ms: f64,
     pub success_rate: f64,
+    pub rejections: i64,
+    pub errors: i64,
 }
 
 /// Query interface for lifestats database
@@ -848,7 +850,9 @@ impl LifestatsQuery {
                     tc.tool_name,
                     COUNT(*) as calls,
                     COALESCE(AVG(tr.duration_ms), 0) as avg_duration,
-                    COALESCE(AVG(CAST(tr.success AS FLOAT)), 1.0) as success_rate
+                    COALESCE(AVG(CAST(tr.success AS FLOAT)), 1.0) as success_rate,
+                    SUM(CASE WHEN tr.is_rejection = 1 THEN 1 ELSE 0 END) as rejections,
+                    SUM(CASE WHEN tr.success = 0 AND tr.is_rejection = 0 THEN 1 ELSE 0 END) as errors
                 FROM tool_calls tc
                 JOIN sessions s ON tc.session_id = s.id
                 LEFT JOIN tool_results tr ON tc.id = tr.call_id
@@ -863,6 +867,8 @@ impl LifestatsQuery {
                     calls: row.get(1)?,
                     avg_duration_ms: row.get(2)?,
                     success_rate: row.get(3)?,
+                    rejections: row.get(4)?,
+                    errors: row.get(5)?,
                 })
             })?;
             for row in rows {
@@ -967,7 +973,9 @@ impl LifestatsQuery {
                     tc.tool_name,
                     COUNT(*) as calls,
                     COALESCE(AVG(tr.duration_ms), 0) as avg_duration,
-                    COALESCE(AVG(CAST(tr.success AS FLOAT)), 1.0) as success_rate
+                    COALESCE(AVG(CAST(tr.success AS FLOAT)), 1.0) as success_rate,
+                    SUM(CASE WHEN tr.is_rejection = 1 THEN 1 ELSE 0 END) as rejections,
+                    SUM(CASE WHEN tr.success = 0 AND tr.is_rejection = 0 THEN 1 ELSE 0 END) as errors
                 FROM tool_calls tc
                 LEFT JOIN tool_results tr ON tc.id = tr.call_id
                 GROUP BY tc.tool_name
@@ -980,6 +988,8 @@ impl LifestatsQuery {
                     calls: row.get(1)?,
                     avg_duration_ms: row.get(2)?,
                     success_rate: row.get(3)?,
+                    rejections: row.get(4)?,
+                    errors: row.get(5)?,
                 })
             })?;
             for row in rows {

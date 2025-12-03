@@ -1,3 +1,7 @@
+---
+description: "Generate context file before /compact"
+---
+
 # Temporal Context Export for Compact Survival
 
 Gather recent relevant tangents and context to ensure a smooth transition through `/compact` without losing continuity or the user's current direction.

@@ -1,5 +1,5 @@
 ---
-description: "View context window status"
+description: "Check context window usage %"
 ---
 
 Use the `aspy_context` MCP tool to check current context window usage.

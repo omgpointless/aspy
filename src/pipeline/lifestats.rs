@@ -28,6 +28,18 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+/// Known Claude Code rejection message patterns.
+/// These indicate the user rejected a tool call (not an actual error).
+const REJECTION_PATTERNS: &[&str] = &[
+    "The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file)",
+    "The user doesn't want to take this action right now",
+];
+
+/// Check if a tool result output indicates a user rejection
+fn is_user_rejection(output: &str) -> bool {
+    REJECTION_PATTERNS.iter().any(|pattern| output.contains(pattern))
+}
+
 /// Configuration for lifestats storage
 #[derive(Debug, Clone)]
 pub struct LifestatsConfig {
@@ -480,6 +492,7 @@ impl LifestatsProcessor {
                 output_json TEXT,
                 duration_ms INTEGER,
                 success INTEGER,
+                is_rejection INTEGER DEFAULT 0,
 
                 FOREIGN KEY (call_id) REFERENCES tool_calls(id)
             );
@@ -775,21 +788,26 @@ impl LifestatsProcessor {
                 success,
                 ..
             } => {
+                let output_str = output.to_string();
                 let output_json = if config.store_tool_io {
-                    Some(output.to_string())
+                    Some(&output_str)
                 } else {
                     None
                 };
 
+                // Detect user rejections vs actual errors
+                let is_rejection = !success && is_user_rejection(&output_str);
+
                 conn.execute(
-                    "INSERT OR REPLACE INTO tool_results (call_id, timestamp, output_json, duration_ms, success)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT OR REPLACE INTO tool_results (call_id, timestamp, output_json, duration_ms, success, is_rejection)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         id,
                         timestamp.to_rfc3339(),
                         output_json,
                         duration.as_millis() as i64,
-                        *success as i32
+                        *success as i32,
+                        is_rejection as i32
                     ],
                 )?;
             }

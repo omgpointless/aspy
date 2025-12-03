@@ -285,6 +285,8 @@ interface ToolStats {
   calls: number;
   avg_duration_ms: number;
   success_rate: number;
+  rejections: number;
+  errors: number;
 }
 
 interface LifetimeStats {
@@ -1137,6 +1139,8 @@ server.registerTool(
           calls: z.number(),
           avg_duration_ms: z.number(),
           success_rate: z.number(),
+          rejections: z.number(),
+          errors: z.number(),
         })
       ),
     },
@@ -1199,8 +1203,12 @@ server.registerTool(
     if (stats.by_tool.length > 0) {
       summaryParts.push("\n**Top Tools:**");
       for (const t of stats.by_tool.slice(0, 5)) {
+        const failures = t.rejections + t.errors;
+        const failureDetail = failures > 0
+          ? ` [${t.rejections} rejected, ${t.errors} errors]`
+          : "";
         summaryParts.push(
-          `  - ${t.tool}: ${t.calls} calls (avg ${t.avg_duration_ms.toFixed(0)}ms, ${(t.success_rate * 100).toFixed(0)}% success)`
+          `  - ${t.tool}: ${t.calls} calls (avg ${t.avg_duration_ms.toFixed(0)}ms, ${(t.success_rate * 100).toFixed(0)}% success)${failureDetail}`
         );
       }
     }

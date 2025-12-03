@@ -22,9 +22,20 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let bp = Breakpoint::from_width(area.width);
 
     let status_text = if !bp.at_least(Breakpoint::Wide) {
-        // Compact format with icons for narrow terminals
-        let token_info = if stats.total_tokens() > 0 {
-            format!(" │ 💰 ${:.2}", stats.total_cost())
+        // Compact format for narrow terminals
+        let token_info = if stats.total_input_tokens > 0 || stats.total_output_tokens > 0 {
+            let cache_info = if stats.total_cache_read_tokens > 0 {
+                format!(" 📦{:.0}%", stats.cache_hit_rate())
+            } else {
+                String::new()
+            };
+            format!(
+                " │ {}/{}{}│ ${:.2}",
+                format_compact_number(stats.total_input_tokens),
+                format_compact_number(stats.total_output_tokens),
+                cache_info,
+                stats.total_cost()
+            )
         } else {
             String::new()
         };
@@ -40,24 +51,23 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         )
     } else {
         // Full format for wide terminals
-        let token_info = if stats.total_tokens() > 0 {
-            let cost = stats.total_cost();
-            let savings = stats.cache_savings();
-
-            if savings > 0.0 {
+        let token_info = if stats.total_input_tokens > 0 || stats.total_output_tokens > 0 {
+            let cache_info = if stats.total_cache_read_tokens > 0 {
                 format!(
-                    " │ {} tok │ ${:.2} │ Saved: ${:.2}",
-                    format_compact_number(stats.total_tokens()),
-                    cost,
-                    savings
+                    " │ 📦 {} ({:.0}%)",
+                    format_compact_number(stats.total_cache_read_tokens),
+                    stats.cache_hit_rate()
                 )
             } else {
-                format!(
-                    " │ {} tok │ ${:.2}",
-                    format_compact_number(stats.total_tokens()),
-                    cost
-                )
-            }
+                String::new()
+            };
+            format!(
+                " │ {}/{}{} │ ${:.2}",
+                format_compact_number(stats.total_input_tokens),
+                format_compact_number(stats.total_output_tokens),
+                cache_info,
+                stats.total_cost()
+            )
         } else {
             String::new()
         };

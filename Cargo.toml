@@ -28,6 +28,7 @@ serde_json = "1.0"                                              # JSON support
 # Logging and tracing
 tracing = "0.1"                                                 # Application-level tracing
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }  # Log collection
+tracing-appender = "0.2"                                        # File logging with rotation
 
 # Error handling
 anyhow = "1.0"                                                  # Flexible error handling

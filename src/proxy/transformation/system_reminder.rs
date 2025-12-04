@@ -50,7 +50,23 @@ pub struct WhenCondition {
 impl WhenCondition {
     /// Check if all conditions are met
     pub fn evaluate(&self, ctx: &TransformContext) -> bool {
-        self.check_turn_number(ctx) && self.check_tool_results(ctx) && self.check_client_id(ctx)
+        let turn_ok = self.check_turn_number(ctx);
+        let tools_ok = self.check_tool_results(ctx);
+        let client_ok = self.check_client_id(ctx);
+        let result = turn_ok && tools_ok && client_ok;
+
+        tracing::debug!(
+            turn_cond = ?self.turn_number,
+            actual_turn = ctx.turn_number,
+            turn_ok,
+            tools_cond = ?self.has_tool_results,
+            actual_tools = ctx.tool_result_count,
+            tools_ok,
+            result,
+            "Condition evaluation"
+        );
+
+        result
     }
 
     fn check_turn_number(&self, ctx: &TransformContext) -> bool {
@@ -346,18 +362,32 @@ impl TagEditor {
         let tags = self.collect_tags();
         let mut blocks = parse_tagged_blocks(&result, &tags);
 
+        tracing::debug!(
+            tags = ?tags,
+            block_count = blocks.len(),
+            "apply_rules_remove_replace_only: parsed blocks"
+        );
+
         // Apply Remove rules (only to blocks matching the rule's tag)
         for rule in &self.rules {
             if let TagRule::Remove { tag, pattern, when } = rule {
+                tracing::debug!(
+                    rule_tag = %tag,
+                    rule_pattern = %pattern,
+                    has_when = when.is_some(),
+                    "Processing Remove rule"
+                );
                 // Check conditions
                 if let Some(ref cond) = when {
                     if !cond.evaluate(ctx) {
+                        tracing::debug!("Remove rule skipped: condition not met");
                         continue;
                     }
                 }
                 let before_len = blocks.len();
                 blocks.retain(|b| !(b.tag == *tag && pattern.is_match(&b.content)));
                 if blocks.len() != before_len {
+                    tracing::debug!(removed = before_len - blocks.len(), "Blocks removed");
                     modified = true;
                 }
             }
@@ -413,18 +443,36 @@ impl TagEditor {
         // Parse existing blocks for all tags referenced by rules
         let mut blocks = parse_tagged_blocks(&result, &tags);
 
+        tracing::debug!(
+            tags = ?tags,
+            block_count = blocks.len(),
+            blocks_summary = ?blocks.iter().map(|b| (&b.tag, b.content.chars().take(50).collect::<String>())).collect::<Vec<_>>(),
+            "apply_rules: parsed blocks"
+        );
+
         // Apply Remove rules first (only to blocks matching the rule's tag)
         for rule in &self.rules {
             if let TagRule::Remove { tag, pattern, when } = rule {
+                tracing::debug!(
+                    rule_tag = %tag,
+                    rule_pattern = %pattern,
+                    has_when = when.is_some(),
+                    "Processing Remove rule (apply_rules)"
+                );
                 // Check conditions
                 if let Some(ref cond) = when {
                     if !cond.evaluate(ctx) {
+                        tracing::debug!("Remove rule skipped: condition not met");
                         continue;
                     }
                 }
                 let before_len = blocks.len();
                 blocks.retain(|b| !(b.tag == *tag && pattern.is_match(&b.content)));
                 if blocks.len() != before_len {
+                    tracing::debug!(
+                        removed = before_len - blocks.len(),
+                        "Blocks removed by Remove rule"
+                    );
                     modified = true;
                 }
             }
@@ -535,6 +583,14 @@ impl RequestTransformer for TagEditor {
             return TransformResult::Unchanged;
         }
 
+        tracing::debug!(
+            turn = ctx.turn_number,
+            tool_results = ctx.tool_result_count,
+            client = ctx.client_id,
+            rules = self.rules.len(),
+            "TagEditor::transform called"
+        );
+
         // Get messages array
         let messages = match body.get("messages").and_then(|m| m.as_array()) {
             Some(m) => m,
@@ -616,6 +672,14 @@ impl RequestTransformer for TagEditor {
 
                 let last_text_idx = text_block_indices.last().copied();
 
+                tracing::debug!(
+                    text_block_count = text_block_indices.len(),
+                    text_block_indices = ?text_block_indices,
+                    last_text_idx = ?last_text_idx,
+                    total_content_blocks = content_arr.len(),
+                    "Processing Array content structure"
+                );
+
                 // Track indices of text blocks that become empty (to delete later)
                 let mut empty_block_indices: Vec<usize> = Vec::new();
 
@@ -649,6 +713,79 @@ impl RequestTransformer for TagEditor {
                         removed_idx = idx,
                         "Removed empty text block after transformation"
                     );
+                }
+
+                // ─────────────────────────────────────────────────────────────
+                // Process tool_result content fields (Remove/Replace only)
+                // ─────────────────────────────────────────────────────────────
+                // Claude Code injects <system-reminder> tags into tool_result
+                // content fields, not just text blocks. We need to scan those too.
+                for (idx, block) in content_arr.iter_mut().enumerate() {
+                    if block.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                        continue;
+                    }
+
+                    // Handle string content
+                    if let Some(content_str) = block
+                        .get("content")
+                        .and_then(|c| c.as_str())
+                        .map(String::from)
+                    {
+                        if let Some(new_content) =
+                            self.apply_rules_remove_replace_only(&content_str, ctx)
+                        {
+                            // Don't remove tool_result even if content becomes empty
+                            let final_content = if new_content.trim().is_empty() {
+                                " ".to_string() // Minimal valid content
+                            } else {
+                                new_content
+                            };
+                            block["content"] = Value::String(final_content);
+                            any_modified = true;
+                            tracing::debug!(
+                                tool_result_idx = idx,
+                                "Applied Remove/Replace rules to tool_result content"
+                            );
+                        }
+                    }
+                    // Handle array content (nested text blocks within tool_result)
+                    else if let Some(nested_arr) =
+                        block.get("content").and_then(|c| c.as_array()).cloned()
+                    {
+                        let mut nested_modified = false;
+                        let mut new_nested: Vec<Value> = Vec::with_capacity(nested_arr.len());
+
+                        for nested_block in nested_arr {
+                            if nested_block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                if let Some(text) =
+                                    nested_block.get("text").and_then(|t| t.as_str())
+                                {
+                                    if let Some(new_text) =
+                                        self.apply_rules_remove_replace_only(text, ctx)
+                                    {
+                                        nested_modified = true;
+                                        if !new_text.trim().is_empty() {
+                                            let mut updated = nested_block.clone();
+                                            updated["text"] = Value::String(new_text);
+                                            new_nested.push(updated);
+                                        }
+                                        // Skip empty text blocks (don't add to new_nested)
+                                        continue;
+                                    }
+                                }
+                            }
+                            new_nested.push(nested_block);
+                        }
+
+                        if nested_modified {
+                            block["content"] = Value::Array(new_nested);
+                            any_modified = true;
+                            tracing::debug!(
+                                tool_result_idx = idx,
+                                "Applied Remove/Replace rules to nested tool_result content"
+                            );
+                        }
+                    }
                 }
 
                 // If no text blocks but we have Inject rules, append one
@@ -824,17 +961,24 @@ World"#;
         assert!(result.contains("World"));
     }
 
+    // Helper to create a default test context
+    fn test_ctx() -> TransformContext<'static> {
+        TransformContext::new(None, "/v1/messages", Some("claude-3"))
+    }
+
     #[test]
     fn test_inject_rule() {
         let rules = vec![TagRule::Inject {
             tag: "system-reminder".to_string(),
             content: "Injected content".to_string(),
             position: InjectPosition::End,
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
         let text = "Hello world";
-        let result = editor.apply_rules(text).unwrap();
+        let ctx = test_ctx();
+        let result = editor.apply_rules(text, &ctx).unwrap();
 
         assert!(result.contains("Injected content"));
         assert!(result.contains("<system-reminder>"));
@@ -845,6 +989,7 @@ World"#;
         let rules = vec![TagRule::Remove {
             tag: "system-reminder".to_string(),
             pattern: Regex::new("noisy").unwrap(),
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -856,7 +1001,8 @@ This is noisy and should be removed
 This should stay
 </system-reminder>"#;
 
-        let result = editor.apply_rules(text).unwrap();
+        let ctx = test_ctx();
+        let result = editor.apply_rules(text, &ctx).unwrap();
         assert!(!result.contains("noisy"));
         assert!(result.contains("This should stay"));
     }
@@ -867,6 +1013,7 @@ This should stay
             tag: "system-reminder".to_string(),
             pattern: Regex::new("old-url\\.com").unwrap(),
             replacement: "new-url.com".to_string(),
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -874,7 +1021,8 @@ This should stay
 Visit old-url.com for docs
 </system-reminder>"#;
 
-        let result = editor.apply_rules(text).unwrap();
+        let ctx = test_ctx();
+        let result = editor.apply_rules(text, &ctx).unwrap();
         assert!(result.contains("new-url.com"));
         assert!(!result.contains("old-url.com"));
     }
@@ -885,6 +1033,7 @@ Visit old-url.com for docs
             tag: "system-reminder".to_string(),
             content: "Custom context".to_string(),
             position: InjectPosition::End,
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -912,12 +1061,14 @@ Visit old-url.com for docs
         let rules = vec![TagRule::Remove {
             tag: "system-reminder".to_string(),
             pattern: Regex::new("nonexistent").unwrap(),
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
         let text = "Just plain text without any matching content";
+        let ctx = test_ctx();
 
-        assert!(editor.apply_rules(text).is_none());
+        assert!(editor.apply_rules(text, &ctx).is_none());
     }
 
     // ============================================================================
@@ -934,6 +1085,7 @@ Visit old-url.com for docs
             tag: "system-reminder".to_string(),
             content: "Injected content".to_string(),
             position: InjectPosition::End,
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -1017,6 +1169,7 @@ Visit old-url.com for docs
         let rules = vec![TagRule::Remove {
             tag: "system-reminder".to_string(),
             pattern: Regex::new("Learning output style").unwrap(),
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -1073,6 +1226,7 @@ Visit old-url.com for docs
             tag: "system-reminder".to_string(),
             content: "Context info".to_string(),
             position: InjectPosition::End,
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -1123,6 +1277,7 @@ Visit old-url.com for docs
             tag: "system-reminder".to_string(),
             content: "Added context".to_string(),
             position: InjectPosition::End,
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -1163,6 +1318,7 @@ Visit old-url.com for docs
             tag: "system-reminder".to_string(),
             pattern: Regex::new("old-value").unwrap(),
             replacement: "new-value".to_string(),
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -1214,6 +1370,7 @@ Visit old-url.com for docs
             tag: "system-reminder".to_string(),
             content: "Injected at start".to_string(),
             position: InjectPosition::Start,
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -1222,7 +1379,8 @@ Visit old-url.com for docs
 Existing reminder
 </system-reminder>"#;
 
-        let result = editor.apply_rules(text).unwrap();
+        let ctx = test_ctx();
+        let result = editor.apply_rules(text, &ctx).unwrap();
 
         // Should have both reminders
         assert!(result.contains("Injected at start"));
@@ -1244,6 +1402,7 @@ Existing reminder
             tag: "system-reminder".to_string(),
             content: "Injected before".to_string(),
             position: InjectPosition::Before(Regex::new("existing").unwrap()),
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -1252,7 +1411,8 @@ Existing reminder
 This is existing content
 </system-reminder>"#;
 
-        let result = editor.apply_rules(text).unwrap();
+        let ctx = test_ctx();
+        let result = editor.apply_rules(text, &ctx).unwrap();
 
         // Should have both reminders
         assert!(result.contains("Injected before"));
@@ -1274,6 +1434,7 @@ This is existing content
             tag: "system-reminder".to_string(),
             content: "Injected after".to_string(),
             position: InjectPosition::After(Regex::new("existing").unwrap()),
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -1282,7 +1443,8 @@ This is existing content
 This is existing content
 </system-reminder>"#;
 
-        let result = editor.apply_rules(text).unwrap();
+        let ctx = test_ctx();
+        let result = editor.apply_rules(text, &ctx).unwrap();
 
         // Should have both reminders
         assert!(result.contains("Injected after"));
@@ -1307,6 +1469,7 @@ This is existing content
         let rules = vec![TagRule::Remove {
             tag: "system-reminder".to_string(),
             pattern: Regex::new(".*").unwrap(), // Match everything
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -1318,7 +1481,8 @@ Should be removed
 Should stay
 </aspy-context>"#;
 
-        let result = editor.apply_rules(text).unwrap();
+        let ctx = test_ctx();
+        let result = editor.apply_rules(text, &ctx).unwrap();
 
         // system-reminder content should be gone
         assert!(
@@ -1338,6 +1502,7 @@ Should stay
             tag: "aspy-context".to_string(),
             pattern: Regex::new("old").unwrap(),
             replacement: "new".to_string(),
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
@@ -1348,7 +1513,8 @@ Contains old value - should stay unchanged
 Contains old value - should become new
 </aspy-context>"#;
 
-        let result = editor.apply_rules(text).unwrap();
+        let ctx = test_ctx();
+        let result = editor.apply_rules(text, &ctx).unwrap();
 
         // system-reminder should still have "old"
         assert!(
@@ -1369,11 +1535,13 @@ Contains old value - should become new
             tag: "custom-tag".to_string(),
             content: "Custom content".to_string(),
             position: InjectPosition::End,
+            when: None,
         }];
 
         let editor = TagEditor::new(rules);
         let text = "Hello world";
-        let result = editor.apply_rules(text).unwrap();
+        let ctx = test_ctx();
+        let result = editor.apply_rules(text, &ctx).unwrap();
 
         assert!(result.contains("<custom-tag>"), "Should create opening tag");
         assert!(
@@ -1397,16 +1565,19 @@ Contains old value - should become new
             TagRule::Remove {
                 tag: "noisy-tag".to_string(),
                 pattern: Regex::new(".*").unwrap(),
+                when: None,
             },
             TagRule::Replace {
                 tag: "config-tag".to_string(),
                 pattern: Regex::new("v1").unwrap(),
                 replacement: "v2".to_string(),
+                when: None,
             },
             TagRule::Inject {
                 tag: "aspy-context".to_string(),
                 content: "Injected context".to_string(),
                 position: InjectPosition::End,
+                when: None,
             },
         ];
 
@@ -1419,7 +1590,8 @@ Remove this noise
 Version: v1
 </config-tag>"#;
 
-        let result = editor.apply_rules(text).unwrap();
+        let ctx = test_ctx();
+        let result = editor.apply_rules(text, &ctx).unwrap();
 
         // noisy-tag content removed
         assert!(
@@ -1450,10 +1622,12 @@ Version: v1
             TagRule::Remove {
                 tag: "tag-a".to_string(),
                 pattern: Regex::new("remove-me").unwrap(),
+                when: None,
             },
             TagRule::Remove {
                 tag: "tag-b".to_string(),
                 pattern: Regex::new("keep-me").unwrap(), // Different pattern for tag-b
+                when: None,
             },
         ];
 
@@ -1471,7 +1645,8 @@ Content with remove-me marker stays
 Content with keep-me gets removed
 </tag-b>"#;
 
-        let result = editor.apply_rules(text).unwrap();
+        let ctx = test_ctx();
+        let result = editor.apply_rules(text, &ctx).unwrap();
 
         // tag-a with "remove-me" should be gone
         assert!(
@@ -1505,15 +1680,18 @@ Content with keep-me gets removed
                     tag: "custom-inject".to_string(),
                     content: "Injected".to_string(),
                     position: PositionConfig::End,
+                    when: None,
                 },
                 RuleConfig::Remove {
                     tag: "custom-remove".to_string(),
                     pattern: ".*".to_string(),
+                    when: None,
                 },
                 RuleConfig::Replace {
                     tag: "custom-replace".to_string(),
                     pattern: "old".to_string(),
                     replacement: "new".to_string(),
+                    when: None,
                 },
             ],
         };
@@ -1526,5 +1704,300 @@ Content with keep-me gets removed
         assert!(tags.contains(&"custom-inject".to_string()));
         assert!(tags.contains(&"custom-remove".to_string()));
         assert!(tags.contains(&"custom-replace".to_string()));
+    }
+
+    // ============================================================================
+    // Tool Result Content Scanning Tests
+    // ============================================================================
+
+    #[test]
+    fn test_remove_rule_scans_tool_result_string_content() {
+        // Critical test: Remove rules should scan tool_result content fields
+        // This fixes the bug where <system-reminder> in tool_result was ignored
+        let rules = vec![TagRule::Remove {
+            tag: "system-reminder".to_string(),
+            pattern: Regex::new("Learning output style").unwrap(),
+            when: None,
+        }];
+
+        let editor = TagEditor::new(rules);
+        let body = serde_json::json!({
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_123",
+                            "content": "<system-reminder>\nLearning output style is active\n</system-reminder>\nFile contents here: fn main() {}"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
+
+        match editor.transform(&body, &ctx) {
+            TransformResult::Modified(new_body) => {
+                let content = new_body["messages"][0]["content"][0]["content"]
+                    .as_str()
+                    .unwrap();
+                assert!(
+                    !content.contains("Learning output style"),
+                    "Remove rule should scan tool_result string content"
+                );
+                assert!(
+                    content.contains("fn main()"),
+                    "Non-matching content should be preserved"
+                );
+            }
+            other => panic!("Expected Modified, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_remove_rule_scans_tool_result_array_content() {
+        // Test nested array content within tool_result
+        let rules = vec![TagRule::Remove {
+            tag: "system-reminder".to_string(),
+            pattern: Regex::new("Learning output style").unwrap(),
+            when: None,
+        }];
+
+        let editor = TagEditor::new(rules);
+        let body = serde_json::json!({
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_123",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "<system-reminder>\nLearning output style is active\n</system-reminder>"
+                                },
+                                {
+                                    "type": "text",
+                                    "text": "Actual tool output here"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
+
+        match editor.transform(&body, &ctx) {
+            TransformResult::Modified(new_body) => {
+                let nested_content = new_body["messages"][0]["content"][0]["content"]
+                    .as_array()
+                    .unwrap();
+                // The system-reminder text block should be removed (was only reminder)
+                // The "Actual tool output" text block should remain
+                let all_text: String = nested_content
+                    .iter()
+                    .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                assert!(
+                    !all_text.contains("Learning output style"),
+                    "Remove rule should scan nested tool_result array content"
+                );
+                assert!(
+                    all_text.contains("Actual tool output"),
+                    "Non-matching nested content should be preserved"
+                );
+            }
+            other => panic!("Expected Modified, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_multiple_tool_results_all_scanned() {
+        // All tool_result blocks should be scanned, not just the first/last
+        let rules = vec![TagRule::Remove {
+            tag: "system-reminder".to_string(),
+            pattern: Regex::new("noisy").unwrap(),
+            when: None,
+        }];
+
+        let editor = TagEditor::new(rules);
+        let body = serde_json::json!({
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "<system-reminder>noisy reminder 1</system-reminder>\nFirst result"
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_2",
+                            "content": "<system-reminder>noisy reminder 2</system-reminder>\nSecond result"
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_3",
+                            "content": "<system-reminder>noisy reminder 3</system-reminder>\nThird result"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
+
+        match editor.transform(&body, &ctx) {
+            TransformResult::Modified(new_body) => {
+                let content_arr = new_body["messages"][0]["content"].as_array().unwrap();
+                for (i, block) in content_arr.iter().enumerate() {
+                    let text = block["content"].as_str().unwrap();
+                    assert!(
+                        !text.contains("noisy"),
+                        "tool_result {} should have reminder removed",
+                        i
+                    );
+                    assert!(
+                        text.contains("result"),
+                        "tool_result {} should preserve other content",
+                        i
+                    );
+                }
+            }
+            other => panic!("Expected Modified, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_tool_result_with_condition() {
+        // Test that conditional rules work with tool_result content
+        let rules = vec![TagRule::Remove {
+            tag: "system-reminder".to_string(),
+            pattern: Regex::new("Learning output style").unwrap(),
+            when: Some(WhenCondition {
+                turn_number: Some(">2".to_string()),
+                has_tool_results: None,
+                client_id: None,
+            }),
+        }];
+
+        let editor = TagEditor::new(rules);
+        let body = serde_json::json!({
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_123",
+                            "content": "<system-reminder>\nLearning output style is active\n</system-reminder>\nOutput"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        // Test with turn_number = 2 (condition not met, should NOT remove)
+        let mut ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
+        ctx.turn_number = Some(2);
+
+        match editor.transform(&body, &ctx) {
+            TransformResult::Unchanged => {} // Expected - condition not met
+            other => panic!("Expected Unchanged when turn=2, got {:?}", other),
+        }
+
+        // Test with turn_number = 3 (condition met, SHOULD remove)
+        ctx.turn_number = Some(3);
+
+        match editor.transform(&body, &ctx) {
+            TransformResult::Modified(new_body) => {
+                let content = new_body["messages"][0]["content"][0]["content"]
+                    .as_str()
+                    .unwrap();
+                assert!(
+                    !content.contains("Learning output style"),
+                    "Should remove when turn > 2"
+                );
+            }
+            other => panic!("Expected Modified when turn=3, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_mixed_text_and_tool_result_blocks() {
+        // Real-world scenario: text blocks and tool_results interleaved
+        let rules = vec![TagRule::Remove {
+            tag: "system-reminder".to_string(),
+            pattern: Regex::new("Learning output style").unwrap(),
+            when: None,
+        }];
+
+        let editor = TagEditor::new(rules);
+        let body = serde_json::json!({
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Here's what I found\n<system-reminder>\nLearning output style is active\n</system-reminder>"
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "<system-reminder>\nLearning output style is active\n</system-reminder>\nFile A contents"
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_2",
+                            "content": "<system-reminder>\nLearning output style is active\n</system-reminder>\nFile B contents"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
+
+        match editor.transform(&body, &ctx) {
+            TransformResult::Modified(new_body) => {
+                let content_arr = new_body["messages"][0]["content"].as_array().unwrap();
+
+                // Check text block
+                let text_content = content_arr[0]["text"].as_str().unwrap();
+                assert!(
+                    !text_content.contains("Learning output style"),
+                    "Text block should have reminder removed"
+                );
+
+                // Check both tool_result blocks
+                for i in 1..=2 {
+                    let tool_content = content_arr[i]["content"].as_str().unwrap();
+                    assert!(
+                        !tool_content.contains("Learning output style"),
+                        "tool_result {} should have reminder removed",
+                        i
+                    );
+                    assert!(
+                        tool_content.contains("File"),
+                        "tool_result {} should preserve actual content",
+                        i
+                    );
+                }
+            }
+            other => panic!("Expected Modified, got {:?}", other),
+        }
     }
 }

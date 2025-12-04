@@ -26,7 +26,7 @@ mod tui;
 
 use anyhow::Result;
 use chrono::Utc;
-use config::Config;
+use config::{Config, LogRotation};
 use logging::{LogBuffer, TuiLogLayer};
 use std::sync::{Arc, Mutex};
 use storage::Storage;
@@ -163,25 +163,100 @@ async fn main() -> Result<()> {
     // Initialize tracing/logging with conditional output
     // In TUI mode: capture logs to buffer (prevents garbling the display)
     // In headless mode: output logs to stdout
+    // File logging: optionally write to rotating log files (in addition to above)
     //
     // Precedence: RUST_LOG env var > config file > default "info"
     let default_filter = format!("aspy={},tower_http=debug,axum=debug", config.logging.level);
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| default_filter.into());
 
-    if config.enable_tui {
-        // TUI mode: use custom layer that captures to buffer
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(TuiLogLayer::new(log_buffer.clone()))
-            .init();
-    } else {
-        // Headless mode: use standard fmt layer for stdout
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(tracing_subscriber::fmt::layer())
-            .init();
-    }
+    // Set up file logging if enabled (non-blocking writer with rotation)
+    // The guard must be kept alive for the duration of the program to ensure logs flush
+    let _file_guard: Option<tracing_appender::non_blocking::WorkerGuard> =
+        if config.logging.file_enabled {
+            // Create log directory if it doesn't exist
+            if let Err(e) = std::fs::create_dir_all(&config.logging.file_dir) {
+                eprintln!(
+                    "Warning: Could not create log directory {:?}: {}",
+                    config.logging.file_dir, e
+                );
+                // Fall back to non-file logging
+                if config.enable_tui {
+                    tracing_subscriber::registry()
+                        .with(filter)
+                        .with(TuiLogLayer::new(log_buffer.clone()))
+                        .init();
+                } else {
+                    tracing_subscriber::registry()
+                        .with(filter)
+                        .with(tracing_subscriber::fmt::layer())
+                        .init();
+                }
+                None
+            } else {
+                // Create rolling file appender based on configured rotation
+                let file_appender = match config.logging.file_rotation {
+                    LogRotation::Hourly => tracing_appender::rolling::hourly(
+                        &config.logging.file_dir,
+                        &config.logging.file_prefix,
+                    ),
+                    LogRotation::Daily => tracing_appender::rolling::daily(
+                        &config.logging.file_dir,
+                        &config.logging.file_prefix,
+                    ),
+                    LogRotation::Never => tracing_appender::rolling::never(
+                        &config.logging.file_dir,
+                        &config.logging.file_prefix,
+                    ),
+                };
+
+                // Wrap in non-blocking writer (writes happen in background thread)
+                let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+                // Initialize with file layer based on TUI mode
+                // File layer uses JSON format for structured log parsing
+                if config.enable_tui {
+                    tracing_subscriber::registry()
+                        .with(filter)
+                        .with(TuiLogLayer::new(log_buffer.clone()))
+                        .with(
+                            tracing_subscriber::fmt::layer()
+                                .json()
+                                .with_writer(non_blocking)
+                                .with_ansi(false),
+                        )
+                        .init();
+                } else {
+                    tracing_subscriber::registry()
+                        .with(filter)
+                        .with(tracing_subscriber::fmt::layer())
+                        .with(
+                            tracing_subscriber::fmt::layer()
+                                .json()
+                                .with_writer(non_blocking)
+                                .with_ansi(false),
+                        )
+                        .init();
+                }
+
+                Some(guard)
+            }
+        } else {
+            // No file logging - initialize without file layer
+            if config.enable_tui {
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(TuiLogLayer::new(log_buffer.clone()))
+                    .init();
+            } else {
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(tracing_subscriber::fmt::layer())
+                    .init();
+            }
+
+            None
+        };
 
     // Generate session ID for this run
     let session_id = generate_session_id();

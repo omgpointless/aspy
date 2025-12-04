@@ -605,6 +605,13 @@ async fn proxy_handler(
                 }
             }
 
+            tracing::debug!(
+                turn = ctx.turn_number,
+                tool_results = ctx.tool_result_count,
+                client = ctx.client_id,
+                "Transformer context"
+            );
+
             match state.transformation.transform(&body_json, &ctx) {
                 transformation::TransformResult::Modified(new_body) => {
                     tracing::debug!("Request transformed by pipeline (pre-translation)");

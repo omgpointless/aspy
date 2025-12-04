@@ -312,3 +312,39 @@ curl http://localhost:8080/dev-1/v1/chat/completions \
 You'll see OpenAI-format SSE streaming back. The TUI will show Claude's thinking blocks (if extended thinking is on). The request logs will show the translation happening.
 
 Two formats. One spy. Full visibility.
+
+---
+
+## What's Next
+
+Translation is experimental. Fun, exploratory, a playground for understanding how different models behave. It'll stay that way until the core is rock solid.
+
+And that core? It's coming together faster than I expected.
+
+Yesterday, chaos. A stray `sed` command—don't ask—wrecked an implementation. I was distracted, let Claude run it without thinking. Files everywhere. Eventually we got things stable and I triggered a compact. Fresh Claude arrives: *"Where were we?"*
+
+I started explaining. Then caught myself mid-sentence.
+
+Wait. I built tools for this.
+
+I described what we'd been doing and asked Claude to use the hybrid search. Paraphrasing, fuzzy details, half-remembered keywords. Claude ran three MCP calls with different variations of what I'd explained.
+
+And *found it*. The exact conversation. Restored the full todo list. Marked completed steps as done. Ready to continue.
+
+The tool worked in practice. Four cents of embeddings across 2 million tokens. Worth it.
+
+This is just the start.
+
+The transformer pipeline shipped this week—request modification before it hits Anthropic. With the tag editor, you have agency over what `<system-reminder>` tags say, what policy tags exist, what context Claude sees. Custom injections aligned with your workflow. Aspy as a Claude Code extension platform, not just an observer.
+
+Next up is completing the layer architecture. Transformer, Translator, Event Pipeline, Augmentor—each one a pluggable pipeline built on mpsc channels. Non-blocking. Minimal latency. The foundation for everything else: custom augmentors, storage backends, tracing integrations.
+
+There's even a CompactTransformer in the works. Claude Opus 4.5 is helping me analyze Anthropic's native compaction strategy—finding gaps, suggesting optimizations. The goal: better continuity after automatic compaction. (Claude has, hilariously, already critiqued aspects of the current approach. And between you and me? The spy knows Claude finds those TODO-list reminders annoying.)
+
+The translation layer is fun. A side quest. It gives you freedom to observe other models, compare behaviors, explore. But it's not the main track.
+
+The main track is agency. Over context. Over what Claude sees and how it responds. Over the continuity between sessions and the flow state that makes vibe coding possible.
+
+Aspy started as a debugging tool for a translation proxy. It became an observability suite. Now it's becoming something else—a platform for owning the conversation between you and Claude.
+
+You're already the frontend. Aspy just makes that visible.

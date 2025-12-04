@@ -60,11 +60,52 @@ impl Default for Augmentation {
     }
 }
 
+/// Log file rotation strategy
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum LogRotation {
+    /// Rotate log files hourly
+    Hourly,
+    /// Rotate log files daily (default)
+    #[default]
+    Daily,
+    /// Never rotate - single log file
+    Never,
+}
+
+impl LogRotation {
+    /// Parse rotation string from config
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "hourly" => Self::Hourly,
+            "daily" => Self::Daily,
+            "never" => Self::Never,
+            _ => Self::Daily, // Default to daily for unknown values
+        }
+    }
+
+    /// Convert to string for TOML serialization
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Hourly => "hourly",
+            Self::Daily => "daily",
+            Self::Never => "never",
+        }
+    }
+}
+
 /// Logging configuration
 #[derive(Debug, Clone)]
 pub struct LoggingConfig {
     /// Log level: trace, debug, info, warn, error
     pub level: String,
+    /// Enable file logging (in addition to TUI buffer or stdout)
+    pub file_enabled: bool,
+    /// Directory for log files
+    pub file_dir: PathBuf,
+    /// Log file rotation strategy
+    pub file_rotation: LogRotation,
+    /// Prefix for log file names (e.g., "aspy" -> "aspy.2024-01-15.log")
+    pub file_prefix: String,
 }
 
 /// Embedding configuration for semantic search
@@ -120,6 +161,10 @@ impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             level: "info".to_string(),
+            file_enabled: false, // Opt-in feature
+            file_dir: PathBuf::from("./logs/trace"),
+            file_rotation: LogRotation::Daily,
+            file_prefix: "aspy".to_string(),
         }
     }
 }
@@ -567,6 +612,10 @@ struct FileAugmentation {
 #[derive(Debug, Deserialize, Default)]
 struct FileLogging {
     level: Option<String>,
+    file_enabled: Option<bool>,
+    file_dir: Option<String>,
+    file_rotation: Option<String>,
+    file_prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -980,6 +1029,11 @@ context_warning_thresholds = {thresholds:?}
 # Logging configuration (RUST_LOG env var overrides)
 [logging]
 level = "{log_level}"
+# File logging (in addition to TUI buffer or stdout)
+file_enabled = {log_file_enabled}
+file_dir = "{log_file_dir}"
+file_rotation = "{log_file_rotation}"  # hourly, daily, never
+file_prefix = "{log_file_prefix}"
 
 # Lifetime statistics storage (SQLite-backed context recovery)
 [lifestats]
@@ -1080,6 +1134,10 @@ enabled = {transformers_enabled}
             ctx_warn = self.augmentation.context_warning,
             thresholds = self.augmentation.context_warning_thresholds,
             log_level = self.logging.level,
+            log_file_enabled = self.logging.file_enabled,
+            log_file_dir = self.logging.file_dir.display(),
+            log_file_rotation = self.logging.file_rotation.as_str(),
+            log_file_prefix = self.logging.file_prefix,
             lifestats_enabled = self.lifestats.enabled,
             lifestats_db_path = self.lifestats.db_path.display(),
             lifestats_store_thinking = self.lifestats.store_thinking,
@@ -1229,8 +1287,21 @@ enabled = {transformers_enabled}
 
         // Logging settings: file config only (RUST_LOG env var handled in main.rs)
         let file_logging = file.logging.unwrap_or_default();
+        let log_defaults = LoggingConfig::default();
         let logging = LoggingConfig {
-            level: file_logging.level.unwrap_or_else(|| "info".to_string()),
+            level: file_logging.level.unwrap_or(log_defaults.level),
+            file_enabled: file_logging
+                .file_enabled
+                .unwrap_or(log_defaults.file_enabled),
+            file_dir: file_logging
+                .file_dir
+                .map(PathBuf::from)
+                .unwrap_or(log_defaults.file_dir),
+            file_rotation: file_logging
+                .file_rotation
+                .map(|s| LogRotation::from_str(&s))
+                .unwrap_or(log_defaults.file_rotation),
+            file_prefix: file_logging.file_prefix.unwrap_or(log_defaults.file_prefix),
         };
 
         // Lifestats settings: file config only

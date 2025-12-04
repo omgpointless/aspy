@@ -557,7 +557,7 @@ async fn proxy_handler(
     // ─────────────────────────────────────────────────────────────────────────
     // SystemReminderEditor and future transformers expect Anthropic message format.
     // We transform first, then translate to target format if needed.
-    let body_bytes = if is_likely_messages
+    let (body_bytes, body_was_transformed) = if is_likely_messages
         && method == "POST"
         && state.transformers_config.enabled
         && !state.transformation.is_empty()
@@ -570,7 +570,10 @@ async fn proxy_handler(
             match state.transformation.transform(&body_json, &ctx) {
                 transformation::TransformResult::Modified(new_body) => {
                     tracing::debug!("Request transformed by pipeline (pre-translation)");
-                    serde_json::to_vec(&new_body).unwrap_or_else(|_| body_bytes.to_vec())
+                    (
+                        serde_json::to_vec(&new_body).unwrap_or_else(|_| body_bytes.to_vec()),
+                        true,
+                    )
                 }
                 transformation::TransformResult::Block { reason, status } => {
                     tracing::info!("Request blocked by transformation pipeline: {}", reason);
@@ -581,15 +584,15 @@ async fn proxy_handler(
                 }
                 transformation::TransformResult::Error(e) => {
                     tracing::warn!("Transformation error (continuing with original): {}", e);
-                    body_bytes.to_vec()
+                    (body_bytes.to_vec(), false)
                 }
-                transformation::TransformResult::Unchanged => body_bytes.to_vec(),
+                transformation::TransformResult::Unchanged => (body_bytes.to_vec(), false),
             }
         } else {
-            body_bytes.to_vec()
+            (body_bytes.to_vec(), false)
         }
     } else {
-        body_bytes.to_vec()
+        (body_bytes.to_vec(), false)
     };
 
     // Determine target API format based on provider config
@@ -728,8 +731,10 @@ async fn proxy_handler(
             continue;
         }
 
-        // Skip content-length if body was translated (size changed)
-        if key_str == "content-length" && translation_ctx.needs_response_translation() {
+        // Skip content-length if body was modified (transformation or translation changed size)
+        if key_str == "content-length"
+            && (body_was_transformed || translation_ctx.needs_response_translation())
+        {
             continue;
         }
 

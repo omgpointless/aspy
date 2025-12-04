@@ -64,6 +64,7 @@ unicode-width = "0.2"                                           # Correct width 
 
 # Clipboard access
 arboard = "3"                                                   # Cross-platform clipboard (Windows/macOS/Linux)
+regex = "1.12.2"
 
 [features]
 default = []

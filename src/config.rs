@@ -151,6 +151,21 @@ impl Default for Translation {
     }
 }
 
+/// Request transformation settings
+///
+/// Transformers modify API requests before they are forwarded to the provider.
+/// Used for editing system-reminders, injecting context, translating formats, etc.
+#[derive(Debug, Clone, Default)]
+pub struct Transformers {
+    /// Whether transformation is enabled globally (master kill-switch)
+    /// When false, no transformers run regardless of their individual configs.
+    /// Set to true to enable transformation pipeline.
+    pub enabled: bool,
+
+    /// System reminder editor configuration
+    pub system_reminder_editor: Option<crate::proxy::transformation::SystemReminderEditorConfig>,
+}
+
 /// Lifetime statistics storage configuration
 #[derive(Debug, Clone)]
 pub struct LifestatsConfig {
@@ -526,6 +541,9 @@ pub struct Config {
 
     /// API translation settings (OpenAI ↔ Anthropic)
     pub translation: Translation,
+
+    /// Request transformation settings
+    pub transformers: Transformers,
     /// Client and provider configuration for multi-user routing
     pub clients: ClientsConfig,
 }
@@ -587,6 +605,13 @@ struct FileTranslation {
     #[serde(default)]
     model_mapping: HashMap<String, String>,
 }
+
+#[derive(Debug, Deserialize, Default)]
+struct FileTransformers {
+    enabled: Option<bool>,
+    #[serde(rename = "system-reminder-editor")]
+    system_reminder_editor: Option<crate::proxy::transformation::SystemReminderEditorConfig>,
+}
 /// Config file structure (subset of Config that makes sense to persist)
 #[derive(Debug, Deserialize, Default)]
 struct FileConfig {
@@ -615,6 +640,9 @@ struct FileConfig {
 
     /// Optional [translation] section
     translation: Option<FileTranslation>,
+
+    /// Optional [transformers] section
+    transformers: Option<FileTransformers>,
     /// Optional [clients.X] sections for multi-user routing
     #[serde(default)]
     clients: HashMap<String, ClientConfig>,
@@ -766,6 +794,71 @@ impl Config {
         output
     }
 
+    /// Serialize transformers config to TOML (returns empty string if not configured)
+    fn transformers_to_toml(&self) -> String {
+        // If no system reminder editor configured, return empty (comments in template suffice)
+        let Some(ref editor) = self.transformers.system_reminder_editor else {
+            return String::new();
+        };
+
+        if !editor.enabled || editor.rules.is_empty() {
+            return String::new();
+        }
+
+        let mut output = String::from("\n[transformers.system-reminder-editor]\nenabled = true\n");
+
+        use crate::proxy::transformation::{PositionConfig, RuleConfig};
+
+        for rule in &editor.rules {
+            output.push_str("\n[[transformers.system-reminder-editor.rules]]\n");
+            match rule {
+                RuleConfig::Inject { content, position } => {
+                    output.push_str("type = \"inject\"\n");
+                    // Escape content for TOML multiline if needed
+                    if content.contains('\n') {
+                        output.push_str(&format!("content = \"\"\"\n{}\n\"\"\"\n", content));
+                    } else {
+                        output.push_str(&format!("content = \"{}\"\n", content));
+                    }
+                    match position {
+                        PositionConfig::Start => {
+                            output.push_str("position = \"start\"\n");
+                        }
+                        PositionConfig::End => {
+                            // end is default, can omit
+                        }
+                        PositionConfig::Before { pattern } => {
+                            output.push_str(&format!(
+                                "[transformers.system-reminder-editor.rules.position]\nbefore = {{ pattern = \"{}\" }}\n",
+                                pattern
+                            ));
+                        }
+                        PositionConfig::After { pattern } => {
+                            output.push_str(&format!(
+                                "[transformers.system-reminder-editor.rules.position]\nafter = {{ pattern = \"{}\" }}\n",
+                                pattern
+                            ));
+                        }
+                    }
+                }
+                RuleConfig::Remove { pattern } => {
+                    output.push_str("type = \"remove\"\n");
+                    output.push_str(&format!("pattern = \"{}\"\n", pattern));
+                }
+                RuleConfig::Replace {
+                    pattern,
+                    replacement,
+                } => {
+                    output.push_str("type = \"replace\"\n");
+                    output.push_str(&format!("pattern = \"{}\"\n", pattern));
+                    output.push_str(&format!("replacement = \"{}\"\n", replacement));
+                }
+            }
+        }
+
+        output
+    }
+
     /// Serialize config to TOML string (single source of truth for format)
     pub fn to_toml(&self) -> String {
         format!(
@@ -849,6 +942,36 @@ enabled = {translation_enabled}
 auto_detect = {translation_auto_detect}
 {translation_model_mapping}
 # ─────────────────────────────────────────────────────────────────────────────
+# REQUEST TRANSFORMERS (Optional)
+# ─────────────────────────────────────────────────────────────────────────────
+# Modify API requests before they are forwarded to the provider.
+# Use for editing <system-reminder> tags, injecting context, etc.
+#
+# IMPORTANT: Set enabled = true to activate transformers.
+
+[transformers]
+enabled = {transformers_enabled}
+
+# System Reminder Editor - modify <system-reminder> tags in user messages
+# Rules are applied in order. Rule types:
+#   inject  - Add new <system-reminder> content (position: start, end, before, after)
+#   remove  - Remove reminders matching a regex pattern
+#   replace - Replace content within matching reminders
+#
+# Example: Inject a custom context reminder
+# [transformers.system-reminder-editor]
+# enabled = true
+# [[transformers.system-reminder-editor.rules]]
+# type = "inject"
+# content = "Always respond in formal English."
+# position = "end"
+#
+# Example: Remove noisy debug reminders
+# [[transformers.system-reminder-editor.rules]]
+# type = "remove"
+# pattern = "debug|noisy"  # Regex: removes reminders containing "debug" or "noisy"
+{transformers_section}
+# ─────────────────────────────────────────────────────────────────────────────
 # MULTI-CLIENT ROUTING (Optional)
 # ─────────────────────────────────────────────────────────────────────────────
 # Track multiple Claude Code instances through a single proxy using named clients.
@@ -924,6 +1047,8 @@ auto_detect = {translation_auto_detect}
             embed_batch_size = self.embeddings.batch_size,
             embed_batch_delay = self.embeddings.batch_delay_ms,
             embed_max_content = self.embeddings.max_content_length,
+            transformers_enabled = self.transformers.enabled,
+            transformers_section = self.transformers_to_toml(),
             clients_section = self.clients_to_toml(),
             providers_section = self.providers_to_toml(),
         )
@@ -1101,6 +1226,14 @@ auto_detect = {translation_auto_detect}
                 file_translation.model_mapping
             },
         };
+
+        // Transformers settings: file config only
+        let file_transformers = file.transformers.unwrap_or_default();
+        let transformers = Transformers {
+            enabled: file_transformers.enabled.unwrap_or(false),
+            system_reminder_editor: file_transformers.system_reminder_editor,
+        };
+
         // Client/provider config: file only
         let clients = ClientsConfig {
             clients: file.clients,
@@ -1132,6 +1265,7 @@ auto_detect = {translation_auto_detect}
             lifestats,
             embeddings,
             translation,
+            transformers,
             clients,
         }
     }
@@ -1155,6 +1289,7 @@ impl Default for Config {
             lifestats: LifestatsConfig::default(),
             embeddings: EmbeddingsConfig::default(),
             translation: Translation::default(),
+            transformers: Transformers::default(),
             clients: ClientsConfig::default(),
         }
     }
@@ -1265,6 +1400,23 @@ impl Config {
             FeatureCategory::Pipeline,
             self.translation.enabled,
             "API translation",
+        ));
+
+        // Transformation: optional (request modification before forwarding)
+        // Shows as active when enabled=true AND has configured rules
+        let transform_active = self.transformers.enabled
+            && self
+                .transformers
+                .system_reminder_editor
+                .as_ref()
+                .map(|c| c.enabled)
+                .unwrap_or(false);
+        features.push(FeatureDefinition::optional(
+            "transformers",
+            "transformers",
+            FeatureCategory::Pipeline,
+            transform_active,
+            "Request editing",
         ));
 
         // Routing: configurable (needs client definitions)

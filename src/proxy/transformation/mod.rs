@@ -25,7 +25,13 @@
 
 mod system_reminder;
 
-pub use system_reminder::{InjectPosition, ReminderRule, SystemReminderEditor};
+// Re-exports for config parsing and future transformer implementations
+#[allow(unused_imports)]
+// InjectPosition and ReminderRule are part of the public API for config consumers
+pub use system_reminder::{
+    InjectPosition, PositionConfig, ReminderRule, RuleConfig, SystemReminderEditor,
+    SystemReminderEditorConfig,
+};
 
 use axum::http::StatusCode;
 use serde_json::Value;
@@ -47,6 +53,8 @@ pub enum TransformResult {
     /// Block request entirely (e.g., content policy violation)
     ///
     /// Use sparingly - most errors should return `Error` and continue.
+    /// Used by content policy transformers (future: PII redaction, content filtering).
+    #[allow(dead_code)]
     Block {
         /// Human-readable reason for blocking
         reason: String,
@@ -58,6 +66,8 @@ pub enum TransformResult {
     ///
     /// This is the fail-safe path. If embeddings are down, config is invalid,
     /// or any other error occurs, the request should still go through.
+    /// Used by transformers that can fail gracefully (ContextEnricher when embeddings down).
+    #[allow(dead_code)]
     Error(anyhow::Error),
 }
 
@@ -70,21 +80,33 @@ pub enum TransformResult {
 /// Contains information available at request handling time.
 /// Future fields (like `semantic_context`) will be populated by
 /// async prep work in the proxy handler before the sync pipeline runs.
+///
+/// Fields are read by transformer implementations via pattern matching or direct access.
+/// Even if not currently used by SystemReminderEditor, they are part of the public API
+/// for future transformers (ContextEnricher, ModelRouter, etc.).
 #[derive(Debug, Clone, Default)]
 pub struct TransformContext<'a> {
     /// Client ID from routing (e.g., "dev-1")
+    /// Used by: per-client transformation rules (future)
+    #[allow(dead_code)]
     pub client_id: Option<&'a str>,
 
     /// Request path (e.g., "/v1/messages")
     pub path: &'a str,
 
     /// Model being requested (extracted from body)
+    /// Used by: ModelRouter, model-specific transformations (future)
+    #[allow(dead_code)]
     pub model: Option<&'a str>,
 
     /// Current token usage from context state
+    /// Used by: ContextEnricher for context-aware injection (future)
+    #[allow(dead_code)]
     pub context_tokens: Option<u64>,
 
     /// Context limit for the model
+    /// Used by: ContextEnricher for context-aware injection (future)
+    #[allow(dead_code)]
     pub context_limit: Option<u64>,
     // Future: semantic_context for RAG injection
     // pub semantic_context: Option<&'a SemanticContext>,
@@ -92,11 +114,7 @@ pub struct TransformContext<'a> {
 
 impl<'a> TransformContext<'a> {
     /// Create a new transform context
-    pub fn new(
-        client_id: Option<&'a str>,
-        path: &'a str,
-        model: Option<&'a str>,
-    ) -> Self {
+    pub fn new(client_id: Option<&'a str>, path: &'a str, model: Option<&'a str>) -> Self {
         Self {
             client_id,
             path,
@@ -107,6 +125,8 @@ impl<'a> TransformContext<'a> {
     }
 
     /// Add context token information
+    /// Used by: ContextEnricher for context-aware injection (future)
+    #[allow(dead_code)]
     pub fn with_context_state(mut self, tokens: u64, limit: u64) -> Self {
         self.context_tokens = Some(tokens);
         self.context_limit = Some(limit);
@@ -249,10 +269,7 @@ impl TransformationPipeline {
                     // No change, keep current (borrowed or owned)
                 }
                 TransformResult::Modified(new_body) => {
-                    tracing::debug!(
-                        transformer = transformer.name(),
-                        "Request body transformed"
-                    );
+                    tracing::debug!(transformer = transformer.name(), "Request body transformed");
                     current = Cow::Owned(new_body);
                 }
                 TransformResult::Block { reason, status } => {

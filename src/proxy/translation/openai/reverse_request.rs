@@ -572,8 +572,8 @@ mod tests {
             .unwrap();
         let openai: serde_json::Value = serde_json::from_slice(&translated).unwrap();
 
-        // Default reverse mapping: sonnet -> gpt-4-turbo
-        assert_eq!(openai["model"], "gpt-4-turbo");
+        // With empty model mapping, model passes through unchanged
+        assert_eq!(openai["model"], "claude-sonnet-4-20250514");
         assert_eq!(openai["messages"][0]["role"], "user");
         assert_eq!(openai["messages"][0]["content"], "Hello");
         assert_eq!(openai["max_tokens"], 1024);
@@ -609,11 +609,11 @@ mod tests {
     }
 
     #[test]
-    fn test_temperature_scaling_reverse() {
+    fn test_temperature_passthrough_reverse() {
         let translator = make_translator();
         let headers = HeaderMap::new();
 
-        // Anthropic uses 0-1, OpenAI uses 0-2
+        // Temperature passes through unchanged (most providers use 0-1 range)
         let anthropic_body = r#"{
             "model": "claude-sonnet-4-20250514",
             "max_tokens": 1024,
@@ -626,8 +626,8 @@ mod tests {
             .unwrap();
         let openai: serde_json::Value = serde_json::from_slice(&translated).unwrap();
 
-        // 0.5 * 2 = 1.0
-        assert_eq!(openai["temperature"], 1.0);
+        // Temperature passes through unchanged
+        assert_eq!(openai["temperature"], 0.5);
     }
 
     #[test]

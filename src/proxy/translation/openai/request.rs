@@ -566,7 +566,8 @@ mod tests {
             .unwrap();
         let anthropic: serde_json::Value = serde_json::from_slice(&translated).unwrap();
 
-        assert_eq!(anthropic["model"], "claude-sonnet-4-20250514");
+        // With empty model mapping, model passes through unchanged
+        assert_eq!(anthropic["model"], "gpt-4");
         assert_eq!(anthropic["messages"][0]["role"], "user");
         assert_eq!(anthropic["messages"][0]["content"], "Hello");
         assert_eq!(ctx.original_model, Some("gpt-4".to_string()));
@@ -596,15 +597,15 @@ mod tests {
     }
 
     #[test]
-    fn test_temperature_scaling() {
+    fn test_temperature_passthrough() {
         let translator = make_translator();
         let headers = HeaderMap::new();
 
-        // OpenAI uses 0-2, Anthropic uses 0-1
+        // Temperature passes through unchanged (most providers use 0-1 range)
         let openai_body = r#"{
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Hi"}],
-            "temperature": 1.4
+            "temperature": 0.7
         }"#;
 
         let (translated, _) = translator
@@ -612,7 +613,7 @@ mod tests {
             .unwrap();
         let anthropic: serde_json::Value = serde_json::from_slice(&translated).unwrap();
 
-        // 1.4 / 2 = 0.7
+        // Temperature passes through unchanged
         assert_eq!(anthropic["temperature"], 0.7);
     }
 

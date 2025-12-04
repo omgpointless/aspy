@@ -12,6 +12,7 @@ pub mod api;
 pub mod augmentation;
 pub mod sessions;
 pub mod sse;
+pub mod transformation;
 pub mod translation;
 
 use std::error::Error as StdError;
@@ -119,6 +120,10 @@ pub struct ProxyState {
     pub lifestats_query: Option<Arc<crate::pipeline::lifestats_query::LifestatsQuery>>,
     /// Translation pipeline for OpenAI ↔ Anthropic format conversion
     translation: Arc<TranslationPipeline>,
+    /// Transformation pipeline for request modification (system-reminder editing, etc.)
+    transformation: Arc<transformation::TransformationPipeline>,
+    /// Transformers config (for enabled flag and future per-transformer settings)
+    transformers_config: crate::config::Transformers,
     /// Handle to the embedding indexer (optional, requires embeddings enabled)
     pub embedding_indexer: Option<crate::pipeline::embedding_indexer::IndexerHandle>,
 }
@@ -217,6 +222,19 @@ pub async fn start_proxy(
         tracing::debug!("Translation pipeline: disabled");
     }
 
+    // Create transformation pipeline from config (opt-in feature)
+    let transformation = Arc::new(transformation::TransformationPipeline::from_config(
+        &config.transformers,
+    ));
+    if !transformation.is_empty() {
+        tracing::info!(
+            "Transformation pipeline enabled with: {:?}",
+            transformation.transformer_names()
+        );
+    } else {
+        tracing::debug!("Transformation pipeline: no transformers enabled");
+    }
+
     // Log client routing config if present
     if config.clients.is_configured() {
         tracing::info!(
@@ -252,6 +270,8 @@ pub async fn start_proxy(
         lifestats_query: shared.lifestats_query,
         embedding_indexer: shared.embedding_indexer,
         translation,
+        transformation,
+        transformers_config: config.transformers.clone(),
     };
 
     // Build the router - API endpoints + proxy handler
@@ -528,6 +548,50 @@ async fn proxy_handler(
         .await
         .map_err(|e| ProxyError::BodyRead(format!("Failed to read request body: {}", e)))?;
 
+    // Pre-check: is this a messages endpoint? (for transformation and parsing)
+    let is_likely_messages =
+        routing.api_path.contains("/messages") || routing.api_path.contains("/chat/completions");
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // REQUEST TRANSFORMATION (runs BEFORE translation, on known Anthropic format)
+    // ─────────────────────────────────────────────────────────────────────────
+    // SystemReminderEditor and future transformers expect Anthropic message format.
+    // We transform first, then translate to target format if needed.
+    let body_bytes = if is_likely_messages
+        && method == "POST"
+        && state.transformers_config.enabled
+        && !state.transformation.is_empty()
+    {
+        if let Ok(body_json) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+            let model = body_json.get("model").and_then(|m| m.as_str());
+            let ctx =
+                transformation::TransformContext::new(user_id.as_deref(), &routing.api_path, model);
+
+            match state.transformation.transform(&body_json, &ctx) {
+                transformation::TransformResult::Modified(new_body) => {
+                    tracing::debug!("Request transformed by pipeline (pre-translation)");
+                    serde_json::to_vec(&new_body).unwrap_or_else(|_| body_bytes.to_vec())
+                }
+                transformation::TransformResult::Block { reason, status } => {
+                    tracing::info!("Request blocked by transformation pipeline: {}", reason);
+                    return Err(ProxyError::BodyRead(format!(
+                        "Request blocked: {} (status {})",
+                        reason, status
+                    )));
+                }
+                transformation::TransformResult::Error(e) => {
+                    tracing::warn!("Transformation error (continuing with original): {}", e);
+                    body_bytes.to_vec()
+                }
+                transformation::TransformResult::Unchanged => body_bytes.to_vec(),
+            }
+        } else {
+            body_bytes.to_vec()
+        }
+    } else {
+        body_bytes.to_vec()
+    };
+
     // Determine target API format based on provider config
     // If provider expects OpenAI format, translate Anthropic → OpenAI
     let target_format = routing
@@ -641,7 +705,7 @@ async fn proxy_handler(
         }
     };
 
-    // Use translated body if translation occurred, otherwise use original
+    // Final body is the translated body (transformation already happened earlier)
     let final_body = translated_body;
     let body_size = final_body.len();
 
@@ -1483,6 +1547,7 @@ mod tests {
                 name: "Dev Laptop".to_string(),
                 provider: "anthropic".to_string(),
                 tags: vec!["dev".to_string()],
+                auth: None,
             },
         );
         clients.insert(
@@ -1491,6 +1556,7 @@ mod tests {
                 name: "CI Runner".to_string(),
                 provider: "foundry".to_string(),
                 tags: vec![],
+                auth: None,
             },
         );
 
@@ -1500,6 +1566,8 @@ mod tests {
             ProviderConfig {
                 base_url: "https://api.anthropic.com".to_string(),
                 name: Some("Anthropic Direct".to_string()),
+                api_format: crate::config::ApiFormat::Anthropic,
+                auth: None,
             },
         );
         providers.insert(
@@ -1507,6 +1575,8 @@ mod tests {
             ProviderConfig {
                 base_url: "https://foundry.example.com".to_string(),
                 name: Some("Foundry".to_string()),
+                api_format: crate::config::ApiFormat::Anthropic,
+                auth: None,
             },
         );
 

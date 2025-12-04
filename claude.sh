@@ -7,16 +7,19 @@
 #   ./claude.sh foundry            # Foundry provider via /foundry route
 #   ./claude.sh dev-1              # Anthropic via /dev-1 route
 #   ./claude.sh dev-2 anthropic    # Explicit: client + provider type
+#   ./claude.sh openrouter         # OpenRouter provider via /openrouter route
 #
 # Provider Types:
-#   foundry   - Uses ANTHROPIC_FOUNDRY_BASE_URL (for Azure Foundry)
-#   anthropic - Uses ANTHROPIC_BASE_URL (default, for direct Anthropic API)
+#   foundry    - Uses ANTHROPIC_FOUNDRY_BASE_URL (for Azure Foundry)
+#   anthropic  - Uses ANTHROPIC_BASE_URL (default, for direct Anthropic API)
+#   openrouter - Uses ANTHROPIC_BASE_URL, unsets ANTHROPIC_FOUNDRY_RESOURCE
 #
 # Examples:
 #   ./claude.sh                    # → http://localhost:8080 (bare, API key hash)
 #   ./claude.sh foundry            # → ANTHROPIC_FOUNDRY_BASE_URL=http://localhost:8080/foundry
 #   ./claude.sh dev-1              # → ANTHROPIC_BASE_URL=http://localhost:8080/dev-1
 #   ./claude.sh dev-2 anthropic    # → ANTHROPIC_BASE_URL=http://localhost:8080/dev-2
+#   ./claude.sh openrouter         # → ANTHROPIC_BASE_URL=http://localhost:8080/openrouter
 #
 # Requirements:
 #   - Aspy proxy running on localhost:8080
@@ -36,6 +39,9 @@ if [[ -z "$PROVIDER_TYPE" ]]; then
     case "$CLIENT_ID" in
         foundry*)
             PROVIDER_TYPE="foundry"
+            ;;
+        openrouter*)
+            PROVIDER_TYPE="openrouter"
             ;;
         *)
             PROVIDER_TYPE="anthropic"
@@ -61,6 +67,13 @@ case "$PROVIDER_TYPE" in
     foundry)
         # Foundry uses different env vars
         ANTHROPIC_FOUNDRY_BASE_URL="${PROXY_URL}" \
+        ANTHROPIC_FOUNDRY_RESOURCE= \
+        ASPY_CLIENT_ID="${CLIENT_ID}" \
+        claude
+        ;;
+    openrouter)
+        # OpenRouter: use base URL, ensure foundry resource is unset
+        ANTHROPIC_BASE_URL="${PROXY_URL}" \
         ANTHROPIC_FOUNDRY_RESOURCE= \
         ASPY_CLIENT_ID="${CLIENT_ID}" \
         claude

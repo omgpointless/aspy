@@ -74,9 +74,8 @@ impl RequestTranslator for OpenAiToAnthropicRequest {
             messages: anthropic_messages,
             system,
             max_tokens: openai_request.max_tokens.unwrap_or(4096),
-            temperature: openai_request
-                .temperature
-                .map(|t| (t / 2.0).clamp(0.0, 1.0)),
+            // Pass temperature through unchanged - most providers use 0-1 range
+            temperature: openai_request.temperature,
             top_p: openai_request.top_p,
             top_k: None,
             stop_sequences: convert_stop_sequences(openai_request.stop),

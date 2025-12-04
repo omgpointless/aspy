@@ -80,6 +80,8 @@ pub struct EmbeddingsConfig {
     pub api_version: Option<String>,
     /// Authentication method: "bearer" or "api-key"
     pub auth_method: String,
+    /// API key for remote providers (resolved from env vars or config)
+    pub api_key: Option<String>,
     /// Polling interval for background indexer (seconds)
     pub poll_interval_secs: u64,
     /// Batch size for embedding requests
@@ -98,6 +100,7 @@ impl Default for EmbeddingsConfig {
             api_base: None,
             api_version: None,
             auth_method: "bearer".to_string(),
+            api_key: None,
             poll_interval_secs: 30,
             batch_size: 32,
             batch_delay_ms: 100,
@@ -209,6 +212,39 @@ pub struct ClientConfig {
     #[allow(dead_code)] // Reserved for TUI filtering/display
     #[serde(default)]
     pub tags: Vec<String>,
+
+    /// Optional authentication override (takes precedence over provider's auth)
+    /// Use this for multi-tenant scenarios where clients need different credentials
+    #[serde(default)]
+    pub auth: Option<ProviderAuth>,
+}
+
+/// API format expected by a provider backend
+///
+/// Different providers use different API formats:
+/// - Anthropic: `/v1/messages` with Anthropic request/response schema
+/// - OpenAI: `/v1/chat/completions` with OpenAI request/response schema
+///
+/// When a provider expects a different format than the client sends,
+/// the proxy will automatically translate requests and responses.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiFormat {
+    /// Anthropic format: /v1/messages (default, no translation needed for Claude Code)
+    #[default]
+    Anthropic,
+    /// OpenAI format: /v1/chat/completions (used by OpenRouter, OpenAI, etc.)
+    Openai,
+}
+
+impl ApiFormat {
+    /// Convert to string for TOML serialization
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Openai => "openai",
+        }
+    }
 }
 
 /// Provider backend configuration
@@ -222,6 +258,17 @@ pub struct ProviderConfig {
     /// Optional display name
     #[allow(dead_code)] // Reserved for TUI display
     pub name: Option<String>,
+
+    /// API format expected by this provider (anthropic or openai)
+    /// Default: anthropic (no translation needed for Claude Code clients)
+    /// Set to "openai" for OpenRouter, OpenAI, and other OpenAI-compatible APIs
+    #[serde(default)]
+    pub api_format: ApiFormat,
+
+    /// Authentication configuration for this provider
+    /// If not specified, uses passthrough (client's auth headers forwarded)
+    #[serde(default)]
+    pub auth: Option<ProviderAuth>,
 }
 
 impl ProviderConfig {
@@ -229,6 +276,132 @@ impl ProviderConfig {
     #[allow(dead_code)] // Reserved for TUI display
     pub fn display_name(&self) -> &str {
         self.name.as_deref().unwrap_or(&self.base_url)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Provider Authentication Configuration
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Authentication method for provider APIs
+///
+/// Different API providers use different authentication schemes:
+/// - Anthropic: `x-api-key` header
+/// - OpenRouter/OpenAI: `Authorization: Bearer` header
+/// - Some services: Custom headers or basic auth
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthMethod {
+    /// Pass through client's auth headers unchanged (default for backward compatibility)
+    #[default]
+    Passthrough,
+    /// OAuth-style: `Authorization: Bearer {key}`
+    Bearer,
+    /// Anthropic-style: `x-api-key: {key}`
+    XApiKey,
+    /// HTTP Basic: `Authorization: Basic {base64(user:pass)}`
+    Basic,
+    /// Custom header: `{header_name}: {key}`
+    Header,
+}
+
+impl AuthMethod {
+    /// Convert to lowercase string for TOML serialization
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Passthrough => "passthrough",
+            Self::Bearer => "bearer",
+            Self::XApiKey => "x_api_key",
+            Self::Basic => "basic",
+            Self::Header => "header",
+        }
+    }
+}
+
+/// Provider authentication configuration
+///
+/// Defines how to authenticate requests to a provider backend.
+/// Keys can be sourced from environment variables (preferred) or config.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ProviderAuth {
+    /// Authentication method (passthrough, bearer, x-api-key, basic, header)
+    #[serde(default)]
+    pub method: AuthMethod,
+
+    /// API key value (direct, less secure - prefer key_env)
+    pub key: Option<String>,
+
+    /// Environment variable name to read key from (preferred)
+    pub key_env: Option<String>,
+
+    /// Custom header name (only used when method = "header")
+    pub header_name: Option<String>,
+
+    /// Whether to strip incoming auth headers before forwarding
+    /// Default: true for bearer/x-api-key/basic/header, false for passthrough
+    pub strip_incoming: Option<bool>,
+}
+
+impl ProviderAuth {
+    /// Check if this is a passthrough config (no auth transformation)
+    ///
+    /// Reserved for future use: will enable conditional logging of auth mode
+    /// in TUI status bar and startup messages.
+    #[allow(dead_code)]
+    pub fn is_passthrough(&self) -> bool {
+        self.method == AuthMethod::Passthrough
+    }
+
+    /// Get whether to strip incoming auth headers
+    /// Defaults based on method: passthrough=false, others=true
+    pub fn should_strip_incoming(&self) -> bool {
+        self.strip_incoming.unwrap_or_else(|| {
+            // Passthrough keeps client auth, others strip by default
+            self.method != AuthMethod::Passthrough
+        })
+    }
+
+    /// Resolve the API key from env var or direct value
+    /// Returns None if no key configured or passthrough mode
+    pub fn resolve_key(&self) -> Option<String> {
+        if self.method == AuthMethod::Passthrough {
+            return None;
+        }
+
+        // Priority: env var > direct value
+        if let Some(env_name) = &self.key_env {
+            if let Ok(value) = std::env::var(env_name) {
+                if !value.is_empty() {
+                    return Some(value);
+                }
+            }
+        }
+
+        self.key.clone()
+    }
+
+    /// Build the authentication header (name, value) for this config
+    /// Returns None if passthrough or no key available
+    pub fn build_header(&self) -> Option<(String, String)> {
+        let key = self.resolve_key()?;
+
+        match &self.method {
+            AuthMethod::Passthrough => None,
+            AuthMethod::Bearer => Some(("authorization".to_string(), format!("Bearer {}", key))),
+            AuthMethod::XApiKey => Some(("x-api-key".to_string(), key)),
+            AuthMethod::Basic => {
+                // For basic auth, key should be pre-encoded base64 string
+                // (i.e., base64("user:pass") - user provides the encoded value)
+                Some(("authorization".to_string(), format!("Basic {}", key)))
+            }
+            AuthMethod::Header => {
+                let header_name = self
+                    .header_name
+                    .clone()
+                    .unwrap_or_else(|| "x-api-key".to_string());
+                Some((header_name.to_lowercase(), key))
+            }
+        }
     }
 }
 
@@ -275,6 +448,34 @@ impl ClientsConfig {
     /// Check if clients are configured (not empty)
     pub fn is_configured(&self) -> bool {
         !self.clients.is_empty()
+    }
+
+    /// Get the API format expected by a client's provider
+    ///
+    /// Returns the provider's api_format setting, or None if client not found.
+    /// Default is Anthropic format (no translation needed for Claude Code).
+    pub fn get_client_api_format(&self, client_id: &str) -> Option<&ApiFormat> {
+        self.get_client_provider(client_id).map(|p| &p.api_format)
+    }
+
+    /// Get the effective authentication config for a client
+    ///
+    /// Resolution order:
+    /// 1. Client's auth override (if specified)
+    /// 2. Provider's auth config (if specified)
+    /// 3. None (passthrough mode - forward client's auth headers)
+    pub fn get_effective_auth(&self, client_id: &str) -> Option<&ProviderAuth> {
+        let client = self.get_client(client_id)?;
+
+        // Client override takes precedence
+        if client.auth.is_some() {
+            return client.auth.as_ref();
+        }
+
+        // Fall back to provider's auth config
+        self.providers
+            .get(&client.provider)
+            .and_then(|p| p.auth.as_ref())
     }
 }
 
@@ -371,6 +572,8 @@ struct FileEmbeddingsConfig {
     api_base: Option<String>,
     api_version: Option<String>,
     auth_method: Option<String>,
+    /// API key from config file (env vars take precedence)
+    api_key: Option<String>,
     poll_interval_secs: Option<u64>,
     batch_size: Option<usize>,
     batch_delay_ms: Option<u64>,
@@ -506,6 +709,15 @@ impl Config {
             return r#"
 # [providers.anthropic]
 # base_url = "https://api.anthropic.com"
+#
+# # Provider with OpenAI-compatible API (e.g., OpenRouter)
+# [providers.openrouter]
+# base_url = "https://openrouter.ai/api"
+# api_format = "openai"  # Translate Anthropic <-> OpenAI format
+# [providers.openrouter.auth]
+# method = "bearer"
+# key_env = "OPENROUTER_API_KEY"
+# strip_incoming = true
 "#
             .to_string();
         }
@@ -522,6 +734,33 @@ impl Config {
             if let Some(name) = &provider.name {
                 output.push_str(&format!("name = \"{}\"\n", name));
             }
+
+            // Serialize api_format if not default (anthropic)
+            if provider.api_format != ApiFormat::Anthropic {
+                output.push_str(&format!(
+                    "api_format = \"{}\"\n",
+                    provider.api_format.as_str()
+                ));
+            }
+
+            // Serialize auth config if present
+            if let Some(auth) = &provider.auth {
+                output.push_str(&format!("\n[providers.{}.auth]\n", provider_id));
+                output.push_str(&format!("method = \"{}\"\n", auth.method.as_str()));
+                if let Some(key_env) = &auth.key_env {
+                    output.push_str(&format!("key_env = \"{}\"\n", key_env));
+                }
+                if let Some(key) = &auth.key {
+                    output.push_str(&format!("key = \"{}\"\n", key));
+                }
+                if let Some(header_name) = &auth.header_name {
+                    output.push_str(&format!("header_name = \"{}\"\n", header_name));
+                }
+                if let Some(strip) = auth.strip_incoming {
+                    output.push_str(&format!("strip_incoming = {}\n", strip));
+                }
+            }
+
             output.push('\n');
         }
         output
@@ -591,9 +830,7 @@ flush_interval_secs = {lifestats_flush_interval_secs}
 [embeddings]
 provider = "{embed_provider}"
 model = "{embed_model}"
-# api_base = "https://api.openai.com/v1"  # For remote provider
-# auth_method = "bearer"                   # "bearer" or "api-key" (Azure)
-poll_interval_secs = {embed_poll_interval}
+{embed_api_base}{embed_auth_method}poll_interval_secs = {embed_poll_interval}
 batch_size = {embed_batch_size}
 batch_delay_ms = {embed_batch_delay}
 max_content_length = {embed_max_content}
@@ -610,13 +847,7 @@ max_content_length = {embed_max_content}
 [translation]
 enabled = {translation_enabled}
 auto_detect = {translation_auto_detect}
-
-# Model mappings (OpenAI model -> Anthropic model)
-# Uncomment and customize as needed. Built-in defaults handle common models.
-# [translation.model_mapping]
-# "gpt-4" = "claude-sonnet-4-20250514"
-# "gpt-4-turbo" = "claude-sonnet-4-20250514"
-# "gpt-3.5-turbo" = "claude-3-haiku-20240307"
+{translation_model_mapping}
 # ─────────────────────────────────────────────────────────────────────────────
 # MULTI-CLIENT ROUTING (Optional)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -654,8 +885,41 @@ auto_detect = {translation_auto_detect}
             lifestats_flush_interval_secs = self.lifestats.flush_interval_secs,
             translation_enabled = self.translation.enabled,
             translation_auto_detect = self.translation.auto_detect,
+            translation_model_mapping = if self.translation.model_mapping.is_empty() {
+                r#"
+# Model mappings (source model -> target model)
+# Uncomment and customize as needed. Built-in defaults handle common models.
+# [translation.model_mapping]
+# "gpt-4" = "claude-sonnet-4-20250514"
+# "gpt-3.5-turbo" = "claude-3-haiku-20240307"
+"#
+                .to_string()
+            } else {
+                let mut mappings = String::from("\n[translation.model_mapping]\n");
+                let mut keys: Vec<_> = self.translation.model_mapping.keys().collect();
+                keys.sort();
+                for key in keys {
+                    let value = &self.translation.model_mapping[key];
+                    mappings.push_str(&format!("\"{}\" = \"{}\"\n", key, value));
+                }
+                mappings
+            },
             embed_provider = self.embeddings.provider,
             embed_model = self.embeddings.model,
+            embed_api_base = self
+                .embeddings
+                .api_base
+                .as_ref()
+                .map(|url| format!("api_base = \"{}\"\n", url))
+                .unwrap_or_else(|| {
+                    "# api_base = \"https://api.openai.com/v1\"  # For remote provider\n"
+                        .to_string()
+                }),
+            embed_auth_method = if self.embeddings.auth_method != "bearer" {
+                format!("auth_method = \"{}\"\n", self.embeddings.auth_method)
+            } else {
+                "# auth_method = \"bearer\"  # \"bearer\" or \"api-key\" (Azure)\n".to_string()
+            },
             embed_poll_interval = self.embeddings.poll_interval_secs,
             embed_batch_size = self.embeddings.batch_size,
             embed_batch_delay = self.embeddings.batch_delay_ms,
@@ -792,8 +1056,12 @@ auto_detect = {translation_auto_detect}
         };
 
         // Embeddings settings: file config + env var for API key
+        // API key precedence: ASPY_EMBEDDINGS_API_KEY env var > config file
         let file_embeddings = file.embeddings.unwrap_or_default();
         let embed_defaults = EmbeddingsConfig::default();
+        let embeddings_api_key = std::env::var("ASPY_EMBEDDINGS_API_KEY")
+            .ok()
+            .or(file_embeddings.api_key.clone());
         let embeddings = EmbeddingsConfig {
             provider: file_embeddings.provider.unwrap_or(embed_defaults.provider),
             model: file_embeddings.model.unwrap_or(embed_defaults.model),
@@ -802,6 +1070,7 @@ auto_detect = {translation_auto_detect}
             auth_method: file_embeddings
                 .auth_method
                 .unwrap_or(embed_defaults.auth_method),
+            api_key: embeddings_api_key,
             poll_interval_secs: file_embeddings
                 .poll_interval_secs
                 .unwrap_or(embed_defaults.poll_interval_secs),

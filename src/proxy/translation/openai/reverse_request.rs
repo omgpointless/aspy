@@ -54,8 +54,16 @@ impl RequestTranslator for AnthropicToOpenAiRequest {
         body: &[u8],
         _headers: &HeaderMap,
     ) -> Result<(Vec<u8>, TranslationContext)> {
-        let anthropic_request: AnthropicRequest =
-            serde_json::from_slice(body).context("Failed to parse Anthropic request")?;
+        let anthropic_request: AnthropicRequest = serde_json::from_slice(body).map_err(|e| {
+            // Log a sample of the body to help debug parsing failures
+            let body_preview = String::from_utf8_lossy(&body[..body.len().min(500)]);
+            tracing::error!(
+                "Failed to parse Anthropic request: {} | Body preview: {}...",
+                e,
+                body_preview
+            );
+            anyhow::anyhow!("Failed to parse Anthropic request: {}", e)
+        })?;
 
         // Build OpenAI messages array
         let mut openai_messages: Vec<OpenAiMessage> = Vec::new();
@@ -100,13 +108,13 @@ impl RequestTranslator for AnthropicToOpenAiRequest {
             });
 
         // Build OpenAI request
+        // Note: max_tokens is optional in Anthropic API, passthrough as-is to OpenAI
         let openai_request = OpenAiChatRequest {
             model: openai_model,
             messages: openai_messages,
-            max_tokens: Some(anthropic_request.max_tokens),
-            temperature: anthropic_request
-                .temperature
-                .map(|t| (t * 2.0).clamp(0.0, 2.0)),
+            max_tokens: anthropic_request.max_tokens,
+            // Pass temperature through unchanged - most providers use 0-1 range
+            temperature: anthropic_request.temperature,
             top_p: anthropic_request.top_p,
             stop: anthropic_request.stop_sequences,
             stream: anthropic_request.stream,
@@ -150,7 +158,8 @@ struct AnthropicRequest {
     messages: Vec<AnthropicMessage>,
     #[serde(default)]
     system: Option<SystemPrompt>,
-    max_tokens: u32,
+    #[serde(default)]
+    max_tokens: Option<u32>,
     #[serde(default)]
     temperature: Option<f32>,
     #[serde(default)]

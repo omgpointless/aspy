@@ -18,8 +18,24 @@ provider = "none"           # "none" | "local" | "remote"
 model = ""                  # Model name (provider-specific)
 api_base = ""               # API endpoint (remote only)
 auth_method = "bearer"      # "bearer" | "api-key"
+api_key = ""                # Optional: API key (env var takes precedence)
 batch_size = 10             # Documents per batch
 poll_interval_secs = 30     # How often indexer checks for new content
+```
+
+**API Key Configuration:**
+
+The API key can be set via environment variable or config file. Environment variable takes precedence:
+
+```bash
+# Recommended: Use dedicated environment variable
+export ASPY_EMBEDDINGS_API_KEY="sk-..."
+```
+
+Or in config file (less secure, but convenient for testing):
+```toml
+[embeddings]
+api_key = "sk-..."
 ```
 
 ---
@@ -40,7 +56,7 @@ poll_interval_secs = 30
 
 **Environment:**
 ```bash
-export OPENAI_API_KEY="sk-..."
+export ASPY_EMBEDDINGS_API_KEY="sk-..."
 ```
 
 **Dimensions:**
@@ -64,7 +80,7 @@ poll_interval_secs = 30
 
 **Environment:**
 ```bash
-export AZURE_OPENAI_API_KEY="your-azure-key"
+export ASPY_EMBEDDINGS_API_KEY="your-azure-key"
 ```
 
 **Note:** The `api_base` should include the deployment. Azure's endpoint structure:
@@ -276,7 +292,7 @@ aspy embeddings --reindex
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `Provider: disabled` | `provider = "none"` in config | Set to `"local"` or `"remote"` |
-| `Provider: remote` but 0% progress | Missing API key | Set `OPENAI_API_KEY` or `AZURE_OPENAI_API_KEY` |
+| `Provider: remote` but 0% progress | Missing API key | Set `ASPY_EMBEDDINGS_API_KEY` env var or `api_key` in config |
 | Local embeddings not available | Missing feature flag | Rebuild with `--features local-embeddings` |
 | `search_type: "fts_only"` | No embeddings indexed yet | Wait for indexer, or check status |
 | Dimensions mismatch error | Changed models without reindex | `aspy embeddings --reindex` |

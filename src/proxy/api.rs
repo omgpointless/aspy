@@ -1636,9 +1636,8 @@ pub async fn lifestats_context_hybrid_user(
                 _ => AuthMethod::Bearer,
             };
 
-            let api_key = std::env::var("OPENAI_API_KEY")
-                .or_else(|_| std::env::var("AZURE_OPENAI_API_KEY"))
-                .ok();
+            // Use the resolved API key from config (supports ASPY_EMBEDDINGS_API_KEY and others)
+            let api_key = config.embeddings.api_key.clone();
 
             let embed_config = EmbeddingConfig {
                 provider: provider_type,

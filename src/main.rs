@@ -317,15 +317,11 @@ async fn main() -> Result<()> {
                                     _ => AuthMethod::Bearer,
                                 };
 
-                                // Get API key from environment
-                                let api_key = std::env::var("OPENAI_API_KEY")
-                                    .or_else(|_| std::env::var("AZURE_OPENAI_API_KEY"))
-                                    .ok();
-
+                                // API key is already resolved in config (ASPY_EMBEDDINGS_API_KEY or config file)
                                 let embed_config = EmbeddingConfig {
                                     provider: provider_type,
                                     model: config.embeddings.model.clone(),
-                                    api_key,
+                                    api_key: config.embeddings.api_key.clone(),
                                     api_base: config.embeddings.api_base.clone(),
                                     api_version: config.embeddings.api_version.clone(),
                                     auth_method,

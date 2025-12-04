@@ -14,6 +14,8 @@ pub mod sessions;
 pub mod sse;
 pub mod translation;
 
+use std::error::Error as StdError;
+
 use crate::config::{ClientsConfig, Config};
 use crate::events::{generate_id, ProxyEvent};
 use crate::parser::models::CapturedHeaders;
@@ -190,6 +192,9 @@ pub async fn start_proxy(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300)) // 5 minute timeout for API calls
         .pool_max_idle_per_host(10)
+        // Force HTTP/1.1 to avoid HTTP/2 connection reset issues with some providers
+        .http1_only()
+        .user_agent("aspy/0.1.0")
         .build()
         .context("Failed to create HTTP client")?;
 
@@ -523,30 +528,52 @@ async fn proxy_handler(
         .await
         .map_err(|e| ProxyError::BodyRead(format!("Failed to read request body: {}", e)))?;
 
-    // Apply translation if enabled and request is in a different format
+    // Determine target API format based on provider config
+    // If provider expects OpenAI format, translate Anthropic → OpenAI
+    let target_format = routing
+        .client_id
+        .as_ref()
+        .and_then(|cid| state.clients.get_client_api_format(cid))
+        .map(|fmt| match fmt {
+            crate::config::ApiFormat::Anthropic => translation::ApiFormat::Anthropic,
+            crate::config::ApiFormat::Openai => translation::ApiFormat::OpenAI,
+        })
+        .unwrap_or(translation::ApiFormat::Anthropic);
+
+    // Apply translation if enabled, targeting the provider's expected format
     let (translated_body, translation_ctx, translated_path) = state
         .translation
-        .translate_request(&routing.api_path, &headers, &body_bytes)
+        .translate_request_for_target(&routing.api_path, &headers, &body_bytes, target_format)
         .map_err(|e| ProxyError::BodyRead(format!("Translation failed: {}", e)))?;
 
     // Use translated path for endpoint detection (may have changed from /chat/completions to /messages)
     let effective_api_path = if translation_ctx.needs_response_translation() {
-        tracing::debug!(
-            "Request translated: {} -> {} (path: {} -> {})",
-            translation_ctx.client_format,
-            translation_ctx.backend_format,
-            routing.api_path,
-            translated_path
-        );
+        // Log translated body model for debugging
+        if let Ok(translated_json) = serde_json::from_slice::<serde_json::Value>(&translated_body) {
+            let model = translated_json
+                .get("model")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown");
+            tracing::info!(
+                "Translation: {} -> {} | model: {} | path: {} -> {}",
+                translation_ctx.client_format,
+                translation_ctx.backend_format,
+                model,
+                routing.api_path,
+                translated_path
+            );
+        }
         translated_path.clone()
     } else {
         routing.api_path.clone()
     };
 
-    let is_messages_endpoint = effective_api_path.contains("/messages");
+    // Check if this is a completion endpoint (Anthropic /messages or OpenAI /chat/completions)
+    let is_messages_endpoint = effective_api_path.contains("/messages")
+        || effective_api_path.contains("/chat/completions");
 
     // Try to parse request body as JSON for display (use original body for logging)
-    let request_body = if is_messages_endpoint || routing.api_path.contains("/chat/completions") {
+    let request_body = if is_messages_endpoint {
         serde_json::from_slice::<serde_json::Value>(&body_bytes).ok()
     } else {
         None
@@ -600,33 +627,130 @@ async fn proxy_handler(
 
     // Build the forward URL using client routing and translated path
     let forward_url = format!("{}{}", routing.base_url, effective_api_path);
-    let query = uri.query().unwrap_or("");
-    let forward_url = if query.is_empty() {
+
+    // Don't pass Anthropic-specific query params (like ?beta=true) to OpenAI targets
+    let forward_url = if target_format == translation::ApiFormat::OpenAI {
+        // Strip query params entirely for OpenAI targets
         forward_url
     } else {
-        format!("{}?{}", forward_url, query)
+        let query = uri.query().unwrap_or("");
+        if query.is_empty() {
+            forward_url
+        } else {
+            format!("{}?{}", forward_url, query)
+        }
     };
 
     // Use translated body if translation occurred, otherwise use original
     let final_body = translated_body;
+    let body_size = final_body.len();
 
     // Build the forwarded request
     // With reqwest 0.12, Method types align with axum (both use http 1.0 crate)
     let mut forward_req = state.client.request(method, &forward_url).body(final_body);
 
-    // Copy relevant headers (types align between axum and reqwest 0.12)
+    // Get effective auth config for this client (if routed)
+    let auth_config = routing
+        .client_id
+        .as_ref()
+        .and_then(|cid| state.clients.get_effective_auth(cid));
+
+    // Copy relevant headers with auth transformation
     for (key, value) in headers.iter() {
-        if key == "host" || key == "connection" || key == "transfer-encoding" {
+        let key_str = key.as_str();
+
+        // Skip connection control headers
+        if key_str == "host" || key_str == "connection" || key_str == "transfer-encoding" {
             continue;
         }
+
+        // Skip content-length if body was translated (size changed)
+        if key_str == "content-length" && translation_ctx.needs_response_translation() {
+            continue;
+        }
+
+        // Skip auth headers if strip_incoming is enabled
+        if let Some(auth) = auth_config {
+            if auth.should_strip_incoming() && is_auth_header(key_str) {
+                tracing::debug!("Stripping auth header: {}", key);
+                continue;
+            }
+        }
+
+        // Skip Anthropic-specific headers when targeting OpenAI format
+        if target_format == translation::ApiFormat::OpenAI && is_anthropic_header(key_str) {
+            tracing::debug!("Stripping Anthropic header for OpenAI target: {}", key);
+            continue;
+        }
+
         forward_req = forward_req.header(key, value);
     }
 
-    // Send the request to Anthropic
-    let response = forward_req
-        .send()
-        .await
-        .map_err(|e| ProxyError::Upstream(e.to_string()))?;
+    // Ensure Content-Type is set for translated requests
+    if translation_ctx.needs_response_translation() {
+        forward_req = forward_req.header("content-type", "application/json");
+    }
+
+    // Add provider's auth header if configured (after stripping incoming auth)
+    let auth_header_added = if let Some(auth) = auth_config {
+        if let Some((header_name, header_value)) = auth.build_header() {
+            forward_req = forward_req.header(&header_name, &header_value);
+            Some((header_name, header_value.len()))
+        } else {
+            tracing::warn!(
+                "Auth config present but no header built - check key_env is set for client {:?}",
+                routing.client_id
+            );
+            None
+        }
+    } else {
+        None
+    };
+
+    // Log forwarding summary
+    tracing::info!(
+        "Forwarding: {} | body: {} bytes | auth: {} | format: {}",
+        forward_url,
+        body_size,
+        auth_header_added
+            .as_ref()
+            .map(|(h, len)| format!("{}({} chars)", h, len))
+            .unwrap_or_else(|| "passthrough".to_string()),
+        target_format
+    );
+
+    // Send the request
+    let response = forward_req.send().await.map_err(|e| {
+        // Provide detailed error information with full source chain
+        let mut error_chain = format!("{}", e);
+        let mut source = StdError::source(&e);
+        while let Some(s) = source {
+            error_chain.push_str(&format!(" <- {}", s));
+            source = s.source();
+        }
+
+        let error_type = if e.is_connect() {
+            "Connection"
+        } else if e.is_timeout() {
+            "Timeout"
+        } else if e.is_request() {
+            "Request"
+        } else if e.is_body() {
+            "Body"
+        } else if e.is_decode() {
+            "Decode"
+        } else {
+            "Unknown"
+        };
+
+        tracing::error!(
+            "Upstream {} error: {} | Body size: {} bytes",
+            error_type,
+            error_chain,
+            body_size
+        );
+        ProxyError::Upstream(format!("{} error: {}", error_type, error_chain))
+    })?;
 
     // TTFB: Time to first byte - captured immediately after headers received
     let ttfb = start.elapsed();
@@ -1062,17 +1186,30 @@ async fn handle_buffered_response(ctx: ResponseContext) -> Result<Response<Body>
 
     // Try to parse response body for display
     let parsed_response_body = if is_messages_endpoint && status.is_success() {
-        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&response_body) {
-            Some(json)
-        } else {
-            let body_str = std::str::from_utf8(&response_body).unwrap_or("");
-            if body_str.contains("event:") {
-                sse::assemble_to_json(body_str)
-            } else {
-                None
+        match serde_json::from_slice::<serde_json::Value>(&response_body) {
+            Ok(json) => Some(json),
+            Err(e) => {
+                let body_preview =
+                    String::from_utf8_lossy(&response_body[..response_body.len().min(200)]);
+                tracing::warn!(
+                    "Failed to parse response JSON: {} | Preview: {}",
+                    e,
+                    body_preview
+                );
+                let body_str = std::str::from_utf8(&response_body).unwrap_or("");
+                if body_str.contains("event:") {
+                    sse::assemble_to_json(body_str)
+                } else {
+                    None
+                }
             }
         }
     } else {
+        tracing::error!(
+            "Skipping response body parse: is_messages_endpoint={}, status={}",
+            is_messages_endpoint,
+            status
+        );
         None
     };
 
@@ -1092,9 +1229,40 @@ async fn handle_buffered_response(ctx: ResponseContext) -> Result<Response<Body>
         )
         .await;
 
-    // Parse response for tool calls if this is a messages endpoint
+    // Apply response translation FIRST (so parser sees Anthropic format)
+    let final_response_body = if translation_ctx.needs_response_translation() && status.is_success()
+    {
+        // Get response translator (backend_format → client_format)
+        if let Some(translator) = state.translation.get_response_translator(
+            translation_ctx.backend_format,
+            translation_ctx.client_format,
+        ) {
+            match translator.translate_buffered(&response_body, &translation_ctx) {
+                Ok(translated) => {
+                    tracing::debug!(
+                        "Response translated: {} -> {} ({} -> {} bytes)",
+                        translation_ctx.backend_format,
+                        translation_ctx.client_format,
+                        response_body.len(),
+                        translated.len()
+                    );
+                    translated.into()
+                }
+                Err(e) => {
+                    tracing::warn!("Response translation failed, returning original: {}", e);
+                    response_body
+                }
+            }
+        } else {
+            response_body
+        }
+    } else {
+        response_body
+    };
+
+    // Parse response for tool calls, assistant content, usage (uses translated body for correct format)
     if is_messages_endpoint && status.is_success() {
-        if let Ok(events) = state.parser.parse_response(&response_body).await {
+        if let Ok(events) = state.parser.parse_response(&final_response_body).await {
             for event in events {
                 // Update context state when we see ApiUsage (skip Haiku utility calls)
                 if let ProxyEvent::ApiUsage {
@@ -1125,37 +1293,6 @@ async fn handle_buffered_response(ctx: ResponseContext) -> Result<Response<Body>
             }
         }
     }
-
-    // Apply response translation if needed (convert Anthropic response to OpenAI format)
-    let final_response_body = if translation_ctx.needs_response_translation() && status.is_success()
-    {
-        // Get response translator
-        if let Some(translator) = state
-            .translation
-            .get_response_translator(ApiFormat::Anthropic, translation_ctx.client_format)
-        {
-            match translator.translate_buffered(&response_body, &translation_ctx) {
-                Ok(translated) => {
-                    tracing::debug!(
-                        "Response translated: {} -> {} ({} -> {} bytes)",
-                        ApiFormat::Anthropic,
-                        translation_ctx.client_format,
-                        response_body.len(),
-                        translated.len()
-                    );
-                    translated.into()
-                }
-                Err(e) => {
-                    tracing::warn!("Response translation failed, returning original: {}", e);
-                    response_body
-                }
-            }
-        } else {
-            response_body
-        }
-    } else {
-        response_body
-    };
 
     // Build response to return to client
     let mut builder = Response::builder().status(status.as_u16());
@@ -1192,6 +1329,20 @@ fn merge_headers(mut req: CapturedHeaders, resp: CapturedHeaders) -> CapturedHea
     req.tokens_remaining = resp.tokens_remaining;
     req.tokens_reset = resp.tokens_reset;
     req
+}
+
+/// Check if a header is an authentication header that should be stripped
+/// when transforming auth for a different provider
+fn is_auth_header(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower == "authorization" || lower == "x-api-key"
+}
+
+/// Check if a header is Anthropic-specific and should be stripped
+/// when forwarding to non-Anthropic providers (e.g., OpenRouter)
+fn is_anthropic_header(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.starts_with("anthropic-") || lower == "x-stainless-lang" || lower == "x-stainless-arch"
 }
 
 /// Extract user ID (api_key_hash) from request headers

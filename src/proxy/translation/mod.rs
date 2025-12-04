@@ -378,11 +378,28 @@ impl TranslationPipeline {
     /// Translate a request if needed, returning translated body and context
     ///
     /// If the request is already in Anthropic format, returns a passthrough context.
+    /// This is a convenience wrapper for `translate_request_for_target` with Anthropic as target.
+    #[allow(dead_code)] // Kept for backward compatibility and potential external use
     pub fn translate_request(
         &self,
         path: &str,
         headers: &HeaderMap,
         body: &[u8],
+    ) -> anyhow::Result<(Vec<u8>, TranslationContext, String)> {
+        // Default target is Anthropic (backward compatible)
+        self.translate_request_for_target(path, headers, body, ApiFormat::Anthropic)
+    }
+
+    /// Translate a request to a specific target format
+    ///
+    /// Used when the provider expects a specific API format (e.g., OpenRouter expects OpenAI format).
+    /// If the request is already in the target format, returns a passthrough context.
+    pub fn translate_request_for_target(
+        &self,
+        path: &str,
+        headers: &HeaderMap,
+        body: &[u8],
+        target: ApiFormat,
     ) -> anyhow::Result<(Vec<u8>, TranslationContext, String)> {
         if !self.enabled {
             return Ok((
@@ -394,8 +411,8 @@ impl TranslationPipeline {
 
         let detected = self.detect_format(path, headers, body);
 
-        if detected == ApiFormat::Anthropic {
-            tracing::debug!("Request already in Anthropic format, passthrough");
+        if detected == target {
+            tracing::debug!("Request already in {} format, passthrough", target);
             return Ok((
                 body.to_vec(),
                 TranslationContext::passthrough(),
@@ -403,26 +420,28 @@ impl TranslationPipeline {
             ));
         }
 
-        // Find translator for detected format → Anthropic
+        // Find translator for detected format → target format
         let translator = self
-            .get_request_translator(detected, ApiFormat::Anthropic)
+            .get_request_translator(detected, target)
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "No request translator available for {} → Anthropic",
-                    detected
+                    "No request translator available for {} → {}",
+                    detected,
+                    target
                 )
             })?;
 
         tracing::debug!(
-            "Translating request: {} → Anthropic (using {})",
+            "Translating request: {} → {} (using {})",
             detected,
+            target,
             translator.name()
         );
 
         let (translated_body, ctx) = translator.translate(body, headers)?;
 
-        // Map the path to Anthropic endpoint
-        let translated_path = ApiFormat::Anthropic.endpoint_path().to_string();
+        // Map the path to target endpoint
+        let translated_path = target.endpoint_path().to_string();
 
         Ok((translated_body, ctx, translated_path))
     }

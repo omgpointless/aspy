@@ -11,7 +11,7 @@
 //
 // Run with: ASPY_DEMO=1 cargo run --release
 
-use crate::events::ProxyEvent;
+use crate::events::{ProxyEvent, TrackedEvent};
 use crate::StreamingThinking;
 use chrono::Utc;
 use serde_json::json;
@@ -20,9 +20,17 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::sleep;
 
+/// Demo user identifier for tracked events
+const DEMO_USER_ID: &str = "demo";
+
+/// Wrap a ProxyEvent in TrackedEvent with demo user context
+fn wrap_demo_event(event: ProxyEvent) -> TrackedEvent {
+    TrackedEvent::new(event, Some(DEMO_USER_ID.to_string()), None)
+}
+
 /// Generate a sequence of demo events simulating a Claude Code session
 pub async fn run_demo(
-    tx: mpsc::Sender<ProxyEvent>,
+    tx: mpsc::Sender<TrackedEvent>,
     mut shutdown_rx: oneshot::Receiver<()>,
     streaming_thinking: StreamingThinking,
 ) {
@@ -50,9 +58,9 @@ pub async fn run_demo(
                 buf.clear();
             }
             let _ = tx
-                .send(ProxyEvent::ThinkingStarted {
+                .send(wrap_demo_event(ProxyEvent::ThinkingStarted {
                     timestamp: Utc::now(),
-                })
+                }))
                 .await;
 
             // Stream thinking content word by word
@@ -63,15 +71,15 @@ pub async fn run_demo(
 
             // Now emit the complete Thinking event (for stats tracking)
             let _ = tx
-                .send(ProxyEvent::Thinking {
+                .send(wrap_demo_event(ProxyEvent::Thinking {
                     timestamp: Utc::now(),
                     content: content.clone(),
                     token_estimate: *token_estimate,
-                })
+                }))
                 .await;
         } else {
             // Non-thinking events: send normally
-            if tx.send(event).await.is_err() {
+            if tx.send(wrap_demo_event(event)).await.is_err() {
                 break;
             }
         }

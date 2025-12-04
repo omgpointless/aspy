@@ -8,7 +8,7 @@
 // Each session gets its own log file: aspy-YYYYMMDD-HHMMSS-XXXX.jsonl
 // Example: jq '.tool_name' logs/aspy-20251127-143022-a7b3.jsonl
 
-use crate::events::ProxyEvent;
+use crate::events::TrackedEvent;
 use anyhow::{Context, Result};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 pub struct Storage {
     log_dir: PathBuf,
     session_id: String,
-    event_rx: mpsc::Receiver<ProxyEvent>,
+    event_rx: mpsc::Receiver<TrackedEvent>,
 }
 
 impl Storage {
@@ -28,7 +28,7 @@ impl Storage {
     pub fn new(
         log_dir: PathBuf,
         session_id: String,
-        event_rx: mpsc::Receiver<ProxyEvent>,
+        event_rx: mpsc::Receiver<TrackedEvent>,
     ) -> Result<Self> {
         // Create the log directory if it doesn't exist
         fs::create_dir_all(&log_dir).context("Failed to create log directory")?;
@@ -66,7 +66,7 @@ impl Storage {
     }
 
     /// Write a single event to the log file
-    fn write_event(&self, event: &ProxyEvent) -> Result<()> {
+    fn write_event(&self, event: &TrackedEvent) -> Result<()> {
         let log_path = self.log_file_path();
 
         // Open file in append mode, create if it doesn't exist

@@ -122,6 +122,84 @@ pub enum ProxyEvent {
     },
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Tracked Event (Envelope for user/session context)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// An event wrapped with user and session context for filtering and tracking.
+///
+/// This envelope pattern allows us to:
+/// - Filter events by user_id (client identity like "foundry", "dev-1")
+/// - Track session_id for display/resume purposes
+/// - Extend later with OpenTelemetry trace context
+///
+/// The inner `event` is the actual ProxyEvent (ToolCall, Response, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackedEvent {
+    /// User identity (client ID from URL path, or API key hash fallback)
+    /// Examples: "foundry", "dev-1", "a3f2c91b"
+    pub user_id: Option<String>,
+
+    /// Claude Code's session ID (transient, changes on /compact or restart)
+    /// Used for display purposes (copy to /resume), not for filtering
+    pub session_id: Option<String>,
+
+    /// When the event was tracked (may differ slightly from inner event timestamp)
+    pub tracked_at: DateTime<Utc>,
+
+    /// The actual proxy event
+    #[serde(flatten)]
+    pub event: ProxyEvent,
+}
+
+impl TrackedEvent {
+    /// Create a new tracked event with user context
+    pub fn new(event: ProxyEvent, user_id: Option<String>, session_id: Option<String>) -> Self {
+        Self {
+            user_id,
+            session_id,
+            tracked_at: Utc::now(),
+            event,
+        }
+    }
+
+    /// Create a tracked event with no user context (anonymous/unknown)
+    ///
+    /// Used for events where user routing context isn't available:
+    /// - Demo mode synthetic events
+    /// - Test fixtures
+    /// - Error events before client identification
+    #[allow(dead_code)]
+    pub fn anonymous(event: ProxyEvent) -> Self {
+        Self::new(event, None, None)
+    }
+
+    /// Get the inner event's timestamp (for display/sorting)
+    ///
+    /// Extracts the timestamp from the wrapped ProxyEvent variant.
+    /// Used for:
+    /// - Event list sorting when filtered by user_id
+    /// - Time-based grouping in session views
+    #[allow(dead_code)]
+    pub fn event_timestamp(&self) -> DateTime<Utc> {
+        match &self.event {
+            ProxyEvent::ToolCall { timestamp, .. }
+            | ProxyEvent::ToolResult { timestamp, .. }
+            | ProxyEvent::Request { timestamp, .. }
+            | ProxyEvent::Response { timestamp, .. }
+            | ProxyEvent::Error { timestamp, .. }
+            | ProxyEvent::HeadersCaptured { timestamp, .. }
+            | ProxyEvent::RateLimitUpdate { timestamp, .. }
+            | ProxyEvent::ApiUsage { timestamp, .. }
+            | ProxyEvent::Thinking { timestamp, .. }
+            | ProxyEvent::ContextCompact { timestamp, .. }
+            | ProxyEvent::ThinkingStarted { timestamp }
+            | ProxyEvent::UserPrompt { timestamp, .. }
+            | ProxyEvent::AssistantResponse { timestamp, .. } => *timestamp,
+        }
+    }
+}
+
 /// Summary statistics for the status bar
 #[derive(Debug, Clone)]
 pub struct Stats {

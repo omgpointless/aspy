@@ -25,12 +25,10 @@
 
 mod system_reminder;
 
-// Re-exports for config parsing and future transformer implementations
+// Re-exports for config parsing and transformer implementations
 #[allow(unused_imports)]
-// InjectPosition and ReminderRule are part of the public API for config consumers
 pub use system_reminder::{
-    InjectPosition, PositionConfig, ReminderRule, RuleConfig, SystemReminderEditor,
-    SystemReminderEditorConfig,
+    InjectPosition, PositionConfig, RuleConfig, TagEditor, TagEditorConfig, TagRule,
 };
 
 use axum::http::StatusCode;
@@ -82,7 +80,7 @@ pub enum TransformResult {
 /// async prep work in the proxy handler before the sync pipeline runs.
 ///
 /// Fields are read by transformer implementations via pattern matching or direct access.
-/// Even if not currently used by SystemReminderEditor, they are part of the public API
+/// Even if not currently used by TagEditor, they are part of the public API
 /// for future transformers (ContextEnricher, ModelRouter, etc.).
 #[derive(Debug, Clone, Default)]
 pub struct TransformContext<'a> {
@@ -211,23 +209,17 @@ impl TransformationPipeline {
     pub fn from_config(config: &crate::config::Transformers) -> Self {
         let mut pipeline = Self::new();
 
-        // System reminder editor (opt-in)
-        if let Some(ref editor_config) = config.system_reminder_editor {
+        // Tag editor (opt-in)
+        if let Some(ref editor_config) = config.tag_editor {
             if editor_config.enabled {
-                match SystemReminderEditor::from_config(editor_config) {
+                match TagEditor::from_config(editor_config) {
                     Ok(editor) => {
                         let rule_count = editor.rule_count();
                         pipeline.register(editor);
-                        tracing::info!(
-                            "Registered system-reminder-editor transformer ({} rules)",
-                            rule_count
-                        );
+                        tracing::info!("Registered tag-editor transformer ({} rules)", rule_count);
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to create system-reminder-editor: {}. Transformer disabled.",
-                            e
-                        );
+                        tracing::warn!("Failed to create tag-editor: {}. Transformer disabled.", e);
                     }
                 }
             }

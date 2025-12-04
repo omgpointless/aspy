@@ -18,7 +18,7 @@ use super::scroll::FocusablePanel;
 use super::streaming::StreamingStateMachine;
 use super::traits::{Handled, Interactive};
 use crate::config::Config;
-use crate::events::{ProxyEvent, Stats};
+use crate::events::{ProxyEvent, Stats, TrackedEvent};
 use crate::logging::LogBuffer;
 use crate::theme::{Theme, ThemeConfig};
 use crate::StreamingThinking;
@@ -81,7 +81,7 @@ pub struct App {
     // The primary data this application manages
     // ─────────────────────────────────────────────────────────────────────────
     /// All proxy events received this session (tool calls, responses, etc.)
-    pub events: Vec<ProxyEvent>,
+    pub events: Vec<TrackedEvent>,
 
     /// Accumulated statistics (tokens, costs, tool calls, etc.)
     pub stats: Stats,
@@ -410,18 +410,21 @@ impl App {
     // ─────────────────────────────────────────────────────────────
 
     /// Add a new event and update statistics
-    pub fn add_event(&mut self, event: ProxyEvent) {
+    pub fn add_event(&mut self, tracked_event: TrackedEvent) {
         // Set session start time on first event
         if self.stats.session_started.is_none() {
             self.stats.session_started = Some(chrono::Utc::now());
         }
 
+        // Extract the inner ProxyEvent for stats processing
+        let event = &tracked_event.event;
+
         // Update statistics based on event type
         // First, populate historical ring buffers for sparklines
-        self.stats.update_history(&event);
+        self.stats.update_history(event);
 
         // Then, handle aggregate stats and TUI-specific state updates
-        match &event {
+        match event {
             ProxyEvent::Request { .. } => {
                 self.stats.total_requests += 1;
                 self.streaming_sm.on_request();
@@ -556,19 +559,20 @@ impl App {
         }
 
         // Log milestones to system log panel
-        self.check_milestones(&event);
+        self.check_milestones(event);
 
         // Sync local stats to shared stats for HTTP API access
         if let Ok(mut shared) = self.shared_stats.lock() {
             *shared = self.stats.clone();
         }
 
-        // Sync event to shared buffer for HTTP API access
+        // Sync event to shared buffer for HTTP API access (raw ProxyEvent for API compatibility)
         if let Ok(mut shared) = self.shared_events.lock() {
             shared.push(event.clone());
         }
 
-        self.events.push(event);
+        // Store the full TrackedEvent (includes user_id, session_id for filtering)
+        self.events.push(tracked_event);
         // In auto-follow mode (None), we don't need to track selection
         // The view will always show the latest events
     }

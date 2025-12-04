@@ -162,8 +162,8 @@ pub struct Transformers {
     /// Set to true to enable transformation pipeline.
     pub enabled: bool,
 
-    /// System reminder editor configuration
-    pub system_reminder_editor: Option<crate::proxy::transformation::SystemReminderEditorConfig>,
+    /// Tag editor configuration (operates on configurable XML-style tags)
+    pub tag_editor: Option<crate::proxy::transformation::TagEditorConfig>,
 }
 
 /// Lifetime statistics storage configuration
@@ -609,8 +609,8 @@ struct FileTranslation {
 #[derive(Debug, Deserialize, Default)]
 struct FileTransformers {
     enabled: Option<bool>,
-    #[serde(rename = "system-reminder-editor")]
-    system_reminder_editor: Option<crate::proxy::transformation::SystemReminderEditorConfig>,
+    #[serde(rename = "tag-editor")]
+    tag_editor: Option<crate::proxy::transformation::TagEditorConfig>,
 }
 /// Config file structure (subset of Config that makes sense to persist)
 #[derive(Debug, Deserialize, Default)]
@@ -686,17 +686,53 @@ impl Config {
     }
 
     /// Load file config if it exists
+    ///
+    /// # Panics
+    /// If config file exists but cannot be parsed. This is intentional -
+    /// a broken config should fail fast with a clear error, not silently
+    /// fall back to defaults while the user debugs the wrong thing.
     fn load_file_config() -> FileConfig {
         let Some(path) = Self::config_path() else {
             return FileConfig::default();
         };
 
         match std::fs::read_to_string(&path) {
-            Ok(contents) => toml::from_str(&contents).unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
+            Ok(contents) => {
+                match toml::from_str(&contents) {
+                    Ok(config) => config,
+                    Err(e) => {
+                        // Fatal error - config exists but is invalid
+                        // Print a clear, actionable error message
+                        eprintln!(
+                            "\n╔══════════════════════════════════════════════════════════════╗"
+                        );
+                        eprintln!(
+                            "║  CONFIG ERROR - Failed to parse configuration file          ║"
+                        );
+                        eprintln!(
+                            "╚══════════════════════════════════════════════════════════════╝\n"
+                        );
+                        eprintln!("  File: {}\n", path.display());
+                        eprintln!("  Error: {}\n", e);
+                        eprintln!("  Tip: Run `aspy config --show` to validate your config");
+                        eprintln!("       Or delete the file to regenerate defaults\n");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // File doesn't exist - that's fine, use defaults
                 FileConfig::default()
-            }),
-            Err(_) => FileConfig::default(), // File doesn't exist, use defaults
+            }
+            Err(e) => {
+                // File exists but can't be read (permissions, etc.)
+                eprintln!("\n╔══════════════════════════════════════════════════════════════╗");
+                eprintln!("║  CONFIG ERROR - Cannot read configuration file              ║");
+                eprintln!("╚══════════════════════════════════════════════════════════════╝\n");
+                eprintln!("  File: {}\n", path.display());
+                eprintln!("  Error: {}\n", e);
+                std::process::exit(1);
+            }
         }
     }
 
@@ -796,8 +832,8 @@ impl Config {
 
     /// Serialize transformers config to TOML (returns empty string if not configured)
     fn transformers_to_toml(&self) -> String {
-        // If no system reminder editor configured, return empty (comments in template suffice)
-        let Some(ref editor) = self.transformers.system_reminder_editor else {
+        // If no tag editor configured, return empty (comments in template suffice)
+        let Some(ref editor) = self.transformers.tag_editor else {
             return String::new();
         };
 
@@ -805,15 +841,20 @@ impl Config {
             return String::new();
         }
 
-        let mut output = String::from("\n[transformers.system-reminder-editor]\nenabled = true\n");
+        let mut output = String::from("\n[transformers.tag-editor]\nenabled = true\n");
 
         use crate::proxy::transformation::{PositionConfig, RuleConfig};
 
         for rule in &editor.rules {
-            output.push_str("\n[[transformers.system-reminder-editor.rules]]\n");
+            output.push_str("\n[[transformers.tag-editor.rules]]\n");
             match rule {
-                RuleConfig::Inject { content, position } => {
+                RuleConfig::Inject {
+                    tag,
+                    content,
+                    position,
+                } => {
                     output.push_str("type = \"inject\"\n");
+                    output.push_str(&format!("tag = \"{}\"\n", tag));
                     // Escape content for TOML multiline if needed
                     if content.contains('\n') {
                         output.push_str(&format!("content = \"\"\"\n{}\n\"\"\"\n", content));
@@ -829,27 +870,30 @@ impl Config {
                         }
                         PositionConfig::Before { pattern } => {
                             output.push_str(&format!(
-                                "[transformers.system-reminder-editor.rules.position]\nbefore = {{ pattern = \"{}\" }}\n",
+                                "[transformers.tag-editor.rules.position]\nbefore = {{ pattern = \"{}\" }}\n",
                                 pattern
                             ));
                         }
                         PositionConfig::After { pattern } => {
                             output.push_str(&format!(
-                                "[transformers.system-reminder-editor.rules.position]\nafter = {{ pattern = \"{}\" }}\n",
+                                "[transformers.tag-editor.rules.position]\nafter = {{ pattern = \"{}\" }}\n",
                                 pattern
                             ));
                         }
                     }
                 }
-                RuleConfig::Remove { pattern } => {
+                RuleConfig::Remove { tag, pattern } => {
                     output.push_str("type = \"remove\"\n");
+                    output.push_str(&format!("tag = \"{}\"\n", tag));
                     output.push_str(&format!("pattern = \"{}\"\n", pattern));
                 }
                 RuleConfig::Replace {
+                    tag,
                     pattern,
                     replacement,
                 } => {
                     output.push_str("type = \"replace\"\n");
+                    output.push_str(&format!("tag = \"{}\"\n", tag));
                     output.push_str(&format!("pattern = \"{}\"\n", pattern));
                     output.push_str(&format!("replacement = \"{}\"\n", replacement));
                 }
@@ -959,15 +1003,15 @@ enabled = {transformers_enabled}
 #   replace - Replace content within matching reminders
 #
 # Example: Inject a custom context reminder
-# [transformers.system-reminder-editor]
+# [transformers.tag-editor]
 # enabled = true
-# [[transformers.system-reminder-editor.rules]]
+# [[transformers.tag-editor.rules]]
 # type = "inject"
 # content = "Always respond in formal English."
 # position = "end"
 #
 # Example: Remove noisy debug reminders
-# [[transformers.system-reminder-editor.rules]]
+# [[transformers.tag-editor.rules]]
 # type = "remove"
 # pattern = "debug|noisy"  # Regex: removes reminders containing "debug" or "noisy"
 {transformers_section}
@@ -1231,7 +1275,7 @@ enabled = {transformers_enabled}
         let file_transformers = file.transformers.unwrap_or_default();
         let transformers = Transformers {
             enabled: file_transformers.enabled.unwrap_or(false),
-            system_reminder_editor: file_transformers.system_reminder_editor,
+            tag_editor: file_transformers.tag_editor,
         };
 
         // Client/provider config: file only
@@ -1407,7 +1451,7 @@ impl Config {
         let transform_active = self.transformers.enabled
             && self
                 .transformers
-                .system_reminder_editor
+                .tag_editor
                 .as_ref()
                 .map(|c| c.enabled)
                 .unwrap_or(false);

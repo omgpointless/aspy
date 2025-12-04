@@ -21,7 +21,7 @@ pub mod ui;
 pub mod views;
 
 use crate::config::Config;
-use crate::events::ProxyEvent;
+use crate::events::TrackedEvent;
 use crate::logging::LogBuffer;
 use crate::StreamingThinking;
 use anyhow::{Context, Result};
@@ -47,7 +47,7 @@ use views::format_event_detail;
 /// This function sets up the terminal, runs the event loop, and cleans up
 /// when done. The event loop handles both keyboard input and proxy events.
 pub async fn run_tui(
-    mut event_rx: mpsc::Receiver<ProxyEvent>,
+    mut event_rx: mpsc::Receiver<TrackedEvent>,
     log_buffer: LogBuffer,
     config: Config,
     streaming_thinking: StreamingThinking,
@@ -94,7 +94,7 @@ pub async fn run_tui(
 async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
-    event_rx: &mut mpsc::Receiver<ProxyEvent>,
+    event_rx: &mut mpsc::Receiver<TrackedEvent>,
 ) -> Result<()> {
     // Create a ticker for periodic redraws (20 FPS)
     let mut tick_interval = tokio::time::interval(Duration::from_millis(200));
@@ -192,8 +192,8 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
                                     if let Some(idx) = idx {
                                         app.detail_panel.reset();
                                         // Populate cached content for clipboard copy
-                                        if let Some(event) = app.events.get(idx) {
-                                            let renderable = format_event_detail(event);
+                                        if let Some(tracked) = app.events.get(idx) {
+                                            let renderable = format_event_detail(tracked);
                                             app.detail_panel
                                                 .set_content(renderable.as_str().to_string());
                                         }

@@ -18,7 +18,7 @@ pub mod translation;
 use std::error::Error as StdError;
 
 use crate::config::{ClientsConfig, Config};
-use crate::events::{generate_id, ProxyEvent};
+use crate::events::{generate_id, ProxyEvent, TrackedEvent};
 use crate::parser::models::CapturedHeaders;
 use crate::parser::Parser;
 use crate::pipeline::{EventPipeline, ProcessContext};
@@ -92,10 +92,10 @@ pub struct ProxyState {
     client: reqwest::Client,
     /// Parser for extracting tool calls
     parser: Parser,
-    /// Channel for sending events to TUI
-    event_tx_tui: mpsc::Sender<ProxyEvent>,
-    /// Channel for sending events to storage
-    event_tx_storage: mpsc::Sender<ProxyEvent>,
+    /// Channel for sending tracked events to TUI (includes user/session context)
+    event_tx_tui: mpsc::Sender<TrackedEvent>,
+    /// Channel for sending tracked events to storage (includes user/session context)
+    event_tx_storage: mpsc::Sender<TrackedEvent>,
     /// Target API URL (default, used when no client routing configured)
     api_url: String,
     /// Shared buffer for streaming thinking content to TUI
@@ -135,10 +135,10 @@ pub struct ProxyState {
 /// Event broadcast channels for TUI and storage consumers
 #[derive(Clone)]
 pub struct EventChannels {
-    /// Channel for sending events to TUI
-    pub tui: mpsc::Sender<ProxyEvent>,
-    /// Channel for sending events to storage
-    pub storage: mpsc::Sender<ProxyEvent>,
+    /// Channel for sending tracked events to TUI (includes user/session context)
+    pub tui: mpsc::Sender<TrackedEvent>,
+    /// Channel for sending tracked events to storage (includes user/session context)
+    pub storage: mpsc::Sender<TrackedEvent>,
 }
 
 /// Shared state passed to the proxy for cross-task coordination
@@ -385,6 +385,7 @@ impl ProxyState {
     /// Send an event to TUI, storage, and user's session
     ///
     /// Events are processed through the pipeline (if configured) before dispatch.
+    /// Events are wrapped in TrackedEvent with user/session context for filtering.
     /// We ignore errors here to avoid blocking the proxy if a receiver is slow or closed.
     async fn send_event(&self, event: ProxyEvent, user_id: Option<&str>) {
         // Build ProcessContext for pipeline
@@ -411,11 +412,18 @@ impl ProxyState {
             event
         };
 
-        // Send to TUI and storage channels
-        let _ = self.event_tx_tui.send(final_event.clone()).await;
-        let _ = self.event_tx_storage.send(final_event.clone()).await;
+        // Wrap in TrackedEvent with user/session context
+        let tracked = TrackedEvent::new(
+            final_event.clone(),
+            user_id.map(|s| s.to_string()),
+            session_id,
+        );
 
-        // Also record to user's session if we have a user_id
+        // Send tracked event to TUI and storage channels
+        let _ = self.event_tx_tui.send(tracked.clone()).await;
+        let _ = self.event_tx_storage.send(tracked).await;
+
+        // Also record raw event to user's session (SessionManager tracks its own events)
         if let Some(uid) = user_id {
             if let Ok(mut sessions) = self.sessions.lock() {
                 sessions.record_event(&sessions::UserId::new(uid), final_event);
@@ -777,7 +785,7 @@ async fn proxy_handler(
     };
 
     // Log forwarding summary
-    tracing::info!(
+    tracing::debug!(
         "Forwarding: {} | body: {} bytes | auth: {} | format: {}",
         forward_url,
         body_size,
@@ -996,9 +1004,13 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
                                         buf.clear();
                                     }
                                     let _ = event_tx_tui
-                                        .send(ProxyEvent::ThinkingStarted {
-                                            timestamp: chrono::Utc::now(),
-                                        })
+                                        .send(TrackedEvent::new(
+                                            ProxyEvent::ThinkingStarted {
+                                                timestamp: chrono::Utc::now(),
+                                            },
+                                            user_id_clone.clone(),
+                                            None, // session_id not available in streaming context
+                                        ))
                                         .await;
                                 }
                                 // Stream thinking content in real-time
@@ -1097,28 +1109,22 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
                     tracing::error!("{}", error_msg);
 
                     // Emit error event for observability (JSONL logs + TUI)
-                    let _ = event_tx_tui
-                        .send(ProxyEvent::Error {
-                            timestamp: chrono::Utc::now(),
-                            message: error_msg.clone(),
-                            context: Some(format!(
-                                "request_id: {}, accumulated: {} bytes",
-                                request_id_clone,
-                                accumulated.len()
-                            )),
-                        })
-                        .await;
-                    let _ = event_tx_storage
-                        .send(ProxyEvent::Error {
-                            timestamp: chrono::Utc::now(),
-                            message: error_msg,
-                            context: Some(format!(
-                                "request_id: {}, accumulated: {} bytes",
-                                request_id_clone,
-                                accumulated.len()
-                            )),
-                        })
-                        .await;
+                    let error_event = ProxyEvent::Error {
+                        timestamp: chrono::Utc::now(),
+                        message: error_msg,
+                        context: Some(format!(
+                            "request_id: {}, accumulated: {} bytes",
+                            request_id_clone,
+                            accumulated.len()
+                        )),
+                    };
+                    let tracked = TrackedEvent::new(
+                        error_event,
+                        user_id_clone.clone(),
+                        None, // session_id not available in streaming context
+                    );
+                    let _ = event_tx_tui.send(tracked.clone()).await;
+                    let _ = event_tx_storage.send(tracked).await;
                     break;
                 }
             }

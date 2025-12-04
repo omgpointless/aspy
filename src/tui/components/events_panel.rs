@@ -13,7 +13,7 @@
 //! naturally returns to auto-follow by setting selected = None.
 
 use super::scrollbar::{render_scrollbar_raw, ScrollbarStyle};
-use crate::events::ProxyEvent;
+use crate::events::{ProxyEvent, TrackedEvent};
 use crate::theme::Theme;
 use crate::tui::scroll::{FocusablePanel, ScrollState};
 use crate::tui::traits::{
@@ -112,7 +112,7 @@ impl EventsPanel {
         &self,
         f: &mut Frame,
         area: Rect,
-        events: &[ProxyEvent],
+        events: &[TrackedEvent],
         theme: &Theme,
         focused: bool,
     ) {
@@ -125,11 +125,11 @@ impl EventsPanel {
         let items: Vec<ListItem> = events[start..end]
             .iter()
             .enumerate()
-            .map(|(idx, event)| {
+            .map(|(idx, tracked)| {
                 let actual_idx = start + idx;
                 let is_selected = self.selected == Some(actual_idx);
 
-                let mut line = format_event_line(event);
+                let mut line = format_event_line(tracked);
 
                 // Truncate with ellipsis if line exceeds available width
                 // Use unicode display width (not byte length) for accurate column calculation
@@ -154,7 +154,7 @@ impl EventsPanel {
                     line.push('…');
                 }
 
-                let base_style = event_color_style(event, theme);
+                let base_style = event_color_style(&tracked.event, theme);
 
                 // Selected: use theme's selection fg/bg pair for guaranteed contrast
                 // Unselected: use event-type color on transparent background
@@ -392,17 +392,17 @@ impl Interactive for EventsPanel {
 // Helper methods for copy operations that need event data
 impl EventsPanel {
     /// Get formatted text for the selected event (for clipboard)
-    pub fn copy_text_with_events(&self, events: &[ProxyEvent]) -> Option<String> {
+    pub fn copy_text_with_events(&self, events: &[TrackedEvent]) -> Option<String> {
         self.selected
             .and_then(|idx| events.get(idx))
             .map(format_event_line)
     }
 
     /// Get JSONL for the selected event (for clipboard)
-    pub fn copy_data_with_events(&self, events: &[ProxyEvent]) -> Option<String> {
+    pub fn copy_data_with_events(&self, events: &[TrackedEvent]) -> Option<String> {
         self.selected
             .and_then(|idx| events.get(idx))
-            .and_then(|event| serde_json::to_string(event).ok())
+            .and_then(|tracked| serde_json::to_string(&tracked.event).ok())
     }
 }
 
@@ -454,7 +454,7 @@ pub fn render(
     f: &mut Frame,
     area: Rect,
     events_panel: &EventsPanel,
-    events: &[ProxyEvent],
+    events: &[TrackedEvent],
     theme: &Theme,
     focused: bool,
 ) {

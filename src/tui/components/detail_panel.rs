@@ -153,11 +153,11 @@ impl Interactive for DetailPanel {
                 self.scroll_down();
                 Handled::Yes
             }
-            KeyCode::Home => {
+            KeyCode::Home | KeyCode::Char('g') => {
                 self.scroll_to_top();
                 Handled::Yes
             }
-            KeyCode::End => {
+            KeyCode::End | KeyCode::Char('G') => {
                 self.scroll_to_bottom();
                 Handled::Yes
             }
@@ -178,7 +178,7 @@ impl Interactive for DetailPanel {
     }
 
     fn focus_hint(&self) -> Option<&'static str> {
-        Some("↑↓:scroll  y:copy  Esc:close")
+        Some("↑↓:scroll  g/G:top/end  y:copy  Esc:close")
     }
 }
 

@@ -292,12 +292,17 @@ impl TagEditor {
                             InjectPosition::After(Regex::new(pattern)?)
                         }
                     };
+                    let content_preview: String = content.chars().take(50).collect();
                     tracing::debug!(
                         tag = %tag,
-                        content_preview = %content.chars().take(50).collect::<String>(),
+                        content_preview = %content_preview,
                         position = ?pos,
                         has_when = when.is_some(),
-                        "Loaded Inject rule"
+                        "Loaded Inject rule: tag={} position={:?} content_preview={} has_when={}",
+                        tag,
+                        pos,
+                        content_preview,
+                        when.is_some()
                     );
                     TagRule::Inject {
                         tag: tag.clone(),
@@ -311,7 +316,10 @@ impl TagEditor {
                         tag = %tag,
                         pattern = %pattern,
                         has_when = when.is_some(),
-                        "Loaded Remove rule"
+                        "Loaded Remove rule: tag={} pattern={} has_when={}",
+                        tag,
+                        pattern,
+                        when.is_some()
                     );
                     TagRule::Remove {
                         tag: tag.clone(),
@@ -363,6 +371,21 @@ impl TagEditor {
         self.rules
             .iter()
             .any(|r| matches!(r, TagRule::Inject { .. }))
+    }
+
+    /// Count rule types for status reporting
+    fn rule_type_counts(&self) -> (usize, usize, usize) {
+        let mut remove = 0;
+        let mut replace = 0;
+        let mut inject = 0;
+        for rule in &self.rules {
+            match rule {
+                TagRule::Remove { .. } => remove += 1,
+                TagRule::Replace { .. } => replace += 1,
+                TagRule::Inject { .. } => inject += 1,
+            }
+        }
+        (remove, replace, inject)
     }
 
     /// Apply only Remove and Replace rules (not Inject)
@@ -514,7 +537,8 @@ impl TagEditor {
                 if blocks.len() != before_len {
                     tracing::debug!(
                         removed = before_len - blocks.len(),
-                        "Blocks removed by Remove rule for tag={:?} pattern={:?} when={:?}",
+                        "Blocks removed by Remove rule: {} blocks removed for tag={:?} pattern={:?} when={:?}",
+                        before_len - blocks.len(),
                         tag,
                         pattern,
                         when
@@ -645,7 +669,11 @@ impl RequestTransformer for TagEditor {
             tool_results = ctx.tool_result_count,
             client = ctx.client_id,
             rules = self.rules.len(),
-            "TagEditor::transform called"
+            "TagEditor::transform called: turn={:?} tool_results={:?} client={:?} rules={}",
+            ctx.turn_number,
+            ctx.tool_result_count,
+            ctx.client_id,
+            self.rules.len()
         );
 
         // Get messages array
@@ -734,7 +762,10 @@ impl RequestTransformer for TagEditor {
                     text_block_indices = ?text_block_indices,
                     last_text_idx = ?last_text_idx,
                     total_content_blocks = content_arr.len(),
-                    "Processing Array content structure"
+                    "Processing Array content structure: {} text blocks, {} total blocks, last_text_idx={:?}",
+                    text_block_indices.len(),
+                    content_arr.len(),
+                    last_text_idx
                 );
 
                 // Track indices of text blocks that become empty (to delete later)
@@ -768,7 +799,8 @@ impl RequestTransformer for TagEditor {
                     content_arr.remove(idx);
                     tracing::debug!(
                         removed_idx = idx,
-                        "Removed empty text block after transformation"
+                        "Removed empty text block after transformation at index {}",
+                        idx
                     );
                 }
 
@@ -801,7 +833,8 @@ impl RequestTransformer for TagEditor {
                             any_modified = true;
                             tracing::debug!(
                                 tool_result_idx = idx,
-                                "Applied Remove/Replace rules to tool_result content"
+                                "Applied Remove/Replace rules to tool_result content at index {}",
+                                idx
                             );
                         }
                     }
@@ -839,7 +872,8 @@ impl RequestTransformer for TagEditor {
                             any_modified = true;
                             tracing::debug!(
                                 tool_result_idx = idx,
-                                "Applied Remove/Replace rules to nested tool_result content"
+                                "Applied Remove/Replace rules to nested tool_result content at index {}",
+                                idx
                             );
                         }
                     }
@@ -863,9 +897,17 @@ impl RequestTransformer for TagEditor {
             return TransformResult::Unchanged;
         }
 
+        let (remove_count, replace_count, inject_count) = self.rule_type_counts();
         tracing::info!(
             rules = self.rules.len(),
-            "TagEditor: applied transformations successfully"
+            remove_rules = remove_count,
+            replace_rules = replace_count,
+            inject_rules = inject_count,
+            "TagEditor: applied transformations successfully with {} rules ({} Remove, {} Replace, {} Inject)",
+            self.rules.len(),
+            remove_count,
+            replace_count,
+            inject_count
         );
 
         TransformResult::Modified(new_body)

@@ -635,7 +635,7 @@ async fn proxy_handler(
                 turn = ctx.turn_number,
                 tool_results = ctx.tool_result_count,
                 client = ctx.client_id,
-                "Transformer context: turn={:?} tool_results={:?} client={:?}",
+                "Transformer context: turn={} tool_results={} client={}",
                 ctx.turn_number.unwrap_or(0),
                 ctx.tool_result_count.unwrap_or(0),
                 ctx.client_id.unwrap_or("unknown")
@@ -650,7 +650,11 @@ async fn proxy_handler(
                     )
                 }
                 transformation::TransformResult::Block { reason, status } => {
-                    tracing::info!("Request blocked by transformation pipeline: {}", reason);
+                    tracing::info!(
+                        "Request blocked by transformation pipeline: {} (status {})",
+                        reason,
+                        status
+                    );
                     return Err(ProxyError::BodyRead(format!(
                         "Request blocked: {} (status {})",
                         reason, status
@@ -761,7 +765,10 @@ async fn proxy_handler(
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to parse request for tool results: {}", e);
+                tracing::warn!(
+                    "Failed to parse request for tool results: {} - request body may be malformed",
+                    e
+                );
             }
         }
     }
@@ -841,8 +848,8 @@ async fn proxy_handler(
             Some((header_name, header_value.len()))
         } else {
             tracing::warn!(
-                "Auth config present but no header built - check key_env is set for client {:?}",
-                routing.client_id
+                "Auth config present but no header built - check key_env is set for client {}",
+                routing.client_id.as_deref().unwrap_or("unknown")
             );
             None
         }

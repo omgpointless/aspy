@@ -635,7 +635,10 @@ pub async fn session_end(
         session_id = %request.session_id,
         user_id = %request.user_id,
         reason = ?request.reason,
-        "Session ended via hook"
+        "Session ended via hook: session_id={} user_id={} reason={:?}",
+        request.session_id,
+        request.user_id,
+        request.reason
     );
 
     Ok(Json(SessionActionResponse {

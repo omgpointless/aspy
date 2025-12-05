@@ -289,7 +289,10 @@ impl TransformationPipeline {
                         transformer = transformer.name(),
                         reason = %reason,
                         status = %status,
-                        "Request blocked by transformer"
+                        "Request blocked by transformer {}: {} (status {})",
+                        transformer.name(),
+                        reason,
+                        status
                     );
                     return TransformResult::Block { reason, status };
                 }
@@ -298,7 +301,9 @@ impl TransformationPipeline {
                     tracing::warn!(
                         transformer = transformer.name(),
                         error = %error,
-                        "Transformer failed, continuing with current body"
+                        "Transformer {} failed: {}, continuing with current body",
+                        transformer.name(),
+                        error
                     );
                     // Don't modify current - proceed with what we have
                 }

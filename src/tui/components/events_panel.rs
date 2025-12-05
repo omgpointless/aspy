@@ -346,6 +346,10 @@ impl Interactive for EventsPanel {
             }
             KeyCode::End | KeyCode::Char('G') => {
                 self.scroll_to_bottom();
+                // Explicitly select last item so selection highlight is visible
+                if self.event_count > 0 {
+                    self.selected = Some(self.event_count.saturating_sub(1));
+                }
                 Handled::Yes
             }
             KeyCode::PageUp => {
@@ -385,7 +389,7 @@ impl Interactive for EventsPanel {
     }
 
     fn focus_hint(&self) -> Option<&'static str> {
-        Some("↑↓:select  Enter:detail  y:copy  G:follow")
+        Some("↑↓:select  g/G:top/end  Enter:detail  y:copy  Esc:follow")
     }
 }
 

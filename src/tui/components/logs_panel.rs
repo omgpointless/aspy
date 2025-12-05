@@ -267,14 +267,14 @@ impl Interactive for LogsPanel {
                 self.select_next();
                 Handled::Yes
             }
-            KeyCode::Home => {
+            KeyCode::Home | KeyCode::Char('g') => {
                 self.scroll_to_top();
                 if self.entry_count > 0 {
                     self.selected = Some(0);
                 }
                 Handled::Yes
             }
-            KeyCode::End => {
+            KeyCode::End | KeyCode::Char('G') => {
                 self.scroll_to_bottom();
                 if self.entry_count > 0 {
                     self.selected = Some(self.entry_count.saturating_sub(1));
@@ -308,7 +308,7 @@ impl Interactive for LogsPanel {
     }
 
     fn focus_hint(&self) -> Option<&'static str> {
-        Some("↑↓:select  y:copy  Esc:clear")
+        Some("↑↓:select  g/G:top/end  y:copy  Esc:follow")
     }
 }
 

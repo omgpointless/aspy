@@ -214,6 +214,56 @@ fn render_session_summary(f: &mut Frame, area: Rect, app: &App) {
         ]));
     }
 
+    // Add Aspy modification stats if any transformations/augmentations occurred
+    let has_modifications = stats.transform_stats.tokens_injected > 0
+        || stats.transform_stats.tokens_removed > 0
+        || stats.augment_stats.tokens_injected > 0;
+
+    if has_modifications {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            "  ── Aspy Mods ──",
+            Style::default().fg(muted).add_modifier(Modifier::DIM),
+        )]));
+
+        // Transform stats (request modifications)
+        if stats.transform_stats.tokens_injected > 0 || stats.transform_stats.tokens_removed > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("  Transform:    ", Style::default().fg(muted)),
+                Span::styled(
+                    format!(
+                        "+{}",
+                        format_compact_number(stats.transform_stats.tokens_injected)
+                    ),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(" / ", Style::default().fg(muted)),
+                Span::styled(
+                    format!(
+                        "-{}",
+                        format_compact_number(stats.transform_stats.tokens_removed)
+                    ),
+                    Style::default().fg(Color::Red),
+                ),
+            ]));
+        }
+
+        // Augment stats (response injections)
+        if stats.augment_stats.tokens_injected > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("  Augment:      ", Style::default().fg(muted)),
+                Span::styled(
+                    format!(
+                        "+{}",
+                        format_compact_number(stats.augment_stats.tokens_injected)
+                    ),
+                    Style::default().fg(Color::Magenta),
+                ),
+                Span::styled(" injected", Style::default().fg(muted)),
+            ]));
+        }
+    }
+
     let paragraph = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)

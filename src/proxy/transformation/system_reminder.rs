@@ -910,7 +910,11 @@ impl RequestTransformer for TagEditor {
             inject_count
         );
 
-        TransformResult::Modified(new_body)
+        // Estimate token difference
+        let tokens_before = crate::tokens::estimate_json_tokens(body);
+        let tokens_after = crate::tokens::estimate_json_tokens(&new_body);
+
+        TransformResult::modified_with_tokens(new_body, tokens_before, tokens_after)
     }
 }
 
@@ -1147,7 +1151,7 @@ Visit old-url.com for docs
         let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
 
         match editor.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 let content = new_body["messages"][0]["content"].as_str().unwrap();
                 assert!(content.contains("Custom context"));
                 assert!(content.contains("<system-reminder>"));
@@ -1222,7 +1226,7 @@ Visit old-url.com for docs
         let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
 
         match editor.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 let content = new_body["messages"][0]["content"].as_array().unwrap();
 
                 // Verify block count preserved (4 blocks)
@@ -1305,7 +1309,7 @@ Visit old-url.com for docs
         let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
 
         match editor.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 let content = new_body["messages"][0]["content"].as_array().unwrap();
 
                 // The reminder in the first text block should be removed
@@ -1347,7 +1351,7 @@ Visit old-url.com for docs
         let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
 
         match editor.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 let content = new_body["messages"][0]["content"].as_array().unwrap();
 
                 // All 3 blocks preserved
@@ -1396,7 +1400,7 @@ Visit old-url.com for docs
         let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
 
         match editor.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 let content = new_body["messages"][0]["content"].as_array().unwrap();
 
                 // Should now have 2 blocks: tool_result + new text
@@ -1445,7 +1449,7 @@ Visit old-url.com for docs
         let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
 
         match editor.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 let content = new_body["messages"][0]["content"].as_array().unwrap();
 
                 // First text block should have replacement applied
@@ -1840,7 +1844,7 @@ Content with keep-me gets removed
         let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
 
         match editor.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 let content = new_body["messages"][0]["content"][0]["content"]
                     .as_str()
                     .unwrap();
@@ -1895,7 +1899,7 @@ Content with keep-me gets removed
         let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
 
         match editor.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 let nested_content = new_body["messages"][0]["content"][0]["content"]
                     .as_array()
                     .unwrap();
@@ -1958,7 +1962,7 @@ Content with keep-me gets removed
         let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
 
         match editor.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 let content_arr = new_body["messages"][0]["content"].as_array().unwrap();
                 for (i, block) in content_arr.iter().enumerate() {
                     let text = block["content"].as_str().unwrap();
@@ -2021,7 +2025,7 @@ Content with keep-me gets removed
         ctx.turn_number = Some(3);
 
         match editor.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 let content = new_body["messages"][0]["content"][0]["content"]
                     .as_str()
                     .unwrap();
@@ -2072,7 +2076,7 @@ Content with keep-me gets removed
         let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
 
         match editor.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 let content_arr = new_body["messages"][0]["content"].as_array().unwrap();
 
                 // Check text block

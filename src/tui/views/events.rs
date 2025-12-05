@@ -340,6 +340,36 @@ pub(crate) fn format_event_line(tracked: &TrackedEvent) -> String {
                 preview
             )
         }
+        ProxyEvent::RequestTransformed {
+            timestamp,
+            transformer,
+            tokens_before,
+            tokens_after,
+        } => {
+            let delta = *tokens_after as i64 - *tokens_before as i64;
+            let sign = if delta >= 0 { "+" } else { "" };
+            format!(
+                "[{}] {}⚙️ Transform [{}]: {}{}",
+                timestamp.format("%H:%M:%S"),
+                user_prefix,
+                transformer,
+                sign,
+                delta
+            )
+        }
+        ProxyEvent::ResponseAugmented {
+            timestamp,
+            augmenter,
+            tokens_injected,
+        } => {
+            format!(
+                "[{}] {}💉 Augment [{}]: +{}",
+                timestamp.format("%H:%M:%S"),
+                user_prefix,
+                augmenter,
+                tokens_injected
+            )
+        }
     }
 }
 
@@ -699,6 +729,53 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
             tracking_header,
             timestamp.to_rfc3339(),
             content
+        )),
+        ProxyEvent::RequestTransformed {
+            timestamp,
+            transformer,
+            tokens_before,
+            tokens_after,
+        } => {
+            let delta = *tokens_after as i64 - *tokens_before as i64;
+            let (sign, delta_style) = if delta >= 0 {
+                ("+", "added")
+            } else {
+                ("", "removed")
+            };
+            RenderableContent::Markdown(format!(
+                "{}## ⚙️ Request Transformed\n\n\
+                **Timestamp:** {}  \n\
+                **Transformer:** `{}`\n\n\
+                ---\n\n\
+                ### Token Delta\n\n\
+                **Before:** ~{} tokens  \n\
+                **After:** ~{} tokens  \n\
+                **Change:** {}{} tokens {}\n\n\
+                *Aspy modified this request before sending to API.*",
+                tracking_header,
+                timestamp.to_rfc3339(),
+                transformer,
+                tokens_before,
+                tokens_after,
+                sign,
+                delta,
+                delta_style
+            ))
+        }
+        ProxyEvent::ResponseAugmented {
+            timestamp,
+            augmenter,
+            tokens_injected,
+        } => RenderableContent::Markdown(format!(
+            "{}## 💉 Response Augmented\n\n\
+            **Timestamp:** {}  \n\
+            **Augmenter:** `{}`  \n\
+            **Tokens Injected:** ~{}\n\n\
+            *Aspy injected content into this API response.*",
+            tracking_header,
+            timestamp.to_rfc3339(),
+            augmenter,
+            tokens_injected
         )),
     }
 }

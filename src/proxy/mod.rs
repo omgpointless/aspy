@@ -570,7 +570,7 @@ async fn proxy_handler(
     // ─────────────────────────────────────────────────────────────────────────
     // SystemReminderEditor and future transformers expect Anthropic message format.
     // We transform first, then translate to target format if needed.
-    let (body_bytes, body_was_transformed) = if is_likely_messages
+    let (body_bytes, body_was_transformed, transform_tokens) = if is_likely_messages
         && method == "POST"
         && state.transformers_config.enabled
         && !state.transformation.is_empty()
@@ -642,11 +642,24 @@ async fn proxy_handler(
             );
 
             match state.transformation.transform(&body_json, &ctx) {
-                transformation::TransformResult::Modified(new_body) => {
-                    tracing::debug!("Request transformed by pipeline (pre-translation)");
+                transformation::TransformResult::Modified {
+                    body: new_body,
+                    tokens,
+                } => {
+                    if let Some(t) = tokens {
+                        tracing::debug!(
+                            tokens_before = t.before,
+                            tokens_after = t.after,
+                            delta = t.delta(),
+                            "Request transformed by pipeline (pre-translation)"
+                        );
+                    } else {
+                        tracing::debug!("Request transformed by pipeline (pre-translation)");
+                    }
                     (
                         serde_json::to_vec(&new_body).unwrap_or_else(|_| body_bytes.to_vec()),
                         true,
+                        tokens,
                     )
                 }
                 transformation::TransformResult::Block { reason, status } => {
@@ -662,15 +675,15 @@ async fn proxy_handler(
                 }
                 transformation::TransformResult::Error(e) => {
                     tracing::warn!("Transformation error (continuing with original): {}", e);
-                    (body_bytes.to_vec(), false)
+                    (body_bytes.to_vec(), false, None)
                 }
-                transformation::TransformResult::Unchanged => (body_bytes.to_vec(), false),
+                transformation::TransformResult::Unchanged => (body_bytes.to_vec(), false, None),
             }
         } else {
-            (body_bytes.to_vec(), false)
+            (body_bytes.to_vec(), false, None)
         }
     } else {
-        (body_bytes.to_vec(), false)
+        (body_bytes.to_vec(), false, None)
     };
 
     // Determine target API format based on provider config
@@ -755,6 +768,21 @@ async fn proxy_handler(
             user_id.as_deref(),
         )
         .await;
+
+    // Emit transformation event if tokens were tracked
+    if let Some(tokens) = transform_tokens {
+        state
+            .send_event(
+                ProxyEvent::RequestTransformed {
+                    timestamp: Utc::now(),
+                    transformer: "transformation-pipeline".to_string(),
+                    tokens_before: tokens.before,
+                    tokens_after: tokens.after,
+                },
+                user_id.as_deref(),
+            )
+            .await;
+    }
 
     // Parse request for tool results if this is a messages endpoint
     if is_messages_endpoint && method == "POST" {
@@ -1025,8 +1053,8 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
         let mut line_buffer = String::new();
         // Track content block index for potential injection
         let mut max_block_index: u32 = 0;
-        // Track if we've injected this response (only inject once)
-        let mut injected = false;
+        // Track if we've injected this response and how many tokens (only inject once)
+        let mut injected_tokens: Option<u32> = None;
         // Track model for injection filtering (skip Haiku utility calls)
         let mut response_model = String::new();
 
@@ -1098,7 +1126,7 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
 
                         // Check if this chunk contains message_delta - inject before forwarding
                         // Only inject on end_turn responses (not tool_use)
-                        if !injected {
+                        if injected_tokens.is_none() {
                             match std::str::from_utf8(&chunk) {
                                 Err(e) => {
                                     tracing::warn!(
@@ -1120,13 +1148,13 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
                                             };
 
                                             // Run augmentation pipeline
-                                            if let Some(injection) = augmentation.process(&aug_ctx)
+                                            if let Some(augmented) = augmentation.process(&aug_ctx)
                                             {
                                                 // Translate injection if needed (augmentation produces Anthropic SSE)
                                                 let injection_to_send = if let Some(t) = &translator
                                                 {
                                                     match t.translate_chunk(
-                                                        &injection,
+                                                        &augmented.sse_bytes,
                                                         &mut translation_ctx,
                                                     ) {
                                                         Ok(translated)
@@ -1134,18 +1162,27 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
                                                         {
                                                             Bytes::from(translated)
                                                         }
-                                                        Ok(_) => Bytes::from(injection), // Empty = shouldn't happen for complete injection
+                                                        Ok(_) => {
+                                                            Bytes::from(augmented.sse_bytes.clone())
+                                                        } // Empty = shouldn't happen for complete injection
                                                         Err(e) => {
                                                             tracing::warn!("Augmentation translation failed: {}", e);
-                                                            Bytes::from(injection)
+                                                            Bytes::from(augmented.sse_bytes.clone())
                                                             // Fallback to raw
                                                         }
                                                     }
                                                 } else {
-                                                    Bytes::from(injection)
+                                                    Bytes::from(augmented.sse_bytes.clone())
                                                 };
                                                 let _ = tx.send(Ok(injection_to_send)).await;
-                                                injected = true;
+                                                injected_tokens = Some(augmented.tokens_injected);
+
+                                                // Track token injection for stats
+                                                tracing::debug!(
+                                                    tokens_injected = augmented.tokens_injected,
+                                                    "Augmentation injected ~{} tokens",
+                                                    augmented.tokens_injected
+                                                );
                                             }
                                         }
                                     }
@@ -1281,6 +1318,16 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
                     send_event(event).await;
                 }
             }
+        }
+
+        // Emit augmentation event if tokens were injected
+        if let Some(tokens) = injected_tokens {
+            send_event(ProxyEvent::ResponseAugmented {
+                timestamp: Utc::now(),
+                augmenter: "context-warning".to_string(),
+                tokens_injected: tokens,
+            })
+            .await;
         }
 
         tracing::trace!(

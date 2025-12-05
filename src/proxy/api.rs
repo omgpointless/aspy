@@ -93,6 +93,8 @@ fn event_type_name(event: &ProxyEvent) -> &'static str {
         ProxyEvent::ThinkingStarted { .. } => "ThinkingStarted",
         ProxyEvent::UserPrompt { .. } => "UserPrompt",
         ProxyEvent::AssistantResponse { .. } => "AssistantResponse",
+        ProxyEvent::RequestTransformed { .. } => "RequestTransformed",
+        ProxyEvent::ResponseAugmented { .. } => "ResponseAugmented",
     }
 }
 

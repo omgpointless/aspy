@@ -22,6 +22,7 @@ mod proxy;
 mod startup;
 mod storage;
 mod theme;
+mod tokens;
 mod tui;
 
 use anyhow::Result;

@@ -14,7 +14,7 @@
 //
 // It only injects on end_turn responses from Opus/Sonnet models.
 
-use super::{AugmentationContext, Augmenter, StopReason};
+use super::{AugmentationContext, AugmentedContent, Augmenter, StopReason};
 
 /// Augmenter that injects context usage warnings
 ///
@@ -127,7 +127,7 @@ impl Augmenter for ContextWarningAugmenter {
         true
     }
 
-    fn generate_sse(&self, ctx: &AugmentationContext) -> Option<Vec<u8>> {
+    fn generate(&self, ctx: &AugmentationContext) -> Option<AugmentedContent> {
         // Lock context state and check if we should warn at our thresholds
         let mut state = ctx.context_state.lock().ok()?;
         let threshold = state.should_warn_at(&self.thresholds)?;
@@ -155,6 +155,7 @@ impl Augmenter for ContextWarningAugmenter {
             ctx.next_block_index
         );
 
-        Some(self.generate_sse_block(ctx.next_block_index, &annotation))
+        let sse_bytes = self.generate_sse_block(ctx.next_block_index, &annotation);
+        Some(AugmentedContent::from_text(sse_bytes, &annotation))
     }
 }

@@ -41,6 +41,27 @@ use std::borrow::Cow;
 // Transform Result
 // ============================================================================
 
+/// Token delta information for a transformation
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TransformTokens {
+    /// Estimated tokens before transformation
+    pub before: u32,
+    /// Estimated tokens after transformation
+    pub after: u32,
+}
+
+impl TransformTokens {
+    /// Create a new token delta
+    pub fn new(before: u32, after: u32) -> Self {
+        Self { before, after }
+    }
+
+    /// Tokens added (positive) or removed (negative)
+    pub fn delta(&self) -> i32 {
+        self.after as i32 - self.before as i32
+    }
+}
+
 /// Result of transforming a request
 #[derive(Debug)]
 pub enum TransformResult {
@@ -48,7 +69,13 @@ pub enum TransformResult {
     Unchanged,
 
     /// Request modified - use this new body
-    Modified(Value),
+    /// Includes optional token delta for tracking
+    Modified {
+        /// The transformed request body
+        body: Value,
+        /// Token counts before/after (for stats tracking)
+        tokens: Option<TransformTokens>,
+    },
 
     /// Block request entirely (e.g., content policy violation)
     ///
@@ -69,6 +96,21 @@ pub enum TransformResult {
     /// Used by transformers that can fail gracefully (ContextEnricher when embeddings down).
     #[allow(dead_code)]
     Error(anyhow::Error),
+}
+
+impl TransformResult {
+    /// Helper to create a Modified result without token tracking
+    pub fn modified(body: Value) -> Self {
+        Self::Modified { body, tokens: None }
+    }
+
+    /// Helper to create a Modified result with token tracking
+    pub fn modified_with_tokens(body: Value, before: u32, after: u32) -> Self {
+        Self::Modified {
+            body,
+            tokens: Some(TransformTokens::new(before, after)),
+        }
+    }
 }
 
 // ============================================================================
@@ -279,9 +321,13 @@ impl TransformationPipeline {
                 TransformResult::Unchanged => {
                     // No change, keep current (borrowed or owned)
                 }
-                TransformResult::Modified(new_body) => {
-                    tracing::debug!(transformer = transformer.name(), "Request body transformed");
-                    current = Cow::Owned(new_body);
+                TransformResult::Modified { body, tokens } => {
+                    tracing::debug!(
+                        transformer = transformer.name(),
+                        tokens_delta = tokens.map(|t| t.delta()).unwrap_or(0),
+                        "Request body transformed"
+                    );
+                    current = Cow::Owned(body);
                 }
                 TransformResult::Block { reason, status } => {
                     // Hard stop - only content policy violations should reach here
@@ -313,7 +359,7 @@ impl TransformationPipeline {
         // Convert Cow back to TransformResult
         match current {
             Cow::Borrowed(_) => TransformResult::Unchanged,
-            Cow::Owned(modified) => TransformResult::Modified(modified),
+            Cow::Owned(modified) => TransformResult::modified(modified),
         }
     }
 
@@ -376,7 +422,7 @@ mod tests {
             if let Some(obj) = new_body.as_object_mut() {
                 obj.insert(self.field.clone(), self.value.clone());
             }
-            TransformResult::Modified(new_body)
+            TransformResult::modified(new_body)
         }
     }
 
@@ -433,7 +479,7 @@ mod tests {
         let ctx = TransformContext::new(None, "/v1/messages", Some("claude-3"));
 
         match pipeline.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 assert_eq!(new_body["injected"], serde_json::json!(true));
                 assert_eq!(new_body["model"], serde_json::json!("claude-3"));
             }
@@ -455,7 +501,7 @@ mod tests {
 
         // Error should be logged but pipeline continues
         match pipeline.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 // Second transformer should have run
                 assert_eq!(new_body["after_error"], serde_json::json!(true));
             }
@@ -479,7 +525,7 @@ mod tests {
         let ctx = TransformContext::new(None, "/v1/messages", None);
 
         match pipeline.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 assert_eq!(new_body["original"], serde_json::json!(true));
                 assert_eq!(new_body["first"], serde_json::json!(1));
                 assert_eq!(new_body["second"], serde_json::json!(2));

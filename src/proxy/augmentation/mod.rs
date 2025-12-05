@@ -28,6 +28,35 @@ pub use context_warning::ContextWarningAugmenter;
 use crate::SharedContextState;
 
 // ============================================================================
+// Augmentation Result
+// ============================================================================
+
+/// Result of an augmentation including the SSE bytes and token estimate
+#[derive(Debug)]
+pub struct AugmentedContent {
+    /// The SSE bytes to inject
+    pub sse_bytes: Vec<u8>,
+    /// Estimated tokens in the injected content
+    pub tokens_injected: u32,
+}
+
+impl AugmentedContent {
+    /// Create new augmented content with token estimate
+    pub fn new(sse_bytes: Vec<u8>, tokens_injected: u32) -> Self {
+        Self {
+            sse_bytes,
+            tokens_injected,
+        }
+    }
+
+    /// Create augmented content, auto-estimating tokens from text content
+    pub fn from_text(sse_bytes: Vec<u8>, text_content: &str) -> Self {
+        let tokens = crate::tokens::estimate_tokens(text_content);
+        Self::new(sse_bytes, tokens)
+    }
+}
+
+// ============================================================================
 // Augmentation Context
 // ============================================================================
 
@@ -100,8 +129,10 @@ impl StopReason {
 ///         ctx.stop_reason == StopReason::EndTurn
 ///     }
 ///
-///     fn generate_sse(&self, ctx: &AugmentationContext) -> Option<Vec<u8>> {
-///         Some(b"event: ...\ndata: ...\n\n".to_vec())
+///     fn generate(&self, ctx: &AugmentationContext) -> Option<AugmentedContent> {
+///         let text = "injected content";
+///         let sse = b"event: ...\ndata: ...\n\n".to_vec();
+///         Some(AugmentedContent::from_text(sse, text))
 ///     }
 /// }
 /// ```
@@ -111,16 +142,16 @@ pub trait Augmenter: Send + Sync {
 
     /// Check if this augmenter should run for this response
     ///
-    /// Called before `generate_sse()`. Return `false` to skip this augmenter.
+    /// Called before `generate()`. Return `false` to skip this augmenter.
     /// Common checks: stop_reason, model type, feature flags.
     fn should_apply(&self, ctx: &AugmentationContext) -> bool;
 
-    /// Generate SSE bytes to inject into the response stream
+    /// Generate content to inject into the response stream
     ///
     /// Only called if `should_apply()` returned `true`.
     /// Return `None` if no injection is needed (e.g., threshold not met).
-    /// Return `Some(bytes)` with valid SSE format to inject content.
-    fn generate_sse(&self, ctx: &AugmentationContext) -> Option<Vec<u8>>;
+    /// Return `Some(AugmentedContent)` with valid SSE bytes and token estimate.
+    fn generate(&self, ctx: &AugmentationContext) -> Option<AugmentedContent>;
 }
 
 // ============================================================================
@@ -176,20 +207,21 @@ impl AugmentationPipeline {
 
     /// Process a response context and return any injections
     ///
-    /// Iterates through all augmenters, calling `should_apply()` and `generate_sse()`.
+    /// Iterates through all augmenters, calling `should_apply()` and `generate()`.
     /// Returns the first successful injection (augmenters are mutually exclusive for now).
     ///
-    /// Future: Could return Vec<Vec<u8>> to allow multiple injections.
-    pub fn process(&self, ctx: &AugmentationContext) -> Option<Vec<u8>> {
+    /// Future: Could return Vec<AugmentedContent> to allow multiple injections.
+    pub fn process(&self, ctx: &AugmentationContext) -> Option<AugmentedContent> {
         for augmenter in &self.augmenters {
             if augmenter.should_apply(ctx) {
-                if let Some(sse) = augmenter.generate_sse(ctx) {
+                if let Some(content) = augmenter.generate(ctx) {
                     tracing::debug!(
-                        "Augmenter '{}' generated injection ({} bytes)",
+                        "Augmenter '{}' generated injection ({} bytes, ~{} tokens)",
                         augmenter.name(),
-                        sse.len()
+                        content.sse_bytes.len(),
+                        content.tokens_injected
                     );
-                    return Some(sse);
+                    return Some(content);
                 }
             }
         }

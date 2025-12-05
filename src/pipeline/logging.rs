@@ -38,6 +38,8 @@ impl EventProcessor for LoggingProcessor {
             ProxyEvent::ThinkingStarted { .. } => "ThinkingStarted",
             ProxyEvent::UserPrompt { .. } => "UserPrompt",
             ProxyEvent::AssistantResponse { .. } => "AssistantResponse",
+            ProxyEvent::RequestTransformed { .. } => "RequestTransformed",
+            ProxyEvent::ResponseAugmented { .. } => "ResponseAugmented",
         };
 
         // Log event type with context

@@ -448,6 +448,12 @@ fn event_color_style(event: &ProxyEvent, theme: &Theme) -> Style {
         ProxyEvent::AssistantResponse { .. } => Style::default()
             .fg(theme.response)
             .add_modifier(Modifier::BOLD),
+        ProxyEvent::RequestTransformed { .. } => Style::default()
+            .fg(theme.api_usage)
+            .add_modifier(Modifier::DIM),
+        ProxyEvent::ResponseAugmented { .. } => Style::default()
+            .fg(theme.api_usage)
+            .add_modifier(Modifier::DIM),
     }
 }
 

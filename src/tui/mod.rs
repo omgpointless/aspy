@@ -22,7 +22,7 @@ pub mod views;
 
 use crate::config::Config;
 use crate::events::TrackedEvent;
-use crate::logging::LogBuffer;
+use crate::logging::{LogBuffer, LogLevel};
 use crate::StreamingThinking;
 use anyhow::{Context, Result};
 use app::{App, View};
@@ -211,10 +211,25 @@ fn handle_key_event(app: &mut App, key_event: KeyEvent) {
                                         // Open log detail modal
                                         if let Some(entry) = entries.get(idx) {
                                             app.detail_panel.reset();
+                                            // Format like events: emoji heading, bold labels, separator, content
+                                            let level_icon = match entry.level {
+                                                LogLevel::Error => "❌",
+                                                LogLevel::Warn => "⚠️",
+                                                LogLevel::Info => "ℹ️",
+                                                LogLevel::Debug => "🔍",
+                                                LogLevel::Trace => "📍",
+                                            };
                                             let content = format!(
-                                                "Log Entry\n─────────\n\nTimestamp: {}\nLevel: {:?}\nMessage: {}",
-                                                entry.timestamp.format("%Y-%m-%d %H:%M:%S%.3f"),
+                                                "## {} System Log\n\n\
+                                                **Timestamp:** {}  \n\
+                                                **Level:** `{:?}`  \n\
+                                                **Target:** `{}`\n\n\
+                                                ---\n\n\
+                                                {}",
+                                                level_icon,
+                                                entry.timestamp.to_rfc3339(),
                                                 entry.level,
+                                                entry.target,
                                                 entry.message
                                             );
                                             app.detail_panel.set_content(content);

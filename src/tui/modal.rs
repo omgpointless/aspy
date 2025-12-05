@@ -78,12 +78,12 @@ impl Modal {
                 KeyCode::Down | KeyCode::Char('j') => ModalAction::ScrollDown,
                 KeyCode::PageUp => ModalAction::PageUp,
                 KeyCode::PageDown => ModalAction::PageDown,
-                // Horizontal scroll
+                // Horizontal scroll (for structured content only)
                 KeyCode::Left | KeyCode::Char('h') => ModalAction::ScrollLeft,
                 KeyCode::Right | KeyCode::Char('l') => ModalAction::ScrollRight,
                 // Jump positions
-                KeyCode::Home => ModalAction::ScrollTop,
-                KeyCode::End => ModalAction::ScrollBottom,
+                KeyCode::Home | KeyCode::Char('g') => ModalAction::ScrollTop,
+                KeyCode::End | KeyCode::Char('G') => ModalAction::ScrollBottom,
                 KeyCode::Char('0') => ModalAction::ScrollLeftmost,
                 // Copy
                 KeyCode::Char('y') => ModalAction::CopyReadable,

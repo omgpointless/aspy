@@ -237,7 +237,13 @@ impl RequestTransformer for CompactEnhancer {
         if let Some(messages) = new_body["messages"].as_array_mut() {
             if let Some(user_msg) = messages.get_mut(last_user_idx) {
                 if Self::append_to_message(user_msg, &injection) {
-                    return TransformResult::Modified(new_body);
+                    // Estimate tokens for the injection
+                    let tokens_added = crate::tokens::estimate_tokens(&injection);
+                    return TransformResult::modified_with_tokens(
+                        new_body,
+                        0, // We don't track what was there before (injection only)
+                        tokens_added,
+                    );
                 }
             }
         }
@@ -386,12 +392,19 @@ mod tests {
         let ctx = TransformContext::new(None, "/v1/messages", None);
 
         match enhancer.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified {
+                body: new_body,
+                tokens,
+            } => {
                 let content = extract_last_user_content(&new_body);
                 assert!(
                     content.contains("## Aspy Continuity Enhancement"),
                     "Modified body should contain injected continuity enhancement"
                 );
+                // Verify token tracking
+                assert!(tokens.is_some(), "Should track token changes");
+                let t = tokens.unwrap();
+                assert!(t.after > 0, "Should report tokens added");
             }
             other => panic!("Expected Modified, got {:?}", other),
         }
@@ -426,7 +439,7 @@ mod tests {
         let ctx = TransformContext::new(None, "/v1/messages", None);
 
         match enhancer.transform(&body, &ctx) {
-            TransformResult::Modified(new_body) => {
+            TransformResult::Modified { body: new_body, .. } => {
                 // Should modify the last text block
                 let messages = new_body["messages"].as_array().unwrap();
                 let last_msg = messages.last().unwrap();

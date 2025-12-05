@@ -1,8 +1,13 @@
-// Markdown parsing for thinking panel
+// Markdown parsing and rendering for TUI components
+//
+// General-purpose markdown renderer used by:
+// - ThinkingPanel: renders Claude's extended thinking content
+// - DetailPanel: renders event details and log entry details
+// - Any component needing rich text with wrapping
 //
 // Uses pulldown-cmark to parse markdown and convert to styled ratatui Spans.
-// Currently handles: inline code, fenced code blocks, regular text.
-// Future: headers, emphasis, lists.
+// Supports: headings, inline code, fenced code blocks (with JSON highlighting),
+// bold, italic, strikethrough, lists, blockquotes, tables, links, XML tags.
 
 use crate::theme::Theme;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};

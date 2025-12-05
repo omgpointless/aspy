@@ -5,6 +5,7 @@
 // ensures type-safe communication between async tasks.
 
 use crate::parser::models::CapturedHeaders;
+use crate::tokens::{AugmentStats, TransformStats};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -120,6 +121,26 @@ pub enum ProxyEvent {
         timestamp: DateTime<Utc>,
         content: String,
     },
+
+    /// Request was transformed (tokens added/removed)
+    RequestTransformed {
+        timestamp: DateTime<Utc>,
+        /// Name of the transformer
+        transformer: String,
+        /// Tokens before transformation
+        tokens_before: u32,
+        /// Tokens after transformation
+        tokens_after: u32,
+    },
+
+    /// Response was augmented (tokens injected)
+    ResponseAugmented {
+        timestamp: DateTime<Utc>,
+        /// Name of the augmenter
+        augmenter: String,
+        /// Tokens injected
+        tokens_injected: u32,
+    },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -195,7 +216,9 @@ impl TrackedEvent {
             | ProxyEvent::ContextCompact { timestamp, .. }
             | ProxyEvent::ThinkingStarted { timestamp }
             | ProxyEvent::UserPrompt { timestamp, .. }
-            | ProxyEvent::AssistantResponse { timestamp, .. } => *timestamp,
+            | ProxyEvent::AssistantResponse { timestamp, .. }
+            | ProxyEvent::RequestTransformed { timestamp, .. }
+            | ProxyEvent::ResponseAugmented { timestamp, .. } => *timestamp,
         }
     }
 }
@@ -272,6 +295,12 @@ pub struct Stats {
 
     /// Thinking token progression (last 30 data points)
     pub thinking_token_history: VecDeque<u64>,
+
+    // === Aspy token modification tracking ===
+    /// Statistics for request transformations (tokens removed/added)
+    pub transform_stats: TransformStats,
+    /// Statistics for response augmentations (tokens injected)
+    pub augment_stats: AugmentStats,
 }
 
 /// Per-model token tracking for Statistics view
@@ -535,6 +564,23 @@ impl Stats {
             ProxyEvent::ContextCompact { .. } => {
                 self.compact_count += 1;
             }
+            ProxyEvent::RequestTransformed {
+                transformer,
+                tokens_before,
+                tokens_after,
+                ..
+            } => {
+                use crate::tokens::TokenDelta;
+                let delta = TokenDelta::new(*tokens_before, *tokens_after);
+                self.transform_stats.record(transformer, &delta);
+            }
+            ProxyEvent::ResponseAugmented {
+                augmenter,
+                tokens_injected,
+                ..
+            } => {
+                self.augment_stats.record(augmenter, *tokens_injected);
+            }
             _ => {}
         }
     }
@@ -579,6 +625,28 @@ impl Stats {
 
         // Note: tool_durations_ms, current_thinking, current_model not merged
         // These are "current state" fields, not aggregatable
+
+        // Merge Aspy modification stats
+        self.transform_stats.tokens_injected += other.transform_stats.tokens_injected;
+        self.transform_stats.tokens_removed += other.transform_stats.tokens_removed;
+        for (name, (inj, rem)) in &other.transform_stats.by_transformer {
+            let entry = self
+                .transform_stats
+                .by_transformer
+                .entry(name.clone())
+                .or_insert((0, 0));
+            entry.0 += inj;
+            entry.1 += rem;
+        }
+
+        self.augment_stats.tokens_injected += other.augment_stats.tokens_injected;
+        for (name, count) in &other.augment_stats.by_augmenter {
+            *self
+                .augment_stats
+                .by_augmenter
+                .entry(name.clone())
+                .or_insert(0) += count;
+        }
     }
 }
 
@@ -614,6 +682,9 @@ impl Default for Stats {
             tool_call_history: VecDeque::with_capacity(30),
             cache_rate_history: VecDeque::with_capacity(30),
             thinking_token_history: VecDeque::with_capacity(30),
+            // Aspy modification tracking
+            transform_stats: TransformStats::default(),
+            augment_stats: AugmentStats::default(),
         }
     }
 }

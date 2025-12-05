@@ -372,12 +372,10 @@ fn render_horizontal_scrollbar(
 }
 
 /// Render the log detail modal overlay
-/// Uses the already-cached content in detail_panel (set when Enter was pressed)
+/// Uses markdown rendering with text wrapping (no horizontal scroll)
 fn render_log_detail(f: &mut Frame, app: &mut App) {
     // Get cached content from detail_panel
     let content = app.detail_panel.copy_text().unwrap_or_default();
-    let lines: Vec<&str> = content.lines().collect();
-    let total_lines = lines.len();
 
     // Use nearly full screen (90% width, 85% height)
     let frame_area = f.area();
@@ -392,33 +390,17 @@ fn render_log_detail(f: &mut Frame, app: &mut App) {
     let viewport_height = area.height.saturating_sub(2) as usize;
     let viewport_width = area.width.saturating_sub(2) as usize;
 
-    // Update detail panel scroll dimensions
+    // Use markdown renderer for text wrapping and formatting
+    let lines = markdown::render_markdown(&content, viewport_width, &app.theme);
+    let total_lines = lines.len();
+
+    // Update scroll dimensions
     app.detail_panel
         .scroll_state_mut()
         .update_dimensions(total_lines, viewport_height);
 
-    // Get scroll offsets
     let vertical_offset = app.detail_panel.scroll_state().offset();
-    let horizontal_offset = app.detail_panel.horizontal_offset();
-
-    // Calculate visible vertical range
     let v_start = vertical_offset.min(total_lines.saturating_sub(viewport_height));
-    let v_end = (v_start + viewport_height).min(total_lines);
-
-    // Clip lines horizontally and vertically
-    let visible_lines: Vec<String> = lines
-        .get(v_start..v_end)
-        .unwrap_or(&[])
-        .iter()
-        .map(|line| {
-            line.chars()
-                .skip(horizontal_offset)
-                .take(viewport_width)
-                .collect()
-        })
-        .collect();
-
-    let visible_text = visible_lines.join("\n");
 
     // Scroll info
     let scroll_info = if total_lines > viewport_height {
@@ -427,7 +409,7 @@ fn render_log_detail(f: &mut Frame, app: &mut App) {
         String::new()
     };
 
-    let paragraph = Paragraph::new(visible_text)
+    let paragraph = Paragraph::new(lines)
         .style(
             Style::default()
                 .fg(app.theme.foreground)
@@ -439,12 +421,13 @@ fn render_log_detail(f: &mut Frame, app: &mut App) {
                 .border_type(app.theme.border_type)
                 .border_style(Style::default().fg(app.theme.panel_logs))
                 .title(format!(" Log Details{} ", scroll_info))
-                .title_bottom(Line::from(" ↑↓:scroll  y:copy  Esc:close ").centered()),
-        );
+                .title_bottom(Line::from(" ↑↓:scroll  g/G:top/end  y:copy  Esc:close ").centered()),
+        )
+        .scroll((v_start as u16, 0));
 
     f.render_widget(paragraph, area);
 
-    // Render vertical scrollbar (right edge)
+    // Render vertical scrollbar only (no horizontal - text wraps)
     render_scrollbar_raw(
         f,
         area,

@@ -1104,6 +1104,12 @@ enabled = {transformers_enabled}
 # [[transformers.tag-editor.rules]]
 # type = "remove"
 # pattern = "debug|noisy"  # Regex: removes reminders containing "debug" or "noisy"
+#
+# Example: Replace text within reminders (supports capture groups)
+# [[transformers.tag-editor.rules]]
+# type = "replace"
+# pattern = "version (\\d+\\.\\d+)"  # Capture the version number
+# replacement = "version $1-patched"  # Use $1, $2, etc. for captured groups
 {transformers_section}
 # ─────────────────────────────────────────────────────────────────────────────
 # MULTI-CLIENT ROUTING (Optional)

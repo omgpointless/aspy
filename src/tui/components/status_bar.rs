@@ -94,7 +94,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     };
 
     // Get contextual keybind hints for focused component
-    let hint = app.focus_hint().unwrap_or("?:help  q:quit");
+    // Skip hints when modal is open - modals show their own hints in title_bottom
+    let hint = if app.modal.is_some() {
+        ""
+    } else {
+        app.focus_hint().unwrap_or("?:help  q:quit")
+    };
 
     let status = Paragraph::new(status_text)
         .style(Style::default().fg(app.theme.status_bar))

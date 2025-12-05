@@ -23,7 +23,7 @@ use crate::logging::LogBuffer;
 use crate::theme::{Theme, ThemeConfig};
 use crate::StreamingThinking;
 use crossterm::event::KeyEvent;
-use std::time::Instant;
+use std::time::SystemTime;
 
 // Re-export StreamingState for backward compatibility with ui.rs
 pub use super::streaming::StreamingState;
@@ -177,7 +177,9 @@ pub struct App {
     // Application lifecycle state
     // ─────────────────────────────────────────────────────────────────────────
     /// When the app started (for uptime display)
-    pub start_time: Instant,
+    /// Uses SystemTime (wall-clock) instead of Instant (monotonic) so uptime
+    /// remains accurate across system sleep/hibernate cycles.
+    pub start_time: SystemTime,
 
     /// Whether the app should quit
     pub should_quit: bool,
@@ -227,7 +229,7 @@ impl App {
             stats,
             shared_stats,
             shared_events,
-            start_time: Instant::now(),
+            start_time: SystemTime::now(),
             events_panel: EventsPanel::new(), // Start in auto-follow mode
             logs_panel: LogsPanel::new(),
             thinking_panel: ThinkingPanel::new(),
@@ -767,8 +769,12 @@ impl App {
     // ─────────────────────────────────────────────────────────────
 
     /// Get uptime as a formatted string
+    ///
+    /// Uses wall-clock time so uptime remains accurate across sleep/hibernate.
     pub fn uptime(&self) -> String {
-        let elapsed = self.start_time.elapsed();
+        let elapsed = SystemTime::now()
+            .duration_since(self.start_time)
+            .unwrap_or_default();
         let seconds = elapsed.as_secs();
         let hours = seconds / 3600;
         let minutes = (seconds % 3600) / 60;

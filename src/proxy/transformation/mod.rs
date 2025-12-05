@@ -24,12 +24,12 @@
 //! Worst case: the original unmodified request goes through.
 
 mod compact_enhancer;
-mod system_reminder;
+mod tag_editor;
 
 // Re-exports for config parsing and transformer implementations
 pub use compact_enhancer::{CompactEnhancer, CompactEnhancerConfig};
 #[allow(unused_imports)]
-pub use system_reminder::{
+pub use tag_editor::{
     InjectPosition, PositionConfig, RuleConfig, TagEditor, TagEditorConfig, TagRule, WhenCondition,
 };
 

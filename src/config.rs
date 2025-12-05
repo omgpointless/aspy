@@ -157,6 +157,41 @@ impl EmbeddingsConfig {
     }
 }
 
+/// OpenTelemetry export configuration
+///
+/// Enables exporting telemetry data (traces, metrics) to OpenTelemetry-compatible
+/// backends like Azure Application Insights, Jaeger, Grafana Tempo, etc.
+#[derive(Debug, Clone)]
+pub struct OtelConfig {
+    /// Whether OpenTelemetry export is enabled
+    pub enabled: bool,
+    /// Azure Application Insights connection string
+    /// Format: InstrumentationKey=xxx;IngestionEndpoint=https://...
+    pub connection_string: Option<String>,
+    /// Service name for telemetry (defaults to "aspy")
+    pub service_name: String,
+    /// Service version (defaults to crate version)
+    pub service_version: String,
+}
+
+impl Default for OtelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false, // Opt-in feature
+            connection_string: None,
+            service_name: "aspy".to_string(),
+            service_version: VERSION.to_string(),
+        }
+    }
+}
+
+impl OtelConfig {
+    /// Check if OTel export is properly configured and enabled
+    pub fn is_configured(&self) -> bool {
+        self.enabled && self.connection_string.is_some()
+    }
+}
+
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
@@ -592,6 +627,10 @@ pub struct Config {
 
     /// Request transformation settings
     pub transformers: Transformers,
+
+    /// OpenTelemetry export configuration
+    pub otel: OtelConfig,
+
     /// Client and provider configuration for multi-user routing
     pub clients: ClientsConfig,
 }
@@ -666,6 +705,16 @@ struct FileTransformers {
     #[serde(rename = "compact-enhancer")]
     compact_enhancer: Option<crate::proxy::transformation::CompactEnhancerConfig>,
 }
+
+/// OpenTelemetry config as loaded from file
+#[derive(Debug, Deserialize, Default)]
+struct FileOtelConfig {
+    enabled: Option<bool>,
+    connection_string: Option<String>,
+    service_name: Option<String>,
+    service_version: Option<String>,
+}
+
 /// Config file structure (subset of Config that makes sense to persist)
 #[derive(Debug, Deserialize, Default)]
 struct FileConfig {
@@ -697,6 +746,10 @@ struct FileConfig {
 
     /// Optional [transformers] section
     transformers: Option<FileTransformers>,
+
+    /// Optional [otel] section (OpenTelemetry export)
+    otel: Option<FileOtelConfig>,
+
     /// Optional [clients.X] sections for multi-user routing
     #[serde(default)]
     clients: HashMap<String, ClientConfig>,
@@ -1112,6 +1165,19 @@ enabled = {transformers_enabled}
 # replacement = "version $1-patched"  # Use $1, $2, etc. for captured groups
 {transformers_section}
 # ─────────────────────────────────────────────────────────────────────────────
+# OPENTELEMETRY EXPORT (Optional)
+# ─────────────────────────────────────────────────────────────────────────────
+# Export telemetry to Azure Application Insights or other OTel-compatible backends.
+# Requires: cargo build --features otel
+#
+# Connection string can also be set via APPLICATIONINSIGHTS_CONNECTION_STRING env var.
+
+[otel]
+enabled = {otel_enabled}
+{otel_connection_string}service_name = "{otel_service_name}"
+service_version = "{otel_service_version}"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MULTI-CLIENT ROUTING (Optional)
 # ─────────────────────────────────────────────────────────────────────────────
 # Track multiple Claude Code instances through a single proxy using named clients.
@@ -1193,6 +1259,18 @@ enabled = {transformers_enabled}
             embed_max_content = self.embeddings.max_content_length,
             transformers_enabled = self.transformers.enabled,
             transformers_section = self.transformers_to_toml(),
+            otel_enabled = self.otel.enabled,
+            otel_connection_string = self
+                .otel
+                .connection_string
+                .as_ref()
+                .map(|cs| format!("connection_string = \"{}\"\n", cs))
+                .unwrap_or_else(|| {
+                    "# connection_string = \"InstrumentationKey=...;IngestionEndpoint=...\"\n"
+                        .to_string()
+                }),
+            otel_service_name = self.otel.service_name,
+            otel_service_version = self.otel.service_version,
             clients_section = self.clients_to_toml(),
             providers_section = self.providers_to_toml(),
         )
@@ -1392,6 +1470,22 @@ enabled = {transformers_enabled}
             compact_enhancer: file_transformers.compact_enhancer,
         };
 
+        // OpenTelemetry settings: file config + env var for connection string
+        // Connection string precedence: APPLICATIONINSIGHTS_CONNECTION_STRING env var > config file
+        let file_otel = file.otel.unwrap_or_default();
+        let otel_defaults = OtelConfig::default();
+        let otel_connection_string = std::env::var("APPLICATIONINSIGHTS_CONNECTION_STRING")
+            .ok()
+            .or(file_otel.connection_string.clone());
+        let otel = OtelConfig {
+            enabled: file_otel.enabled.unwrap_or(otel_defaults.enabled),
+            connection_string: otel_connection_string,
+            service_name: file_otel.service_name.unwrap_or(otel_defaults.service_name),
+            service_version: file_otel
+                .service_version
+                .unwrap_or(otel_defaults.service_version),
+        };
+
         // Client/provider config: file only
         let clients = ClientsConfig {
             clients: file.clients,
@@ -1424,6 +1518,7 @@ enabled = {transformers_enabled}
             embeddings,
             translation,
             transformers,
+            otel,
             clients,
         }
     }
@@ -1448,6 +1543,7 @@ impl Default for Config {
             embeddings: EmbeddingsConfig::default(),
             translation: Translation::default(),
             transformers: Transformers::default(),
+            otel: OtelConfig::default(),
             clients: ClientsConfig::default(),
         }
     }
@@ -1576,6 +1672,27 @@ impl Config {
             transform_active,
             "Request editing",
         ));
+
+        // OpenTelemetry: configurable (requires connection string and --features otel)
+        let otel_def = if self.otel.is_configured() {
+            FeatureDefinition::configurable(
+                "otel",
+                "otel",
+                FeatureCategory::Pipeline,
+                true,
+                "Azure telemetry",
+            )
+            .with_detail(format!("service: {}", self.otel.service_name))
+        } else {
+            FeatureDefinition::configurable(
+                "otel",
+                "otel",
+                FeatureCategory::Pipeline,
+                false,
+                "Azure telemetry",
+            )
+        };
+        features.push(otel_def);
 
         // Routing: configurable (needs client definitions)
         features.push(FeatureDefinition::configurable(

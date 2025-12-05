@@ -702,30 +702,6 @@ async fn proxy_handler(
             (body_bytes.to_vec(), false, None, Vec::new())
         };
 
-    // Debug: log transformed body to verify transformation took effect
-    if body_was_transformed {
-        if let Ok(transformed_json) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
-            if let Some(messages) = transformed_json.get("messages").and_then(|m| m.as_array()) {
-                if let Some(last_user) = messages
-                    .iter()
-                    .rev()
-                    .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-                {
-                    let content_str = serde_json::to_string(
-                        last_user.get("content").unwrap_or(&serde_json::Value::Null),
-                    )
-                    .unwrap_or_default();
-                    let reminder_count = content_str.matches("<system-reminder>").count();
-                    tracing::debug!(
-                        reminder_count_after_transform = reminder_count,
-                        "DEBUG: After transformation - system-reminders remaining in last user message: {}",
-                        reminder_count
-                    );
-                }
-            }
-        }
-    }
-
     // Determine target API format based on provider config
     // If provider expects OpenAI format, translate Anthropic → OpenAI
     let target_format = routing
@@ -772,34 +748,7 @@ async fn proxy_handler(
 
     // Parse transformed body for Request event display
     let request_body = if is_messages_endpoint {
-        let parsed = serde_json::from_slice::<serde_json::Value>(&body_bytes).ok();
-        // Debug: verify the Request event body reflects transformation
-        if body_was_transformed {
-            if let Some(ref body) = parsed {
-                // Check if any system-reminder tags remain in last user message
-                if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
-                    if let Some(last_user) = messages
-                        .iter()
-                        .rev()
-                        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-                    {
-                        let content_str = serde_json::to_string(
-                            last_user.get("content").unwrap_or(&serde_json::Value::Null),
-                        )
-                        .unwrap_or_default();
-                        let reminder_count = content_str.matches("<system-reminder>").count();
-                        tracing::debug!(
-                            body_was_transformed = body_was_transformed,
-                            reminder_count_in_request_body = reminder_count,
-                            "DEBUG: Request event body check - transformed={} system-reminders={}",
-                            body_was_transformed,
-                            reminder_count
-                        );
-                    }
-                }
-            }
-        }
-        parsed
+        serde_json::from_slice::<serde_json::Value>(&body_bytes).ok()
     } else {
         None
     };

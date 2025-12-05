@@ -364,6 +364,25 @@ async fn main() -> Result<()> {
                 Ok(processor) => {
                     pipeline.register(processor);
 
+                    // Initialize OpenTelemetry exporter if configured (requires --features otel)
+                    #[cfg(feature = "otel")]
+                    if config.otel.is_configured() {
+                        use pipeline::otel::OtelProcessor;
+                        match OtelProcessor::new(&config.otel) {
+                            Ok(otel_processor) => {
+                                pipeline.register(otel_processor);
+                                registry.activate("otel");
+                                tracing::info!(
+                                    "OTel exporter initialized (Azure Application Insights)"
+                                );
+                            }
+                            Err(e) => {
+                                registry.fail("otel", e.to_string());
+                                tracing::error!("Failed to initialize OTel exporter: {}", e);
+                            }
+                        }
+                    }
+
                     // Initialize query interface (read-only connection pool)
                     match LifestatsQuery::new(&config.lifestats.db_path) {
                         Ok(query) => {

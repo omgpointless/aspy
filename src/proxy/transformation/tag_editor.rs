@@ -100,9 +100,22 @@ impl WhenCondition {
 }
 
 /// Parse numeric conditions like "=1", ">5", "<10", "every:3"
+/// Supports pipe-separated OR conditions: "=1|every:3" matches 1 OR multiples of 3
 fn parse_numeric_condition(condition: &str, value: u64) -> bool {
     let condition = condition.trim();
 
+    // Support pipe-separated OR conditions (e.g., "=1|every:3")
+    if condition.contains('|') {
+        return condition
+            .split('|')
+            .any(|c| parse_single_condition(c.trim(), value));
+    }
+
+    parse_single_condition(condition, value)
+}
+
+/// Parse a single numeric condition (no pipe)
+fn parse_single_condition(condition: &str, value: u64) -> bool {
     if let Some(n) = condition.strip_prefix("every:") {
         if let Ok(interval) = n.parse::<u64>() {
             return interval > 0 && value.is_multiple_of(interval);
@@ -686,6 +699,175 @@ impl TagEditor {
             ApplyResult::unchanged()
         }
     }
+
+    /// Transform a single user message
+    ///
+    /// Returns (modified: bool, modifications: Vec<String>)
+    ///
+    /// - `is_last_user_msg`: If true, applies Inject rules in addition to Remove/Replace
+    fn transform_user_message(
+        &self,
+        message: &mut Value,
+        ctx: &TransformContext,
+        is_last_user_msg: bool,
+    ) -> (bool, Vec<String>) {
+        let content = message.get("content");
+        let mut any_modified = false;
+        let mut all_modifications: Vec<String> = Vec::new();
+
+        match content {
+            Some(Value::String(s)) => {
+                let original = s.clone();
+                let result = if is_last_user_msg {
+                    self.apply_rules(&original, ctx)
+                } else {
+                    self.apply_rules_remove_replace_only(&original, ctx)
+                };
+                if let Some(new_text) = result.content {
+                    let final_text = if new_text.trim().is_empty() {
+                        " ".to_string() // Minimal valid content
+                    } else {
+                        new_text
+                    };
+                    message["content"] = Value::String(final_text);
+                    all_modifications.extend(result.modifications);
+                    any_modified = true;
+                }
+            }
+            Some(Value::Array(arr)) => {
+                // Find all text block indices
+                let text_block_indices: Vec<usize> = arr
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, block)| block.get("type").and_then(|t| t.as_str()) == Some("text"))
+                    .map(|(idx, _)| idx)
+                    .collect();
+
+                let last_text_idx = text_block_indices.last().copied();
+
+                let content_arr = message
+                    .get_mut("content")
+                    .and_then(|c| c.as_array_mut())
+                    .unwrap();
+
+                // Track indices of text blocks that become empty
+                let mut empty_block_indices: Vec<usize> = Vec::new();
+
+                // Apply rules to text blocks
+                for &idx in &text_block_indices {
+                    if let Some(block) = content_arr.get_mut(idx) {
+                        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                            // Only apply Inject to last text block of last user message
+                            let apply_inject = is_last_user_msg && Some(idx) == last_text_idx;
+                            let result = if apply_inject {
+                                self.apply_rules(text, ctx)
+                            } else {
+                                self.apply_rules_remove_replace_only(text, ctx)
+                            };
+                            if let Some(new_text) = result.content {
+                                if new_text.trim().is_empty() {
+                                    empty_block_indices.push(idx);
+                                } else {
+                                    block["text"] = Value::String(new_text);
+                                }
+                                all_modifications.extend(result.modifications);
+                                any_modified = true;
+                            }
+                        }
+                    }
+                }
+
+                // Remove empty text blocks (in reverse order)
+                for &idx in empty_block_indices.iter().rev() {
+                    content_arr.remove(idx);
+                    tracing::debug!(
+                        removed_idx = idx,
+                        "Removed empty text block after transformation at index {}",
+                        idx
+                    );
+                }
+
+                // Process tool_result content fields (Remove/Replace only)
+                for (idx, block) in content_arr.iter_mut().enumerate() {
+                    if block.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                        continue;
+                    }
+
+                    // Handle string content
+                    if let Some(content_str) = block
+                        .get("content")
+                        .and_then(|c| c.as_str())
+                        .map(String::from)
+                    {
+                        let result = self.apply_rules_remove_replace_only(&content_str, ctx);
+                        if let Some(new_content) = result.content {
+                            let final_content = if new_content.trim().is_empty() {
+                                " ".to_string()
+                            } else {
+                                new_content
+                            };
+                            block["content"] = Value::String(final_content);
+                            all_modifications.extend(result.modifications);
+                            any_modified = true;
+                            tracing::debug!(
+                                tool_result_idx = idx,
+                                "Applied Remove/Replace rules to tool_result content"
+                            );
+                        }
+                    }
+                    // Handle array content (nested text blocks within tool_result)
+                    else if let Some(nested_arr) =
+                        block.get("content").and_then(|c| c.as_array()).cloned()
+                    {
+                        let mut nested_modified = false;
+                        let mut new_nested: Vec<Value> = Vec::with_capacity(nested_arr.len());
+
+                        for nested_block in nested_arr {
+                            if nested_block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                if let Some(text) =
+                                    nested_block.get("text").and_then(|t| t.as_str())
+                                {
+                                    let result = self.apply_rules_remove_replace_only(text, ctx);
+                                    if let Some(new_text) = result.content {
+                                        nested_modified = true;
+                                        all_modifications.extend(result.modifications);
+                                        if !new_text.trim().is_empty() {
+                                            let mut updated = nested_block.clone();
+                                            updated["text"] = Value::String(new_text);
+                                            new_nested.push(updated);
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+                            new_nested.push(nested_block);
+                        }
+
+                        if nested_modified {
+                            block["content"] = Value::Array(new_nested);
+                            any_modified = true;
+                        }
+                    }
+                }
+
+                // If no text blocks in LAST user message but we have Inject rules, append one
+                if is_last_user_msg && text_block_indices.is_empty() && self.has_inject_rules() {
+                    let result = self.apply_rules("", ctx);
+                    if let Some(new_text) = result.content {
+                        content_arr.push(serde_json::json!({
+                            "type": "text",
+                            "text": new_text
+                        }));
+                        all_modifications.extend(result.modifications);
+                        any_modified = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        (any_modified, all_modifications)
+    }
 }
 
 impl RequestTransformer for TagEditor {
@@ -721,43 +903,26 @@ impl RequestTransformer for TagEditor {
             None => return TransformResult::Unchanged,
         };
 
-        // Find the last user message
-        let last_user_idx = messages
+        // Find ALL user message indices (for Remove/Replace across history)
+        let user_msg_indices: Vec<usize> = messages
             .iter()
             .enumerate()
-            .rev()
-            .find(|(_, msg)| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
-            .map(|(i, _)| i);
+            .filter(|(_, msg)| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
+            .map(|(i, _)| i)
+            .collect();
 
-        let last_user_idx = match last_user_idx {
-            Some(i) => i,
-            None => return TransformResult::Unchanged,
-        };
-
-        // Extract content from last user message
-        let user_msg = &messages[last_user_idx];
-        let content = user_msg.get("content");
-
-        // Track content structure
-        enum ContentStructure {
-            String,
-            Array { text_block_indices: Vec<usize> },
+        if user_msg_indices.is_empty() {
+            return TransformResult::Unchanged;
         }
 
-        let structure = match content {
-            Some(Value::String(_)) => ContentStructure::String,
-            Some(Value::Array(arr)) => {
-                // Find ALL text block indices - preserve order
-                let text_block_indices: Vec<usize> = arr
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, block)| block.get("type").and_then(|t| t.as_str()) == Some("text"))
-                    .map(|(idx, _)| idx)
-                    .collect();
-                ContentStructure::Array { text_block_indices }
-            }
-            _ => return TransformResult::Unchanged,
-        };
+        let last_user_idx = *user_msg_indices.last().unwrap();
+
+        tracing::debug!(
+            user_message_count = user_msg_indices.len(),
+            last_user_idx = last_user_idx,
+            "Processing {} user messages (Remove/Replace on all, Inject on last only)",
+            user_msg_indices.len()
+        );
 
         // Clone body for modification
         let mut new_body = body.clone();
@@ -769,171 +934,16 @@ impl RequestTransformer for TagEditor {
         let mut any_modified = false;
         let mut all_modifications: Vec<String> = Vec::new();
 
-        match structure {
-            ContentStructure::String => {
-                let original = messages_mut[last_user_idx]["content"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
-                let result = self.apply_rules(&original, ctx);
-                if let Some(new_text) = result.content {
-                    if new_text.trim().is_empty() {
-                        // Empty string content: use minimal valid content
-                        // (Can't delete the message, so use single space as fallback)
-                        tracing::debug!(
-                            "String content became empty after transformation, using minimal content"
-                        );
-                        messages_mut[last_user_idx]["content"] = Value::String(" ".to_string());
-                    } else {
-                        messages_mut[last_user_idx]["content"] = Value::String(new_text);
-                    }
-                    all_modifications.extend(result.modifications);
-                    any_modified = true;
-                }
-            }
-            ContentStructure::Array { text_block_indices } => {
-                let content_arr = messages_mut[last_user_idx]
-                    .get_mut("content")
-                    .and_then(|c| c.as_array_mut())
-                    .unwrap();
-
-                let last_text_idx = text_block_indices.last().copied();
-
-                tracing::trace!(
-                    text_block_count = text_block_indices.len(),
-                    text_block_indices = ?text_block_indices,
-                    last_text_idx = ?last_text_idx,
-                    total_content_blocks = content_arr.len(),
-                    "Processing Array content structure: {} text blocks, {} total blocks, last_text_idx={:?}",
-                    text_block_indices.len(),
-                    content_arr.len(),
-                    last_text_idx
-                );
-
-                // Track indices of text blocks that become empty (to delete later)
-                let mut empty_block_indices: Vec<usize> = Vec::new();
-
-                // Apply rules to ALL text blocks (Remove/Replace scan all, Inject only last)
-                for &idx in &text_block_indices {
-                    if let Some(block) = content_arr.get_mut(idx) {
-                        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                            let is_last = Some(idx) == last_text_idx;
-                            let result = if is_last {
-                                self.apply_rules(text, ctx)
-                            } else {
-                                self.apply_rules_remove_replace_only(text, ctx)
-                            };
-                            if let Some(new_text) = result.content {
-                                // If text is empty after transformation, mark for deletion
-                                if new_text.trim().is_empty() {
-                                    empty_block_indices.push(idx);
-                                } else {
-                                    block["text"] = Value::String(new_text);
-                                }
-                                all_modifications.extend(result.modifications);
-                                any_modified = true;
-                            }
-                        }
-                    }
-                }
-
-                // Remove empty text blocks (in reverse order to preserve indices)
-                for &idx in empty_block_indices.iter().rev() {
-                    content_arr.remove(idx);
-                    tracing::debug!(
-                        removed_idx = idx,
-                        "Removed empty text block after transformation at index {}",
-                        idx
-                    );
-                }
-
-                // ─────────────────────────────────────────────────────────────
-                // Process tool_result content fields (Remove/Replace only)
-                // ─────────────────────────────────────────────────────────────
-                // Claude Code injects <system-reminder> tags into tool_result
-                // content fields, not just text blocks. We need to scan those too.
-                for (idx, block) in content_arr.iter_mut().enumerate() {
-                    if block.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
-                        continue;
-                    }
-
-                    // Handle string content
-                    if let Some(content_str) = block
-                        .get("content")
-                        .and_then(|c| c.as_str())
-                        .map(String::from)
-                    {
-                        let result = self.apply_rules_remove_replace_only(&content_str, ctx);
-                        if let Some(new_content) = result.content {
-                            // Don't remove tool_result even if content becomes empty
-                            let final_content = if new_content.trim().is_empty() {
-                                " ".to_string() // Minimal valid content
-                            } else {
-                                new_content
-                            };
-                            block["content"] = Value::String(final_content);
-                            all_modifications.extend(result.modifications);
-                            any_modified = true;
-                            tracing::debug!(
-                                tool_result_idx = idx,
-                                "Applied Remove/Replace rules to tool_result content at index {}",
-                                idx
-                            );
-                        }
-                    }
-                    // Handle array content (nested text blocks within tool_result)
-                    else if let Some(nested_arr) =
-                        block.get("content").and_then(|c| c.as_array()).cloned()
-                    {
-                        let mut nested_modified = false;
-                        let mut new_nested: Vec<Value> = Vec::with_capacity(nested_arr.len());
-
-                        for nested_block in nested_arr {
-                            if nested_block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                if let Some(text) =
-                                    nested_block.get("text").and_then(|t| t.as_str())
-                                {
-                                    let result = self.apply_rules_remove_replace_only(text, ctx);
-                                    if let Some(new_text) = result.content {
-                                        nested_modified = true;
-                                        all_modifications.extend(result.modifications);
-                                        if !new_text.trim().is_empty() {
-                                            let mut updated = nested_block.clone();
-                                            updated["text"] = Value::String(new_text);
-                                            new_nested.push(updated);
-                                        }
-                                        // Skip empty text blocks (don't add to new_nested)
-                                        continue;
-                                    }
-                                }
-                            }
-                            new_nested.push(nested_block);
-                        }
-
-                        if nested_modified {
-                            block["content"] = Value::Array(new_nested);
-                            any_modified = true;
-                            tracing::debug!(
-                                tool_result_idx = idx,
-                                "Applied Remove/Replace rules to nested tool_result content at index {}",
-                                idx
-                            );
-                        }
-                    }
-                }
-
-                // If no text blocks but we have Inject rules, append one
-                if text_block_indices.is_empty() && self.has_inject_rules() {
-                    let result = self.apply_rules("", ctx);
-                    if let Some(new_text) = result.content {
-                        content_arr.push(serde_json::json!({
-                            "type": "text",
-                            "text": new_text
-                        }));
-                        all_modifications.extend(result.modifications);
-                        any_modified = true;
-                    }
-                }
+        // Process ALL user messages
+        // - Remove/Replace: apply to ALL user messages (clean up history)
+        // - Inject: apply only to LAST user message (add context once)
+        for &msg_idx in &user_msg_indices {
+            let is_last_user_msg = msg_idx == last_user_idx;
+            let (modified, modifications) =
+                self.transform_user_message(&mut messages_mut[msg_idx], ctx, is_last_user_msg);
+            if modified {
+                any_modified = true;
+                all_modifications.extend(modifications);
             }
         }
 

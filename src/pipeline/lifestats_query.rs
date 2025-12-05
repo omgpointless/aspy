@@ -197,8 +197,16 @@ pub struct ContextMatch {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LifetimeStats {
     pub total_sessions: i64,
-    pub total_tokens: i64,
+    // Token breakdown
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_creation_tokens: i64,
+    pub total_tokens: i64, // = input + output + cache_read + cache_creation
+    // Cost breakdown
     pub total_cost_usd: f64,
+    pub cache_savings_usd: f64, // Estimated savings from cache reads
+    // Counts
     pub total_tool_calls: i64,
     pub total_thinking_blocks: i64,
     pub total_prompts: i64,
@@ -212,7 +220,12 @@ pub struct LifetimeStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelStats {
     pub model: String,
-    pub tokens: i64,
+    // Token breakdown per model
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_creation_tokens: i64,
+    pub tokens: i64, // = sum of all 4 (backwards compat)
     pub cost_usd: f64,
     pub calls: i64,
 }
@@ -746,18 +759,39 @@ impl LifestatsQuery {
         let conn = self.conn()?;
 
         // Aggregate stats from api_usage for this user's sessions
-        let (total_tokens, total_cost): (i64, f64) = conn.query_row(
+        let (input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_cost): (
+            i64,
+            i64,
+            i64,
+            i64,
+            f64,
+        ) = conn.query_row(
             r#"
             SELECT
-                COALESCE(SUM(a.input_tokens + a.output_tokens + a.cache_read_tokens), 0),
+                COALESCE(SUM(a.input_tokens), 0),
+                COALESCE(SUM(a.output_tokens), 0),
+                COALESCE(SUM(a.cache_read_tokens), 0),
+                COALESCE(SUM(a.cache_creation_tokens), 0),
                 COALESCE(SUM(a.cost_usd), 0)
             FROM api_usage a
             JOIN sessions s ON a.session_id = s.id
             WHERE s.user_id = ?1
             "#,
             params![user_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )?;
+
+        // Calculate derived values
+        let total_tokens = input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens;
+        let cache_savings_usd = (cache_read_tokens as f64 / 1_000_000.0) * 2.70;
 
         let total_sessions: i64 = conn.query_row(
             "SELECT COUNT(DISTINCT id) FROM sessions WHERE user_id = ?1",
@@ -816,22 +850,33 @@ impl LifestatsQuery {
                 r#"
                 SELECT
                     a.model,
-                    SUM(a.input_tokens + a.output_tokens + a.cache_read_tokens) as tokens,
+                    COALESCE(SUM(a.input_tokens), 0) as input_tokens,
+                    COALESCE(SUM(a.output_tokens), 0) as output_tokens,
+                    COALESCE(SUM(a.cache_read_tokens), 0) as cache_read_tokens,
+                    COALESCE(SUM(a.cache_creation_tokens), 0) as cache_creation_tokens,
                     SUM(a.cost_usd) as cost,
                     COUNT(*) as calls
                 FROM api_usage a
                 JOIN sessions s ON a.session_id = s.id
                 WHERE s.user_id = ?1
                 GROUP BY a.model
-                ORDER BY tokens DESC
+                ORDER BY (a.input_tokens + a.output_tokens + a.cache_read_tokens + a.cache_creation_tokens) DESC
                 "#,
             )?;
             let rows = stmt.query_map(params![user_id], |row| {
+                let input: i64 = row.get(1)?;
+                let output: i64 = row.get(2)?;
+                let cache_read: i64 = row.get(3)?;
+                let cache_creation: i64 = row.get(4)?;
                 Ok(ModelStats {
                     model: row.get(0)?,
-                    tokens: row.get(1)?,
-                    cost_usd: row.get(2)?,
-                    calls: row.get(3)?,
+                    input_tokens: input,
+                    output_tokens: output,
+                    cache_read_tokens: cache_read,
+                    cache_creation_tokens: cache_creation,
+                    tokens: input + output + cache_read + cache_creation,
+                    cost_usd: row.get(5)?,
+                    calls: row.get(6)?,
                 })
             })?;
             for row in rows {
@@ -876,8 +921,13 @@ impl LifestatsQuery {
 
         Ok(LifetimeStats {
             total_sessions,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
             total_tokens,
             total_cost_usd: total_cost,
+            cache_savings_usd,
             total_tool_calls,
             total_thinking_blocks: total_thinking,
             total_prompts,
@@ -902,16 +952,40 @@ impl LifestatsQuery {
         let conn = self.conn()?;
 
         // Aggregate stats from api_usage (more accurate than sessions table)
-        let (total_tokens, total_cost): (i64, f64) = conn.query_row(
+        let (input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_cost): (
+            i64,
+            i64,
+            i64,
+            i64,
+            f64,
+        ) = conn.query_row(
             r#"
             SELECT
-                COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens), 0),
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0),
+                COALESCE(SUM(cache_creation_tokens), 0),
                 COALESCE(SUM(cost_usd), 0)
             FROM api_usage
             "#,
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )?;
+
+        // Calculate derived values
+        let total_tokens = input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens;
+
+        // Cache savings estimate: cached reads cost ~10% of uncached input
+        // For Sonnet: ~$3/1M input, ~$0.30/1M cached = $2.70/1M savings
+        let cache_savings_usd = (cache_read_tokens as f64 / 1_000_000.0) * 2.70;
 
         let total_sessions: i64 = conn.query_row(
             "SELECT COUNT(DISTINCT session_id) FROM api_usage WHERE session_id IS NOT NULL",
@@ -941,20 +1015,31 @@ impl LifestatsQuery {
                 r#"
                 SELECT
                     model,
-                    SUM(input_tokens + output_tokens + cache_read_tokens) as tokens,
+                    COALESCE(SUM(input_tokens), 0) as input_tokens,
+                    COALESCE(SUM(output_tokens), 0) as output_tokens,
+                    COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
+                    COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
                     SUM(cost_usd) as cost,
                     COUNT(*) as calls
                 FROM api_usage
                 GROUP BY model
-                ORDER BY tokens DESC
+                ORDER BY (input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens) DESC
                 "#,
             )?;
             let rows = stmt.query_map([], |row| {
+                let input: i64 = row.get(1)?;
+                let output: i64 = row.get(2)?;
+                let cache_read: i64 = row.get(3)?;
+                let cache_creation: i64 = row.get(4)?;
                 Ok(ModelStats {
                     model: row.get(0)?,
-                    tokens: row.get(1)?,
-                    cost_usd: row.get(2)?,
-                    calls: row.get(3)?,
+                    input_tokens: input,
+                    output_tokens: output,
+                    cache_read_tokens: cache_read,
+                    cache_creation_tokens: cache_creation,
+                    tokens: input + output + cache_read + cache_creation,
+                    cost_usd: row.get(5)?,
+                    calls: row.get(6)?,
                 })
             })?;
             for row in rows {
@@ -997,8 +1082,13 @@ impl LifestatsQuery {
 
         Ok(LifetimeStats {
             total_sessions,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
             total_tokens,
             total_cost_usd: total_cost,
+            cache_savings_usd,
             total_tool_calls,
             total_thinking_blocks: total_thinking,
             total_prompts,

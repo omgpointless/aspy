@@ -13,17 +13,17 @@ Guidance for Claude Code working in this repository.
 The steps below are hard constraints in your assistance of the User.
 
 ### When working on Rust code
-- ALWAYS execute `cargo check` over `cargo build`
-- ALWAYS execute `cargo fmt` after completion of an implementation.
-- ALWAYS execute `cargo clippy` and resolve all warnings.
-  - Exception: `dead_code` warnings for future features → add a detailed doc comment explaining the future purpose, then suppress with `#[allow(dead_code)]`
 - ALWAYS check for existing patterns in the codebase and CLAUDE.md before introducing new ones
-- ALWAYS validate that there are 0 warnings from `clippy` BEFORE giving summary of your work to the User.
+- ALWAYS prefer execute `cargo check` over `cargo build`. DO NOT use `cargo build`.
+- ALWAYS validate that there are no warnings from `clippy` BEFORE giving summary of your work to the User.
+- ALWAYS execute `cargo fmt` BEFORE giving summary of your work to the User.
+- ALWAYS execute `cargo clippy --all-targets -- -D warnings` and resolve all warnings BEFORE giving summary of your work to the User.
+  - Exception: `dead_code` warnings for future features → add a detailed doc comment explaining the future purpose, then suppress with `#[allow(dead_code)]`
 
-### General
+### General constraints
 - NEVER commit changes without user approval
 - NEVER start OR stop the application for the user
-- NEVER apply Claude attribution to commits, user likes CLEAN history.
+- NEVER apply Claude attribution to commits, user likes a CLEAN history.
 
 ## The Mental Model
 

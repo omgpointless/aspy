@@ -181,14 +181,14 @@ mod tests {
     fn test_simple_word() {
         // "Hello" = ~1-2 tokens
         let tokens = estimate_tokens("Hello");
-        assert!(tokens >= 1 && tokens <= 3);
+        assert!((1..=3).contains(&tokens));
     }
 
     #[test]
     fn test_sentence() {
         // "Hello, world!" = ~4-5 tokens (Hello, comma, space, world, !)
         let tokens = estimate_tokens("Hello, world!");
-        assert!(tokens >= 3 && tokens <= 7);
+        assert!((3..=7).contains(&tokens));
     }
 
     #[test]
@@ -198,7 +198,7 @@ mod tests {
 }"#;
         // Code has more punctuation = more tokens
         let tokens = estimate_tokens(code);
-        assert!(tokens >= 8 && tokens <= 20);
+        assert!((8..=20).contains(&tokens));
     }
 
     #[test]
@@ -208,7 +208,7 @@ mod tests {
             "value": 123
         });
         let tokens = estimate_json_tokens(&json);
-        assert!(tokens >= 8 && tokens <= 25);
+        assert!((8..=25).contains(&tokens));
     }
 
     #[test]

@@ -873,6 +873,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_dimension_inference() {
         let mut config = EmbeddingConfig::default();
 

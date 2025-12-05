@@ -489,7 +489,7 @@ mod tests {
                 // Find last text block
                 arr.iter()
                     .filter_map(|b| b["text"].as_str())
-                    .last()
+                    .next_back()
                     .unwrap_or("")
                     .to_string()
             }

@@ -2104,6 +2104,7 @@ Content with keep-me gets removed
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_mixed_text_and_tool_result_blocks() {
         // Real-world scenario: text blocks and tool_results interleaved
         let rules = vec![TagRule::Remove {

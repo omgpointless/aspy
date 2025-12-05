@@ -23,9 +23,11 @@
 //! The pipeline ALWAYS returns - one transformer failing never breaks the request.
 //! Worst case: the original unmodified request goes through.
 
+mod compact_enhancer;
 mod system_reminder;
 
 // Re-exports for config parsing and transformer implementations
+pub use compact_enhancer::{CompactEnhancer, CompactEnhancerConfig};
 #[allow(unused_imports)]
 pub use system_reminder::{
     InjectPosition, PositionConfig, RuleConfig, TagEditor, TagEditorConfig, TagRule,
@@ -231,6 +233,14 @@ impl TransformationPipeline {
                         tracing::warn!("Failed to create tag-editor: {}. Transformer disabled.", e);
                     }
                 }
+            }
+        }
+
+        // Compact enhancer (opt-in)
+        if let Some(ref compact_config) = config.compact_enhancer {
+            if compact_config.enabled {
+                pipeline.register(CompactEnhancer::new());
+                tracing::info!("Registered compact-enhancer transformer");
             }
         }
 

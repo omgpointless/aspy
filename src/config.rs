@@ -209,6 +209,9 @@ pub struct Transformers {
 
     /// Tag editor configuration (operates on configurable XML-style tags)
     pub tag_editor: Option<crate::proxy::transformation::TagEditorConfig>,
+
+    /// Compact enhancer configuration (enhances compaction prompts with session context)
+    pub compact_enhancer: Option<crate::proxy::transformation::CompactEnhancerConfig>,
 }
 
 /// Lifetime statistics storage configuration
@@ -660,6 +663,8 @@ struct FileTransformers {
     enabled: Option<bool>,
     #[serde(rename = "tag-editor")]
     tag_editor: Option<crate::proxy::transformation::TagEditorConfig>,
+    #[serde(rename = "compact-enhancer")]
+    compact_enhancer: Option<crate::proxy::transformation::CompactEnhancerConfig>,
 }
 /// Config file structure (subset of Config that makes sense to persist)
 #[derive(Debug, Deserialize, Default)]
@@ -919,29 +924,23 @@ impl Config {
                             // end is default, can omit
                         }
                         PositionConfig::Before { pattern } => {
-                            output.push_str(&format!(
-                                "[transformers.tag-editor.rules.position]\nbefore = {{ pattern = \"{}\" }}\n",
-                                pattern
-                            ));
+                            output
+                                .push_str(&format!("position.before.pattern = \"{}\"\n", pattern));
                         }
                         PositionConfig::After { pattern } => {
-                            output.push_str(&format!(
-                                "[transformers.tag-editor.rules.position]\nafter = {{ pattern = \"{}\" }}\n",
-                                pattern
-                            ));
+                            output.push_str(&format!("position.after.pattern = \"{}\"\n", pattern));
                         }
                     }
-                    // Output when condition if present
+                    // Output when condition using dotted keys (valid TOML for array elements)
                     if let Some(cond) = when {
-                        output.push_str("[transformers.tag-editor.rules.when]\n");
                         if let Some(ref tn) = cond.turn_number {
-                            output.push_str(&format!("turn_number = \"{}\"\n", tn));
+                            output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
                         }
                         if let Some(ref tr) = cond.has_tool_results {
-                            output.push_str(&format!("has_tool_results = \"{}\"\n", tr));
+                            output.push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
                         }
                         if let Some(ref ci) = cond.client_id {
-                            output.push_str(&format!("client_id = \"{}\"\n", ci));
+                            output.push_str(&format!("when.client_id = \"{}\"\n", ci));
                         }
                     }
                 }
@@ -950,15 +949,14 @@ impl Config {
                     output.push_str(&format!("tag = \"{}\"\n", tag));
                     output.push_str(&format!("pattern = \"{}\"\n", pattern));
                     if let Some(cond) = when {
-                        output.push_str("[transformers.tag-editor.rules.when]\n");
                         if let Some(ref tn) = cond.turn_number {
-                            output.push_str(&format!("turn_number = \"{}\"\n", tn));
+                            output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
                         }
                         if let Some(ref tr) = cond.has_tool_results {
-                            output.push_str(&format!("has_tool_results = \"{}\"\n", tr));
+                            output.push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
                         }
                         if let Some(ref ci) = cond.client_id {
-                            output.push_str(&format!("client_id = \"{}\"\n", ci));
+                            output.push_str(&format!("when.client_id = \"{}\"\n", ci));
                         }
                     }
                 }
@@ -973,15 +971,14 @@ impl Config {
                     output.push_str(&format!("pattern = \"{}\"\n", pattern));
                     output.push_str(&format!("replacement = \"{}\"\n", replacement));
                     if let Some(cond) = when {
-                        output.push_str("[transformers.tag-editor.rules.when]\n");
                         if let Some(ref tn) = cond.turn_number {
-                            output.push_str(&format!("turn_number = \"{}\"\n", tn));
+                            output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
                         }
                         if let Some(ref tr) = cond.has_tool_results {
-                            output.push_str(&format!("has_tool_results = \"{}\"\n", tr));
+                            output.push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
                         }
                         if let Some(ref ci) = cond.client_id {
-                            output.push_str(&format!("client_id = \"{}\"\n", ci));
+                            output.push_str(&format!("when.client_id = \"{}\"\n", ci));
                         }
                     }
                 }
@@ -1386,6 +1383,7 @@ enabled = {transformers_enabled}
         let transformers = Transformers {
             enabled: file_transformers.enabled.unwrap_or(false),
             tag_editor: file_transformers.tag_editor,
+            compact_enhancer: file_transformers.compact_enhancer,
         };
 
         // Client/provider config: file only

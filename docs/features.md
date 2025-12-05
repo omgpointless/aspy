@@ -278,6 +278,8 @@ claude mcp add aspy -- npx -y aspy-mcp
 | `s` / F2 | Stats view |
 | F3 | Settings view |
 | `↑`/`↓` or `j`/`k` | Navigate |
+| `g` / `G` | Jump to top / bottom |
+| `z` | Toggle zoom (full-screen panel) |
 | `Enter` | Open detail / Apply |
 | `Escape` | Close / Back |
 | `Tab` | Cycle focus / tabs |

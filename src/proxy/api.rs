@@ -716,6 +716,9 @@ pub struct SessionListItem {
     /// Claude Code's session ID (if from hook)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claude_session_id: Option<String>,
+    /// Path to Claude Code's transcript file (from SessionStart hook)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
     /// How session was detected
     pub source: String,
     /// When session started
@@ -1025,6 +1028,7 @@ pub async fn get_sessions(
                 key: s.key.to_string(),
                 user_id: s.user_id.to_string(),
                 claude_session_id: s.claude_session_id.clone(),
+                transcript_path: s.transcript_path.clone(),
                 source: s.source.to_string(),
                 started: s.started,
                 status: status.to_string(),

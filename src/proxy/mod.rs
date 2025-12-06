@@ -408,16 +408,22 @@ impl ProxyState {
     /// We ignore errors here to avoid blocking the proxy if a receiver is slow or closed.
     async fn send_event(&self, event: ProxyEvent, user_id: Option<&str>) {
         // Build ProcessContext for pipeline
-        let session_id = user_id.and_then(|uid| {
-            self.sessions
-                .lock()
-                .ok()
-                .and_then(|sessions| sessions.get_session_id(&sessions::UserId::new(uid)))
-        });
+        // Extract session_id and transcript_path together (single lock)
+        let (session_id, transcript_path) = user_id
+            .and_then(|uid| {
+                self.sessions.lock().ok().and_then(|sessions| {
+                    sessions
+                        .get_user_session(&sessions::UserId::new(uid))
+                        .map(|s| (s.key.to_string(), s.transcript_path.clone()))
+                })
+            })
+            .map(|(sid, tp)| (Some(sid), tp))
+            .unwrap_or((None, None));
 
         let ctx = ProcessContext::new(
             session_id.as_deref(),
             user_id,
+            transcript_path.as_deref(),
             false, // is_demo = false for real traffic
         );
 
@@ -584,161 +590,170 @@ async fn proxy_handler(
     // ─────────────────────────────────────────────────────────────────────────
     // SystemReminderEditor and future transformers expect Anthropic message format.
     // We transform first, then translate to target format if needed.
-    let (body_bytes, body_was_transformed, transform_tokens, transform_modifications) =
-        if is_likely_messages
-            && method == "POST"
-            && state.transformers_config.enabled
-            && !state.transformation.is_empty()
-        {
-            if let Ok(body_json) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
-                let model = body_json.get("model").and_then(|m| m.as_str());
-                let mut ctx = transformation::TransformContext::new(
-                    user_id.as_deref(),
-                    &routing.api_path,
-                    model,
-                );
+    let (
+        body_bytes,
+        body_was_transformed,
+        transform_tokens,
+        transform_modifications,
+        transform_names,
+    ) = if is_likely_messages
+        && method == "POST"
+        && state.transformers_config.enabled
+        && !state.transformation.is_empty()
+    {
+        if let Ok(body_json) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+            let model = body_json.get("model").and_then(|m| m.as_str());
+            let mut ctx =
+                transformation::TransformContext::new(user_id.as_deref(), &routing.api_path, model);
 
-                // Extract tool_result_count and compute session turn_number
-                if let Some(messages) = body_json.get("messages").and_then(|m| m.as_array()) {
-                    // Tool result count = count in last user message
-                    let tool_results = messages
-                        .iter()
-                        .rev()
-                        .find(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
-                        .and_then(|last_user| {
-                            last_user
-                                .get("content")
-                                .and_then(|c| c.as_array())
-                                .map(|arr| {
-                                    arr.iter()
-                                        .filter(|b| {
-                                            b.get("type").and_then(|t| t.as_str())
-                                                == Some("tool_result")
-                                        })
-                                        .count()
-                                })
-                        })
-                        .unwrap_or(0);
+            // Extract tool_result_count and compute session turn_number
+            if let Some(messages) = body_json.get("messages").and_then(|m| m.as_array()) {
+                // Tool result count = count in last user message
+                let tool_results = messages
+                    .iter()
+                    .rev()
+                    .find(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
+                    .and_then(|last_user| {
+                        last_user
+                            .get("content")
+                            .and_then(|c| c.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter(|b| {
+                                        b.get("type").and_then(|t| t.as_str())
+                                            == Some("tool_result")
+                                    })
+                                    .count()
+                            })
+                    })
+                    .unwrap_or(0);
 
-                    ctx.tool_result_count = Some(tool_results);
+                ctx.tool_result_count = Some(tool_results);
 
-                    // Session-level turn count (persists across compaction)
-                    // - Fresh prompt (tool_results == 0): increment and use new count
-                    // - Tool continuation (tool_results > 0): use existing count
-                    //
-                    // Also extract todos for CompactEnhancer (if any)
-                    let mut session_todos: Vec<sessions::TodoItem> = Vec::new();
-                    if let Some(ref uid) = user_id {
-                        if let Ok(mut sessions) = state.sessions.lock() {
-                            let sid = sessions::UserId::new(uid);
-                            if tool_results == 0 {
-                                // Fresh user prompt - increment session turn count
-                                let turn = sessions.increment_turn_count(&sid);
-                                ctx.turn_number = Some(turn);
-                            } else {
-                                // Tool continuation - use existing count
-                                ctx.turn_number = Some(sessions.get_turn_count(&sid));
-                            }
+                // Session-level turn count (persists across compaction)
+                // - Fresh prompt (tool_results == 0): increment and use new count
+                // - Tool continuation (tool_results > 0): use existing count
+                //
+                // Also extract todos for CompactEnhancer (if any)
+                let mut session_todos: Vec<sessions::TodoItem> = Vec::new();
+                if let Some(ref uid) = user_id {
+                    if let Ok(mut sessions) = state.sessions.lock() {
+                        let sid = sessions::UserId::new(uid);
+                        if tool_results == 0 {
+                            // Fresh user prompt - increment session turn count
+                            let turn = sessions.increment_turn_count(&sid);
+                            ctx.turn_number = Some(turn);
+                        } else {
+                            // Tool continuation - use existing count
+                            ctx.turn_number = Some(sessions.get_turn_count(&sid));
+                        }
 
-                            // Extract todos for CompactEnhancer
-                            if let Some(session) = sessions.get_user_session(&sid) {
-                                if !session.todos.is_empty() {
-                                    session_todos = session.todos.clone();
-                                }
+                        // Extract todos for CompactEnhancer
+                        if let Some(session) = sessions.get_user_session(&sid) {
+                            if !session.todos.is_empty() {
+                                session_todos = session.todos.clone();
                             }
                         }
                     }
-
-                    // Attach todos to context (empty slice if none)
-                    if !session_todos.is_empty() {
-                        // SAFETY: session_todos lives until ctx is used
-                        // We leak this to get a static lifetime since ctx is used synchronously
-                        /*
-                           The Box::leak pattern for todos is intentional - compaction is rare (once per
-                           context fill) and the leaked memory is bounded by todo list size. A small trade-off
-                           for clean lifetime management in the sync transformer pipeline.
-                        */
-                        let todos_static: &'static [sessions::TodoItem] =
-                            Box::leak(session_todos.into_boxed_slice());
-                        ctx.todos = Some(todos_static);
-                    }
-
-                    // Fallback: if no session available, count user messages in request
-                    if ctx.turn_number.is_none() {
-                        let msg_turn = messages
-                            .iter()
-                            .filter(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
-                            .count() as u64;
-                        ctx.turn_number = Some(msg_turn);
-                    }
                 }
 
-                tracing::debug!(
-                    turn = ctx.turn_number,
-                    tool_results = ctx.tool_result_count,
-                    client = ctx.client_id,
-                    "Transformer context: turn={} tool_results={} client={}",
-                    ctx.turn_number.unwrap_or(0),
-                    ctx.tool_result_count.unwrap_or(0),
-                    ctx.client_id.unwrap_or("unknown")
-                );
+                // Attach todos to context (empty slice if none)
+                if !session_todos.is_empty() {
+                    // SAFETY: session_todos lives until ctx is used
+                    // We leak this to get a static lifetime since ctx is used synchronously
+                    /*
+                       The Box::leak pattern for todos is intentional - compaction is rare (once per
+                       context fill) and the leaked memory is bounded by the "todo list size". A small trade-off
+                       for clean lifetime management in the sync transformer pipeline.
+                    */
+                    let todos_static: &'static [sessions::TodoItem] =
+                        Box::leak(session_todos.into_boxed_slice());
+                    ctx.todos = Some(todos_static);
+                }
 
-                tracing::debug!(
-                    transformers = ?state.transformation.transformer_names(),
-                    "Running transformation pipeline on request"
-                );
-                match state.transformation.transform(&body_json, &ctx) {
-                    transformation::TransformResult::Modified {
-                        body: new_body,
+                // Fallback: if no session available, count user messages in request
+                if ctx.turn_number.is_none() {
+                    let msg_turn = messages
+                        .iter()
+                        .filter(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
+                        .count() as u64;
+                    ctx.turn_number = Some(msg_turn);
+                }
+            }
+
+            tracing::debug!(
+                turn = ctx.turn_number,
+                tool_results = ctx.tool_result_count,
+                client = ctx.client_id,
+                "Transformer context: turn={} tool_results={} client={}",
+                ctx.turn_number.unwrap_or(0),
+                ctx.tool_result_count.unwrap_or(0),
+                ctx.client_id.unwrap_or("unknown")
+            );
+
+            tracing::debug!(
+                transformers = ?state.transformation.transformer_names(),
+                "Running transformation pipeline on request"
+            );
+            match state.transformation.transform(&body_json, &ctx) {
+                transformation::TransformResult::Modified {
+                    body: new_body,
+                    tokens,
+                    modifications,
+                    transformers,
+                } => {
+                    if let Some(t) = &tokens {
+                        tracing::info!(
+                            tokens_before = t.before,
+                            tokens_after = t.after,
+                            delta = t.delta(),
+                            transformers = ?transformers,
+                            modifications = ?modifications,
+                            "✓ Request transformed: {} tokens → {} tokens (Δ{})",
+                            t.before,
+                            t.after,
+                            t.delta()
+                        );
+                    } else {
+                        tracing::info!(
+                            transformers = ?transformers,
+                            modifications = ?modifications,
+                            "✓ Request transformed (no token tracking)"
+                        );
+                    }
+                    (
+                        serde_json::to_vec(&new_body).unwrap_or_else(|_| body_bytes.to_vec()),
+                        true,
                         tokens,
                         modifications,
-                    } => {
-                        if let Some(t) = &tokens {
-                            tracing::info!(
-                                tokens_before = t.before,
-                                tokens_after = t.after,
-                                delta = t.delta(),
-                                modifications = ?modifications,
-                                "✓ Request transformed: {} tokens → {} tokens (Δ{})",
-                                t.before,
-                                t.after,
-                                t.delta()
-                            );
-                        } else {
-                            tracing::info!(modifications = ?modifications, "✓ Request transformed (no token tracking)");
-                        }
-                        (
-                            serde_json::to_vec(&new_body).unwrap_or_else(|_| body_bytes.to_vec()),
-                            true,
-                            tokens,
-                            modifications,
-                        )
-                    }
-                    transformation::TransformResult::Block { reason, status } => {
-                        tracing::info!(
-                            "Request blocked by transformation pipeline: {} (status {})",
-                            reason,
-                            status
-                        );
-                        return Err(ProxyError::BodyRead(format!(
-                            "Request blocked: {} (status {})",
-                            reason, status
-                        )));
-                    }
-                    transformation::TransformResult::Error(e) => {
-                        tracing::warn!("Transformation error (continuing with original): {}", e);
-                        (body_bytes.to_vec(), false, None, Vec::new())
-                    }
-                    transformation::TransformResult::Unchanged => {
-                        (body_bytes.to_vec(), false, None, Vec::new())
-                    }
+                        transformers,
+                    )
                 }
-            } else {
-                (body_bytes.to_vec(), false, None, Vec::new())
+                transformation::TransformResult::Block { reason, status } => {
+                    tracing::info!(
+                        "Request blocked by transformation pipeline: {} (status {})",
+                        reason,
+                        status
+                    );
+                    return Err(ProxyError::BodyRead(format!(
+                        "Request blocked: {} (status {})",
+                        reason, status
+                    )));
+                }
+                transformation::TransformResult::Error(e) => {
+                    tracing::warn!("Transformation error (continuing with original): {}", e);
+                    (body_bytes.to_vec(), false, None, Vec::new(), Vec::new())
+                }
+                transformation::TransformResult::Unchanged => {
+                    (body_bytes.to_vec(), false, None, Vec::new(), Vec::new())
+                }
             }
         } else {
-            (body_bytes.to_vec(), false, None, Vec::new())
-        };
+            (body_bytes.to_vec(), false, None, Vec::new(), Vec::new())
+        }
+    } else {
+        (body_bytes.to_vec(), false, None, Vec::new(), Vec::new())
+    };
 
     // Determine target API format based on provider config
     // If provider expects OpenAI format, translate Anthropic → OpenAI
@@ -825,11 +840,17 @@ async fn proxy_handler(
 
     // Emit transformation event if tokens were tracked
     if let Some(tokens) = transform_tokens {
+        // Join transformer names with "+" or fall back to generic name
+        let transformer_label = if transform_names.is_empty() {
+            "transformation-pipeline".to_string()
+        } else {
+            transform_names.join("+")
+        };
         state
             .send_event(
                 ProxyEvent::RequestTransformed {
                     timestamp: Utc::now(),
-                    transformer: "transformation-pipeline".to_string(),
+                    transformer: transformer_label,
                     tokens_before: tokens.before,
                     tokens_after: tokens.after,
                     modifications: transform_modifications,

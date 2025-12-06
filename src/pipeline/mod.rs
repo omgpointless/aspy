@@ -55,16 +55,27 @@ pub struct ProcessContext {
     /// User ID (API key hash, if known)
     #[allow(dead_code)] // Phase 2: User-specific filtering/routing
     pub user_id: Option<Arc<str>>,
+    /// Path to Claude Code's transcript file (from SessionStart hook)
+    ///
+    /// Maps user_id → session → transcript for cross-session recovery.
+    /// Example: ~/.claude/projects/.../abc123.jsonl
+    pub transcript_path: Option<Arc<str>>,
     /// Whether this is a demo/test event
     #[allow(dead_code)] // Phase 2: Demo event filtering
     pub is_demo: bool,
 }
 
 impl ProcessContext {
-    pub fn new(session_id: Option<&str>, user_id: Option<&str>, is_demo: bool) -> Self {
+    pub fn new(
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+        transcript_path: Option<&str>,
+        is_demo: bool,
+    ) -> Self {
         Self {
             session_id: session_id.map(Arc::from),
             user_id: user_id.map(Arc::from),
+            transcript_path: transcript_path.map(Arc::from),
             is_demo,
         }
     }

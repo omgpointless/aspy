@@ -438,6 +438,9 @@ impl LifestatsProcessor {
         if current_version < 4 {
             Self::migrate_v3_to_v4(conn)?;
         }
+        if current_version < 5 {
+            Self::migrate_v4_to_v5(conn)?;
+        }
 
         Ok(())
     }
@@ -728,6 +731,36 @@ impl LifestatsProcessor {
         Ok(())
     }
 
+    /// v4 → v5: Add transcript_path column to sessions table
+    ///
+    /// This enables cross-session transcript lookup by persisting the path
+    /// to Claude Code's transcript file (e.g., ~/.claude/projects/.../abc123.jsonl).
+    /// Maps user_id → session → transcript_path for context recovery across proxy restarts.
+    fn migrate_v4_to_v5(conn: &Connection) -> anyhow::Result<()> {
+        // Check if column already exists (idempotent)
+        let has_column: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('sessions') WHERE name = 'transcript_path'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if !has_column {
+            conn.execute("ALTER TABLE sessions ADD COLUMN transcript_path TEXT", [])?;
+        }
+
+        conn.execute(
+            "UPDATE metadata SET value = '5' WHERE key = 'schema_version'",
+            [],
+        )?;
+
+        tracing::info!(
+            "Migrated lifestats database from v4 to v5 (added transcript_path to sessions)"
+        );
+        Ok(())
+    }
+
     /// Retention cleanup - deletes old data and syncs FTS indexes
     ///
     /// # FTS External Content Sync Contract
@@ -888,11 +921,14 @@ impl LifestatsProcessor {
         let session_id = ctx.session_id.as_deref();
 
         // Ensure session exists before storing any event
-        // Use INSERT OR IGNORE for idempotent upsert
+        // Use UPSERT to handle transcript_path updates (may arrive after session creation)
         if let Some(sid) = session_id {
             conn.execute(
-                "INSERT OR IGNORE INTO sessions (id, user_id, started_at, source) VALUES (?1, ?2, datetime('now'), 'first_seen')",
-                params![sid, ctx.user_id.as_deref()],
+                "INSERT INTO sessions (id, user_id, started_at, source, transcript_path)
+                 VALUES (?1, ?2, datetime('now'), 'first_seen', ?3)
+                 ON CONFLICT(id) DO UPDATE SET
+                     transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path)",
+                params![sid, ctx.user_id.as_deref(), ctx.transcript_path.as_deref()],
             )?;
         }
 

@@ -79,6 +79,8 @@ pub enum TransformResult {
         tokens: Option<TransformTokens>,
         /// Human-readable descriptions of what was modified
         modifications: Vec<String>,
+        /// Names of transformers that modified the request
+        transformers: Vec<String>,
     },
 
     /// Block request entirely (e.g., content policy violation)
@@ -111,6 +113,7 @@ impl TransformResult {
             body,
             tokens: None,
             modifications: Vec::new(),
+            transformers: Vec::new(),
         }
     }
 
@@ -124,6 +127,7 @@ impl TransformResult {
             body,
             tokens: Some(TransformTokens::new(before, after)),
             modifications: Vec::new(),
+            transformers: Vec::new(),
         }
     }
 
@@ -138,6 +142,7 @@ impl TransformResult {
             body,
             tokens: Some(TransformTokens::new(before, after)),
             modifications,
+            transformers: Vec::new(),
         }
     }
 }
@@ -373,6 +378,8 @@ impl TransformationPipeline {
         let mut any_tokens_tracked = false;
         // Accumulate modification descriptions
         let mut all_modifications: Vec<String> = Vec::new();
+        // Track which transformers actually modified the request
+        let mut active_transformers: Vec<String> = Vec::new();
 
         for transformer in &self.transformers {
             // Fast-path: skip if transformer doesn't apply
@@ -396,6 +403,7 @@ impl TransformationPipeline {
                     body,
                     tokens,
                     modifications,
+                    ..
                 } => {
                     if let Some(t) = tokens {
                         tracing::info!(
@@ -421,6 +429,8 @@ impl TransformationPipeline {
                     }
                     // Accumulate modifications from this transformer
                     all_modifications.extend(modifications);
+                    // Track that this transformer fired
+                    active_transformers.push(transformer.name().to_string());
                     current = Cow::Owned(body);
                 }
                 TransformResult::Block { reason, status } => {
@@ -454,19 +464,19 @@ impl TransformationPipeline {
         match current {
             Cow::Borrowed(_) => TransformResult::Unchanged,
             Cow::Owned(modified) => {
-                if any_tokens_tracked {
-                    TransformResult::modified_with_info(
-                        modified,
+                let tokens = if any_tokens_tracked {
+                    Some(TransformTokens::new(
                         total_tokens_before,
                         total_tokens_after,
-                        all_modifications,
-                    )
+                    ))
                 } else {
-                    TransformResult::Modified {
-                        body: modified,
-                        tokens: None,
-                        modifications: all_modifications,
-                    }
+                    None
+                };
+                TransformResult::Modified {
+                    body: modified,
+                    tokens,
+                    modifications: all_modifications,
+                    transformers: active_transformers,
                 }
             }
         }

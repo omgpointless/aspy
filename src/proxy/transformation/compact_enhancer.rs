@@ -23,6 +23,7 @@
 //! - Top tool usage (future)
 
 use super::{RequestTransformer, TransformContext, TransformResult};
+use crate::proxy::sessions::TodoStatus;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -117,9 +118,10 @@ impl CompactEnhancer {
     /// Build the context injection string
     ///
     /// Generates instructions for the compacting LLM to preserve continuity.
-    /// Focuses on capturing work tracks and mental flow, not stats that reset anyway.
-    fn build_injection(&self, _ctx: &TransformContext) -> String {
-        r#"
+    /// Includes tracked todos if available - these are the most concrete anchors.
+    fn build_injection(&self, ctx: &TransformContext) -> String {
+        let mut injection = String::from(
+            r#"
 
 ## Aspy Continuity Enhancement
 
@@ -128,8 +130,57 @@ impl CompactEnhancer {
 - **Key Decisions Made:** Important choices that shouldn't be revisited
 - **Current Mental Model:** The user's goals and approach being taken
 
-**Post-compaction recovery:** The continuing Claude has `aspy_lifestats_context_hybrid` to search the full pre-compaction conversation. Include 3-5 searchable keywords (feature names, concepts, file paths) that would help locate detailed context."#
-            .to_string()
+**Post-compaction recovery:** The continuing Claude has `aspy_recall` to search the full pre-compaction conversation. Include 3-5 searchable keywords (feature names, concepts, file paths) that would help locate detailed context."#,
+        );
+
+        // Add todos section if we have tracked todos
+        if let Some(todos) = ctx.todos {
+            if !todos.is_empty() {
+                injection.push_str("\n\n**Tracked Task State (from TodoWrite):**\n");
+
+                // Show in-progress first (most important)
+                let in_progress: Vec<_> = todos
+                    .iter()
+                    .filter(|t| t.status == TodoStatus::InProgress)
+                    .collect();
+                if !in_progress.is_empty() {
+                    injection.push_str("Currently working on:\n");
+                    for todo in in_progress {
+                        injection.push_str(&format!("- 🔄 {}\n", todo.content));
+                    }
+                }
+
+                // Then pending
+                let pending: Vec<_> = todos
+                    .iter()
+                    .filter(|t| t.status == TodoStatus::Pending)
+                    .collect();
+                if !pending.is_empty() {
+                    injection.push_str("Pending:\n");
+                    for todo in pending {
+                        injection.push_str(&format!("- ⏳ {}\n", todo.content));
+                    }
+                }
+
+                // Completed last (just recent context)
+                let completed: Vec<_> = todos
+                    .iter()
+                    .filter(|t| t.status == TodoStatus::Completed)
+                    .collect();
+                if !completed.is_empty() {
+                    injection.push_str("Recently completed:\n");
+                    for todo in completed {
+                        injection.push_str(&format!("- ✅ {}\n", todo.content));
+                    }
+                }
+
+                injection.push_str(
+                    "\n_These task names are excellent searchable keywords for aspy_recall._",
+                );
+            }
+        }
+
+        injection
     }
 
     /// Extract text content from a user message (handles both string and array formats)
@@ -379,8 +430,8 @@ mod tests {
         let injected = enhancer.build_injection(&ctx);
 
         assert!(
-            injected.contains("aspy_lifestats_context_hybrid"),
-            "Injection should mention the hybrid search tool"
+            injected.contains("aspy_recall"),
+            "Injection should mention the recall tool"
         );
         assert!(
             injected.contains("searchable keywords"),

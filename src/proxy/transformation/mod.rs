@@ -184,6 +184,10 @@ pub struct TransformContext<'a> {
     /// Number of tool_result blocks in current user message
     /// Used by: has_tool_results condition
     pub tool_result_count: Option<usize>,
+
+    /// Current tracked todos (intercepted from TodoWrite)
+    /// Used by: CompactEnhancer to inject task context into compaction prompt
+    pub todos: Option<&'a [crate::proxy::sessions::TodoItem]>,
     // Future: semantic_context for RAG injection
     // pub semantic_context: Option<&'a SemanticContext>,
 }
@@ -199,6 +203,7 @@ impl<'a> TransformContext<'a> {
             context_limit: None,
             turn_number: None,
             tool_result_count: None,
+            todos: None,
         }
     }
 

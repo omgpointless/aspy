@@ -1197,8 +1197,6 @@ enabled = {transformers_enabled}
 # OPENTELEMETRY EXPORT (Optional)
 # ─────────────────────────────────────────────────────────────────────────────
 # Export telemetry to Azure Application Insights or other OTel-compatible backends.
-# Requires: cargo build --features otel
-#
 # Connection string can also be set via APPLICATIONINSIGHTS_CONNECTION_STRING env var.
 
 [otel]
@@ -1687,7 +1685,7 @@ impl Config {
 
         // Transformation: optional (request modification before forwarding)
         // Shows as active when enabled=true AND has configured rules
-        let transform_active = self.transformers.enabled
+        let tag_editor_active = self.transformers.enabled
             && self
                 .transformers
                 .tag_editor
@@ -1695,14 +1693,33 @@ impl Config {
                 .map(|c| c.enabled)
                 .unwrap_or(false);
         features.push(FeatureDefinition::optional(
-            "transformers",
-            "transformers",
+            "tag-editor",
+            "tag-editor",
             FeatureCategory::Pipeline,
-            transform_active,
-            "Request editing",
+            tag_editor_active,
+            "Request tag editing",
         ));
 
-        // OpenTelemetry: configurable (requires connection string and --features otel)
+        // Compact enhancer: optional (enhances compaction prompts)
+        let compact_enhancer_active = self.transformers.enabled
+            && self
+                .transformers
+                .compact_enhancer
+                .as_ref()
+                .map(|c| c.enabled)
+                .unwrap_or(false);
+        features.push(
+            FeatureDefinition::optional(
+                "compact-enhancer",
+                "compact",
+                FeatureCategory::Pipeline,
+                compact_enhancer_active,
+                "Continuity on /compact",
+            )
+            .highlight_when_missing("[transformers.compact-enhancer]\nenabled = true"),
+        );
+
+        // OpenTelemetry: configurable (requires connection string)
         let otel_def = if self.otel.is_configured() {
             FeatureDefinition::configurable(
                 "otel",

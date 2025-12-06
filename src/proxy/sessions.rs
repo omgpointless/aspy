@@ -172,6 +172,78 @@ impl std::fmt::Display for SessionSource {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Todo State (intercepted from TodoWrite tool calls)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Status of a todo item (matches Claude Code's TodoWrite schema)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl std::fmt::Display for TodoStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::InProgress => write!(f, "in_progress"),
+            Self::Completed => write!(f, "completed"),
+        }
+    }
+}
+
+/// A single todo item from Claude Code's TodoWrite tool
+///
+/// This matches the schema Claude Code uses:
+/// - content: The imperative form ("Run tests", "Fix bug")
+/// - activeForm: Present continuous ("Running tests", "Fixing bug")
+/// - status: pending | in_progress | completed
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoItem {
+    /// What needs to be done (imperative form)
+    pub content: String,
+    /// Current status of this todo
+    pub status: TodoStatus,
+    /// Active form shown during execution (present continuous)
+    #[serde(rename = "activeForm")]
+    pub active_form: String,
+}
+
+/// Parse todos from a TodoWrite tool call input
+///
+/// The input looks like:
+/// ```json
+/// {"todos": [{"content": "Fix bug", "status": "in_progress", "activeForm": "Fixing bug"}, ...]}
+/// ```
+pub fn parse_todos_from_input(input: &serde_json::Value) -> Option<Vec<TodoItem>> {
+    let todos_array = input.get("todos")?.as_array()?;
+    let mut result = Vec::with_capacity(todos_array.len());
+
+    for item in todos_array {
+        let content = item.get("content")?.as_str()?.to_string();
+        let active_form = item.get("activeForm")?.as_str()?.to_string();
+        let status_str = item.get("status")?.as_str()?;
+
+        let status = match status_str {
+            "pending" => TodoStatus::Pending,
+            "in_progress" => TodoStatus::InProgress,
+            "completed" => TodoStatus::Completed,
+            _ => continue, // Skip unknown status
+        };
+
+        result.push(TodoItem {
+            content,
+            status,
+            active_form,
+        });
+    }
+
+    Some(result)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Context State
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -286,6 +358,25 @@ pub struct Session {
 
     /// Current session status
     pub status: SessionStatus,
+
+    /// Current todo list state (intercepted from TodoWrite tool calls)
+    ///
+    /// Updated whenever Claude calls the TodoWrite tool. This captures
+    /// what Claude is currently working on - useful for:
+    /// - Context recovery after compaction (keywords!)
+    /// - Session visualization in TUI
+    /// - Understanding session progress
+    pub todos: Vec<TodoItem>,
+
+    /// When the todos were last updated
+    pub todos_updated: Option<DateTime<Utc>>,
+
+    /// Path to Claude Code's transcript file
+    ///
+    /// Captured from SessionStart hook. Maps user_id → session → transcript file.
+    /// Enables cross-referencing aspy events with Claude's native storage.
+    /// Example: ~/.claude/projects/.../abc123.jsonl
+    pub transcript_path: Option<String>,
 }
 
 impl Session {
@@ -314,6 +405,9 @@ impl Session {
             context: ContextState::with_limit(context_limit),
             events: VecDeque::with_capacity(MAX_SESSION_EVENTS),
             status: SessionStatus::Active,
+            todos: Vec::new(),
+            todos_updated: None,
+            transcript_path: None,
         }
     }
 
@@ -325,7 +419,7 @@ impl Session {
         // Update stats based on event type
         self.stats.update(&event);
 
-        // Update context state for relevant events
+        // Update context state and intercept special tool calls
         match &event {
             ProxyEvent::ApiUsage {
                 input_tokens,
@@ -345,6 +439,21 @@ impl Session {
             }
             ProxyEvent::ContextCompact { new_context, .. } => {
                 self.context.update_from_compact(*new_context);
+            }
+            // Intercept TodoWrite tool calls to track Claude's current tasks
+            ProxyEvent::ToolCall {
+                tool_name, input, ..
+            } if tool_name == "TodoWrite" => {
+                if let Some(todos) = parse_todos_from_input(input) {
+                    tracing::debug!(
+                        user = %self.user_id.short(),
+                        todo_count = todos.len(),
+                        "TodoWrite intercepted: {} todos",
+                        todos.len()
+                    );
+                    self.todos = todos;
+                    self.todos_updated = Some(Utc::now());
+                }
             }
             _ => {}
         }
@@ -434,6 +543,7 @@ impl SessionManager {
         user_id: UserId,
         session_id: Option<String>,
         source: SessionSource,
+        transcript_path: Option<String>,
     ) -> &Session {
         // Create session key
         let key = match session_id {
@@ -479,7 +589,8 @@ impl SessionManager {
         }
 
         // Create and insert new session
-        let session = Session::new(key.clone(), user_id.clone(), source, self.context_limit);
+        let mut session = Session::new(key.clone(), user_id.clone(), source, self.context_limit);
+        session.transcript_path = transcript_path;
         self.sessions.insert(key.clone(), session);
         self.active_by_user.insert(user_id, key.clone());
 
@@ -535,8 +646,8 @@ impl SessionManager {
                 }
             }
             None => {
-                // Create implicit session on first event
-                self.start_session(user_id.clone(), None, SessionSource::FirstSeen);
+                // Create implicit session on first event (no transcript path available)
+                self.start_session(user_id.clone(), None, SessionSource::FirstSeen, None);
                 // Record the event in the newly created session
                 if let Some(key) = self.active_by_user.get(user_id) {
                     if let Some(session) = self.sessions.get_mut(key) {
@@ -726,6 +837,7 @@ mod tests {
             user.clone(),
             Some("session1".to_string()),
             SessionSource::Hook,
+            None,
         );
         assert_eq!(manager.active_count(), 1);
 
@@ -734,6 +846,7 @@ mod tests {
             user.clone(),
             Some("session2".to_string()),
             SessionSource::Hook,
+            None,
         );
         assert_eq!(manager.active_count(), 1);
         assert_eq!(manager.history.len(), 1);

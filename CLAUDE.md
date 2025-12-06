@@ -67,6 +67,24 @@ When adding a new feature with config, you **MUST** update all of these:
 | 5 | `config.rs` | Merge logic in `Config::from_env()` |
 | 6 | `config.rs` | Serialization in `Config::to_toml()` |
 | 7 | `config.rs` | Entry in `Config::feature_definitions()` for StartupRegistry |
+| 8 | `config.rs` | **Update exhaustive test** for that config layer (see below) |
+
+### Exhaustive Tests (Compile-Time Enforcement)
+
+**Don't rely on memory** — exhaustive tests in `config.rs` catch forgotten serialization:
+
+| Config Layer | Test Name | What It Catches |
+|--------------|-----------|-----------------|
+| `Transformers` | `test_all_transformers_have_toml_serialization` | Missing transformer in template |
+| `Augmentation` | `test_all_augmenters_have_toml_serialization` | Missing augmenter field |
+| `Features` | `test_all_features_have_toml_serialization` | Missing feature flag |
+
+**How it works:** Each test explicitly sets every field. When you add a new field:
+1. Test won't compile until you initialize the new field
+2. Test fails until you add serialization in `to_toml()`
+3. Test fails until you add the assertion
+
+Run `cargo test test_all_` to verify all layers pass.
 
 ### TOML Serialization Rules
 

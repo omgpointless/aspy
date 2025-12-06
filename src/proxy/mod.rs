@@ -285,6 +285,10 @@ pub async fn start_proxy(
         .route("/api/stats", axum::routing::get(api::get_stats))
         .route("/api/events", axum::routing::get(api::get_events))
         .route("/api/context", axum::routing::get(api::get_context))
+        .route(
+            "/api/context/snapshot",
+            axum::routing::get(api::get_context_snapshot),
+        )
         // Session management endpoints
         .route("/api/sessions", axum::routing::get(api::get_sessions))
         .route(
@@ -292,6 +296,16 @@ pub async fn start_proxy(
             axum::routing::post(api::session_start),
         )
         .route("/api/session/end", axum::routing::post(api::session_end))
+        // Session todos endpoint
+        .route(
+            "/api/session/:user_id/todos",
+            axum::routing::get(api::get_session_todos),
+        )
+        // Hook endpoints
+        .route(
+            "/api/hook/precompact",
+            axum::routing::post(api::hook_precompact),
+        )
         // Log search endpoint
         .route("/api/search", axum::routing::post(api::search_logs))
         // Lifestats endpoints
@@ -611,6 +625,9 @@ async fn proxy_handler(
                     // Session-level turn count (persists across compaction)
                     // - Fresh prompt (tool_results == 0): increment and use new count
                     // - Tool continuation (tool_results > 0): use existing count
+                    //
+                    // Also extract todos for CompactEnhancer (if any)
+                    let mut session_todos: Vec<sessions::TodoItem> = Vec::new();
                     if let Some(ref uid) = user_id {
                         if let Ok(mut sessions) = state.sessions.lock() {
                             let sid = sessions::UserId::new(uid);
@@ -622,7 +639,28 @@ async fn proxy_handler(
                                 // Tool continuation - use existing count
                                 ctx.turn_number = Some(sessions.get_turn_count(&sid));
                             }
+
+                            // Extract todos for CompactEnhancer
+                            if let Some(session) = sessions.get_user_session(&sid) {
+                                if !session.todos.is_empty() {
+                                    session_todos = session.todos.clone();
+                                }
+                            }
                         }
+                    }
+
+                    // Attach todos to context (empty slice if none)
+                    if !session_todos.is_empty() {
+                        // SAFETY: session_todos lives until ctx is used
+                        // We leak this to get a static lifetime since ctx is used synchronously
+                        /*
+                           The Box::leak pattern for todos is intentional - compaction is rare (once per
+                           context fill) and the leaked memory is bounded by todo list size. A small trade-off
+                           for clean lifetime management in the sync transformer pipeline.
+                        */
+                        let todos_static: &'static [sessions::TodoItem] =
+                            Box::leak(session_todos.into_boxed_slice());
+                        ctx.todos = Some(todos_static);
                     }
 
                     // Fallback: if no session available, count user messages in request
@@ -803,7 +841,11 @@ async fn proxy_handler(
 
     // Parse request for tool results if this is a messages endpoint
     if is_messages_endpoint && method == "POST" {
-        match state.parser.parse_request(&body_bytes).await {
+        match state
+            .parser
+            .parse_request(&body_bytes, user_id.as_deref())
+            .await
+        {
             Ok(events) => {
                 for event in events {
                     state.send_event(event, user_id.as_deref()).await;

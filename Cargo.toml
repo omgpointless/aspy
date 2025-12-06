@@ -67,19 +67,17 @@ unicode-width = "0.2"                                           # Correct width 
 arboard = "3"                                                   # Cross-platform clipboard (Windows/macOS/Linux)
 regex = "1.12.2"
 
-# OpenTelemetry - optional telemetry export to Azure, Jaeger, etc.
+# OpenTelemetry - telemetry export to Azure Application Insights, Jaeger, OTLP, etc.
 # Version 0.27.x alignment: opentelemetry-application-insights 0.37.x requires otel 0.27
-opentelemetry = { version = "0.27", optional = true }
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"], optional = true }
-opentelemetry-http = { version = "0.27", features = ["reqwest"], optional = true }
-opentelemetry-application-insights = { version = "0.37", optional = true }
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-http = { version = "0.27", features = ["reqwest"] }
+opentelemetry-application-insights = "0.37"
 
 [features]
 default = []
 # Enable local embeddings using ONNX models (adds ~100MB to binary due to model download)
 local-embeddings = ["fastembed"]
-# Enable OpenTelemetry export (Azure Application Insights, OTLP, etc.)
-otel = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-http", "opentelemetry-application-insights"]
 
 [[bin]]
 name = "aspy"

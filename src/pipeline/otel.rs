@@ -461,7 +461,8 @@ impl OtelProcessor {
             | ProxyEvent::UserPrompt { .. }
             | ProxyEvent::AssistantResponse { .. }
             | ProxyEvent::HeadersCaptured { .. }
-            | ProxyEvent::RateLimitUpdate { .. } => {
+            | ProxyEvent::RateLimitUpdate { .. }
+            | ProxyEvent::PreCompactHook { .. } => {
                 // Skip - these are either too verbose or internal to Aspy
             }
         }

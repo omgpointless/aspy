@@ -8,7 +8,7 @@ pub mod models;
 use crate::events::ProxyEvent;
 use anyhow::{Context, Result};
 use chrono::Utc;
-use models::{ApiRequest, ApiResponse};
+use models::{ApiRequest, ApiResponse, ContextSnapshot};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -24,6 +24,10 @@ struct CompactDetectionState {
     last_cached_tokens: u64,
     /// Last known context size before potential compact
     last_context_tokens: u64,
+    /// Snapshot of previous request's content breakdown (for comparison on compact)
+    last_snapshot: Option<ContextSnapshot>,
+    /// Snapshot of current request (set during parse_request, used by check_for_compact)
+    pending_snapshot: Option<ContextSnapshot>,
 }
 
 /// Type alias for per-user compact detection state map
@@ -103,26 +107,71 @@ impl Parser {
                 || total_cache < prev_cache * 70 / 100);
 
         let compact_event = if significant_drop {
+            // Calculate breakdown if we have both snapshots
+            // pending_snapshot = current request, last_snapshot = previous request
+            let breakdown = match (&state.last_snapshot, &state.pending_snapshot) {
+                (Some(prev), Some(curr)) => {
+                    let diff = curr.diff(prev);
+                    tracing::info!("📦 Compact breakdown: {}", diff.summary());
+                    if let Some((category, chars)) = diff.primary_reduction() {
+                        tracing::info!("   Primary reduction: {} (-{} chars)", category, chars);
+                    }
+                    Some(diff)
+                }
+                _ => None,
+            };
+
             Some(ProxyEvent::ContextCompact {
                 timestamp: Utc::now(),
                 previous_context: state.last_context_tokens,
                 new_context: current_context,
+                breakdown,
             })
         } else {
             None
         };
 
         // Update state for next check (only for non-Haiku)
+        // Rotate: pending_snapshot → last_snapshot
         if total_cache > 0 {
             state.last_cached_tokens = total_cache;
             state.last_context_tokens = current_context;
+            // Rotate snapshot: pending becomes last for next comparison
+            if state.pending_snapshot.is_some() {
+                state.last_snapshot = state.pending_snapshot.take();
+            }
         } else if compact_event.is_some() {
             // Reset after compact
             state.last_cached_tokens = 0;
             state.last_context_tokens = current_context;
+            state.last_snapshot = state.pending_snapshot.take();
         }
 
         compact_event
+    }
+
+    /// Store a context snapshot for the current request (called during parse_request)
+    /// This snapshot will be used by check_for_compact to calculate breakdown
+    pub async fn store_request_snapshot(&self, user_id: Option<&str>, snapshot: ContextSnapshot) {
+        let user_key = user_id.unwrap_or("unknown").to_string();
+        let mut state_map = self.compact_state.lock().await;
+        let state = state_map.entry(user_key).or_default();
+        state.pending_snapshot = Some(snapshot);
+    }
+
+    /// Get the current context snapshot for a user
+    ///
+    /// Returns the most recent snapshot (pending if available, else last).
+    /// Used by MCP tool to answer "Why is my context so high?"
+    pub async fn get_context_snapshot(&self, user_id: &str) -> Option<ContextSnapshot> {
+        let state_map = self.compact_state.lock().await;
+        state_map.get(user_id).and_then(|state| {
+            // Prefer pending (current request) over last (previous request)
+            state
+                .pending_snapshot
+                .clone()
+                .or_else(|| state.last_snapshot.clone())
+        })
     }
 
     /// Register a tool_use ID for correlation with future tool_results
@@ -144,7 +193,13 @@ impl Parser {
     ///
     /// Tool results represent Claude Code's responses to previous tool calls.
     /// We correlate them with the original call to calculate duration.
-    pub async fn parse_request(&self, body: &[u8]) -> Result<Vec<ProxyEvent>> {
+    ///
+    /// Also calculates and stores a ContextSnapshot for compact breakdown analysis.
+    pub async fn parse_request(
+        &self,
+        body: &[u8],
+        user_id: Option<&str>,
+    ) -> Result<Vec<ProxyEvent>> {
         let request: ApiRequest = match serde_json::from_slice(body) {
             Ok(req) => req,
             Err(e) => {
@@ -153,6 +208,10 @@ impl Parser {
                 return Err(anyhow::anyhow!("Failed to parse API request: {}", e));
             }
         };
+
+        // Calculate and store context snapshot for compact breakdown analysis
+        let snapshot = ContextSnapshot::from_request(&request);
+        self.store_request_snapshot(user_id, snapshot).await;
 
         let mut events = Vec::new();
         let tool_results = request.tool_results();
@@ -707,7 +766,10 @@ mod tests {
             ]
         }"#;
 
-        let events = parser.parse_request(request_json.as_bytes()).await.unwrap();
+        let events = parser
+            .parse_request(request_json.as_bytes(), None)
+            .await
+            .unwrap();
 
         assert_eq!(events.len(), 1, "Expected 1 ToolResult event");
         match &events[0] {

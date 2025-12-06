@@ -105,6 +105,8 @@ pub enum ProxyEvent {
         previous_context: u64,
         /// Context size after compact (from the triggering call)
         new_context: u64,
+        /// Breakdown of what changed (if snapshots available)
+        breakdown: Option<crate::parser::models::ContextSnapshotDiff>,
     },
 
     /// Thinking block started (emitted immediately for real-time feedback)
@@ -142,6 +144,16 @@ pub enum ProxyEvent {
         augmenter: String,
         /// Tokens injected
         tokens_injected: u32,
+    },
+
+    /// PreCompact hook was triggered (before context compaction)
+    ///
+    /// Fired by Claude Code's PreCompact hook before /compact runs.
+    /// Useful for tracking compact timeline and detecting "ghost compacts".
+    PreCompactHook {
+        timestamp: DateTime<Utc>,
+        /// "manual" (user ran /compact) or "auto" (context window full)
+        trigger: String,
     },
 }
 
@@ -220,7 +232,8 @@ impl TrackedEvent {
             | ProxyEvent::UserPrompt { timestamp, .. }
             | ProxyEvent::AssistantResponse { timestamp, .. }
             | ProxyEvent::RequestTransformed { timestamp, .. }
-            | ProxyEvent::ResponseAugmented { timestamp, .. } => *timestamp,
+            | ProxyEvent::ResponseAugmented { timestamp, .. }
+            | ProxyEvent::PreCompactHook { timestamp, .. } => *timestamp,
         }
     }
 }

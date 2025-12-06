@@ -322,6 +322,7 @@ pub(crate) fn format_event_line(tracked: &TrackedEvent) -> String {
             timestamp,
             previous_context,
             new_context,
+            ..
         } => {
             format!(
                 "[{}] {}📦 Context Compact: {}K → {}K",
@@ -401,6 +402,14 @@ pub(crate) fn format_event_line(tracked: &TrackedEvent) -> String {
                 user_prefix,
                 augmenter,
                 tokens_injected
+            )
+        }
+        ProxyEvent::PreCompactHook { timestamp, trigger } => {
+            format!(
+                "[{}] {}🔄 PreCompact Hook: {}",
+                timestamp.format("%H:%M:%S"),
+                user_prefix,
+                trigger
             )
         }
     }
@@ -721,6 +730,7 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
             timestamp,
             previous_context,
             new_context,
+            breakdown,
         } => {
             let reduction = previous_context.saturating_sub(*new_context);
             let reduction_pct = if *previous_context > 0 {
@@ -728,6 +738,44 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
             } else {
                 0.0
             };
+
+            // Format breakdown section if available
+            let breakdown_section = match breakdown {
+                Some(diff) => {
+                    let mut parts = Vec::new();
+                    if diff.tool_result_chars != 0 {
+                        parts.push(format!(
+                            "- **Tool Results:** {:+} chars ({:+} items)",
+                            diff.tool_result_chars, diff.tool_result_count
+                        ));
+                    }
+                    if diff.thinking_chars != 0 {
+                        parts.push(format!("- **Thinking:** {:+} chars", diff.thinking_chars));
+                    }
+                    if diff.text_chars != 0 {
+                        parts.push(format!("- **Text:** {:+} chars", diff.text_chars));
+                    }
+                    if diff.tool_use_chars != 0 {
+                        parts.push(format!(
+                            "- **Tool Inputs:** {:+} chars ({:+} items)",
+                            diff.tool_use_chars, diff.tool_use_count
+                        ));
+                    }
+
+                    let primary = diff
+                        .primary_reduction()
+                        .map(|(cat, chars)| format!("\n\n**Primary Reduction:** {} (-{} chars)", cat, chars))
+                        .unwrap_or_default();
+
+                    if parts.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\n\n### Content Breakdown\n{}{}", parts.join("\n"), primary)
+                    }
+                }
+                None => String::new(),
+            };
+
             RenderableContent::Markdown(format!(
                 "{}## 📦 Context Compaction Detected\n\n\
                 **Timestamp:** {}\n\n\
@@ -735,7 +783,7 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
                 **New Context:** {} tokens ({:.1}K)  \n\
                 **Reduction:** {} tokens ({:.1}%)\n\n\
                 Claude Code triggered a context window compaction to \
-                reduce memory usage and stay within limits.",
+                reduce memory usage and stay within limits.{}",
                 tracking_header,
                 timestamp.to_rfc3339(),
                 previous_context,
@@ -743,7 +791,8 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
                 new_context,
                 *new_context as f64 / 1000.0,
                 reduction,
-                reduction_pct
+                reduction_pct,
+                breakdown_section
             ))
         }
         ProxyEvent::ThinkingStarted { timestamp } => RenderableContent::Markdown(format!(
@@ -821,6 +870,19 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
             timestamp.to_rfc3339(),
             augmenter,
             tokens_injected
+        )),
+        ProxyEvent::PreCompactHook { timestamp, trigger } => RenderableContent::Markdown(format!(
+            "{}## 🔄 PreCompact Hook\n\n\
+            **Timestamp:** {}  \n\
+            **Trigger:** {}\n\n\
+            ---\n\n\
+            Claude Code is about to compact the context window.\n\n\
+            - **manual**: User ran `/compact`\n\
+            - **auto**: Context window is full\n\n\
+            *This event was received from Claude Code's PreCompact hook.*",
+            tracking_header,
+            timestamp.to_rfc3339(),
+            trigger
         )),
     }
 }

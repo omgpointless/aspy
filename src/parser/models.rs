@@ -94,6 +94,13 @@ pub enum ContentBlock {
         is_error: bool,
     },
 
+    #[serde(rename = "thinking")]
+    Thinking {
+        thinking: String,
+        #[serde(default)]
+        signature: Option<String>,
+    },
+
     /// Catch-all for other content types we don't care about
     #[serde(other)]
     Other,
@@ -222,6 +229,164 @@ impl CapturedHeaders {
                 Some((limit - remaining) as f32 / limit as f32)
             }
             _ => None,
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Context Snapshot - breakdown of request content for compact analysis
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Snapshot of context composition for a request
+///
+/// Used to track what's in the context window and detect what changed
+/// during compaction events. Lightweight struct (~64 bytes) stored per-user.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ContextSnapshot {
+    /// Total message count
+    pub message_count: u32,
+    /// Number of tool_result blocks
+    pub tool_result_count: u32,
+    /// Total chars in tool_result content
+    pub tool_result_chars: u64,
+    /// Number of tool_use blocks
+    pub tool_use_count: u32,
+    /// Total chars in tool_use input
+    pub tool_use_chars: u64,
+    /// Total chars in thinking blocks
+    pub thinking_chars: u64,
+    /// Total chars in text blocks
+    pub text_chars: u64,
+    /// Total chars in system prompt
+    pub system_chars: u64,
+}
+
+impl ContextSnapshot {
+    /// Calculate snapshot from an API request
+    pub fn from_request(req: &ApiRequest) -> Self {
+        let system_chars = req
+            .system
+            .as_ref()
+            .map(|s| s.to_string().len() as u64)
+            .unwrap_or(0);
+
+        let mut snap = Self {
+            message_count: req.messages.len() as u32,
+            system_chars,
+            ..Default::default()
+        };
+
+        // Walk all messages and content blocks
+        for msg in &req.messages {
+            match &msg.content {
+                MessageContent::Text(text) => {
+                    snap.text_chars += text.len() as u64;
+                }
+                MessageContent::Blocks(blocks) => {
+                    for block in blocks {
+                        match block {
+                            ContentBlock::Text { text } => {
+                                snap.text_chars += text.len() as u64;
+                            }
+                            ContentBlock::ToolUse { input, .. } => {
+                                snap.tool_use_count += 1;
+                                snap.tool_use_chars += input.to_string().len() as u64;
+                            }
+                            ContentBlock::ToolResult { content, .. } => {
+                                snap.tool_result_count += 1;
+                                snap.tool_result_chars += content.to_string().len() as u64;
+                            }
+                            ContentBlock::Thinking { thinking, .. } => {
+                                snap.thinking_chars += thinking.len() as u64;
+                            }
+                            ContentBlock::Other => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        snap
+    }
+
+    /// Calculate diff between two snapshots (self - other)
+    /// Returns a new snapshot with the differences (positive = increased, negative would underflow so we use saturating)
+    pub fn diff(&self, previous: &Self) -> ContextSnapshotDiff {
+        ContextSnapshotDiff {
+            message_count: self.message_count as i32 - previous.message_count as i32,
+            tool_result_count: self.tool_result_count as i32 - previous.tool_result_count as i32,
+            tool_result_chars: self.tool_result_chars as i64 - previous.tool_result_chars as i64,
+            tool_use_count: self.tool_use_count as i32 - previous.tool_use_count as i32,
+            tool_use_chars: self.tool_use_chars as i64 - previous.tool_use_chars as i64,
+            thinking_chars: self.thinking_chars as i64 - previous.thinking_chars as i64,
+            text_chars: self.text_chars as i64 - previous.text_chars as i64,
+            system_chars: self.system_chars as i64 - previous.system_chars as i64,
+        }
+    }
+
+    /// Total content size in chars (rough proxy for tokens)
+    /// Future use: MCP tool for context analysis
+    #[allow(dead_code)]
+    pub fn total_chars(&self) -> u64 {
+        self.tool_result_chars
+            + self.tool_use_chars
+            + self.thinking_chars
+            + self.text_chars
+            + self.system_chars
+    }
+}
+
+/// Diff between two context snapshots (signed values)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ContextSnapshotDiff {
+    pub message_count: i32,
+    pub tool_result_count: i32,
+    pub tool_result_chars: i64,
+    pub tool_use_count: i32,
+    pub tool_use_chars: i64,
+    pub thinking_chars: i64,
+    pub text_chars: i64,
+    pub system_chars: i64,
+}
+
+impl ContextSnapshotDiff {
+    /// Get the primary reduction category (what was trimmed most)
+    pub fn primary_reduction(&self) -> Option<(&'static str, i64)> {
+        let reductions = [
+            ("tool_results", -self.tool_result_chars),
+            ("tool_inputs", -self.tool_use_chars),
+            ("thinking", -self.thinking_chars),
+            ("text", -self.text_chars),
+            ("system", -self.system_chars),
+        ];
+
+        reductions
+            .into_iter()
+            .filter(|(_, v)| *v > 0) // Only reductions (negative diffs become positive here)
+            .max_by_key(|(_, v)| *v)
+    }
+
+    /// Format as human-readable summary
+    pub fn summary(&self) -> String {
+        let mut parts = Vec::new();
+
+        if self.tool_result_chars != 0 {
+            parts.push(format!("tool_results: {:+} chars", self.tool_result_chars));
+        }
+        if self.thinking_chars != 0 {
+            parts.push(format!("thinking: {:+} chars", self.thinking_chars));
+        }
+        if self.text_chars != 0 {
+            parts.push(format!("text: {:+} chars", self.text_chars));
+        }
+        if self.tool_use_chars != 0 {
+            parts.push(format!("tool_inputs: {:+} chars", self.tool_use_chars));
+        }
+
+        if parts.is_empty() {
+            "no significant changes".to_string()
+        } else {
+            parts.join(", ")
         }
     }
 }

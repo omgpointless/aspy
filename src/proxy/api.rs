@@ -95,6 +95,7 @@ fn event_type_name(event: &ProxyEvent) -> &'static str {
         ProxyEvent::AssistantResponse { .. } => "AssistantResponse",
         ProxyEvent::RequestTransformed { .. } => "RequestTransformed",
         ProxyEvent::ResponseAugmented { .. } => "ResponseAugmented",
+        ProxyEvent::PreCompactHook { .. } => "PreCompactHook",
     }
 }
 
@@ -481,6 +482,191 @@ pub async fn get_context(
 }
 
 // ============================================================================
+// Context Snapshot Endpoint
+// ============================================================================
+
+/// Context snapshot response - detailed breakdown of what's in context
+#[derive(Debug, Serialize)]
+pub struct ContextSnapshotResponse {
+    /// User ID this belongs to
+    pub user_id: String,
+    /// Whether snapshot data is available
+    pub available: bool,
+    /// Message count in context
+    pub message_count: u32,
+    /// Breakdown of content types (chars, roughly ~4 chars per token)
+    pub breakdown: ContextSnapshotBreakdown,
+    /// Human-readable summary
+    pub summary: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContextSnapshotBreakdown {
+    /// Tool results (output from tools like Read, Glob, etc.)
+    pub tool_results: ContentBreakdown,
+    /// Tool inputs (input JSON for tool calls)
+    pub tool_inputs: ContentBreakdown,
+    /// Thinking blocks (Claude's reasoning)
+    pub thinking: ContentBreakdown,
+    /// Text content (conversation text)
+    pub text: ContentBreakdown,
+    /// System prompt
+    pub system: ContentBreakdown,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContentBreakdown {
+    /// Number of items (blocks/messages)
+    pub count: u32,
+    /// Total characters
+    pub chars: u64,
+    /// Estimated tokens (~4 chars per token)
+    pub estimated_tokens: u64,
+    /// Percentage of total chars
+    pub pct: f64,
+}
+
+/// GET /api/context/snapshot - Returns detailed context breakdown for a user session
+///
+/// Query params:
+///   - user: REQUIRED - User's session context (api_key_hash)
+///
+/// This endpoint answers "Why is my context so high?" by breaking down
+/// context content into categories: tool_results, thinking, text, etc.
+pub async fn get_context_snapshot(
+    State(state): State<crate::proxy::ProxyState>,
+    Query(params): Query<ContextQuery>,
+) -> Result<Json<ContextSnapshotResponse>, ApiError> {
+    // User filter is required
+    let user_hash = params.user.ok_or_else(|| {
+        ApiError::BadRequest(
+            "Context snapshot is per-session. Please provide ?user=<api_key_hash> parameter."
+                .to_string(),
+        )
+    })?;
+
+    // Get snapshot from parser
+    let snapshot = state.parser.get_context_snapshot(&user_hash).await;
+
+    if let Some(snap) = snapshot {
+        let total_chars = snap.tool_result_chars
+            + snap.tool_use_chars
+            + snap.thinking_chars
+            + snap.text_chars
+            + snap.system_chars;
+
+        let pct = |chars: u64| {
+            if total_chars > 0 {
+                (chars as f64 / total_chars as f64) * 100.0
+            } else {
+                0.0
+            }
+        };
+
+        // Build human-readable summary (top 3 categories)
+        let mut categories: Vec<(&str, u64)> = vec![
+            ("tool_results", snap.tool_result_chars),
+            ("tool_inputs", snap.tool_use_chars),
+            ("thinking", snap.thinking_chars),
+            ("text", snap.text_chars),
+            ("system", snap.system_chars),
+        ];
+        categories.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let summary_parts: Vec<String> = categories
+            .iter()
+            .filter(|(_, chars)| *chars > 0)
+            .take(3)
+            .map(|(name, chars)| format!("{}: ~{}K tokens", name, chars / 4000))
+            .collect();
+
+        let summary = if summary_parts.is_empty() {
+            "No content tracked yet".to_string()
+        } else {
+            summary_parts.join(", ")
+        };
+
+        Ok(Json(ContextSnapshotResponse {
+            user_id: user_hash,
+            available: true,
+            message_count: snap.message_count,
+            breakdown: ContextSnapshotBreakdown {
+                tool_results: ContentBreakdown {
+                    count: snap.tool_result_count,
+                    chars: snap.tool_result_chars,
+                    estimated_tokens: snap.tool_result_chars / 4,
+                    pct: pct(snap.tool_result_chars),
+                },
+                tool_inputs: ContentBreakdown {
+                    count: snap.tool_use_count,
+                    chars: snap.tool_use_chars,
+                    estimated_tokens: snap.tool_use_chars / 4,
+                    pct: pct(snap.tool_use_chars),
+                },
+                thinking: ContentBreakdown {
+                    count: 0, // Not tracked at block level yet
+                    chars: snap.thinking_chars,
+                    estimated_tokens: snap.thinking_chars / 4,
+                    pct: pct(snap.thinking_chars),
+                },
+                text: ContentBreakdown {
+                    count: 0, // Not tracked at block level yet
+                    chars: snap.text_chars,
+                    estimated_tokens: snap.text_chars / 4,
+                    pct: pct(snap.text_chars),
+                },
+                system: ContentBreakdown {
+                    count: if snap.system_chars > 0 { 1 } else { 0 },
+                    chars: snap.system_chars,
+                    estimated_tokens: snap.system_chars / 4,
+                    pct: pct(snap.system_chars),
+                },
+            },
+            summary,
+        }))
+    } else {
+        Ok(Json(ContextSnapshotResponse {
+            user_id: user_hash,
+            available: false,
+            message_count: 0,
+            breakdown: ContextSnapshotBreakdown {
+                tool_results: ContentBreakdown {
+                    count: 0,
+                    chars: 0,
+                    estimated_tokens: 0,
+                    pct: 0.0,
+                },
+                tool_inputs: ContentBreakdown {
+                    count: 0,
+                    chars: 0,
+                    estimated_tokens: 0,
+                    pct: 0.0,
+                },
+                thinking: ContentBreakdown {
+                    count: 0,
+                    chars: 0,
+                    estimated_tokens: 0,
+                    pct: 0.0,
+                },
+                text: ContentBreakdown {
+                    count: 0,
+                    chars: 0,
+                    estimated_tokens: 0,
+                    pct: 0.0,
+                },
+                system: ContentBreakdown {
+                    count: 0,
+                    chars: 0,
+                    estimated_tokens: 0,
+                    pct: 0.0,
+                },
+            },
+            summary: "No snapshot available - session may be new".to_string(),
+        }))
+    }
+}
+
+// ============================================================================
 // Session Management Endpoints
 // ============================================================================
 
@@ -494,6 +680,9 @@ pub struct SessionStartRequest {
     /// How the session was started
     #[serde(default)]
     pub source: Option<String>,
+    /// Path to Claude Code's transcript file (e.g., ~/.claude/projects/.../abc123.jsonl)
+    #[serde(default)]
+    pub transcript_path: Option<String>,
 }
 
 /// Request body for POST /api/session/end
@@ -587,12 +776,18 @@ pub async fn session_start(
         request.session_id
     );
 
-    let session = sessions.start_session(user_id, Some(request.session_id.clone()), source);
+    let session = sessions.start_session(
+        user_id,
+        Some(request.session_id.clone()),
+        source,
+        request.transcript_path.clone(),
+    );
     let session_key = session.key.to_string();
 
     tracing::info!(
         session_id = %request.session_id,
         source = %source,
+        transcript_path = ?request.transcript_path,
         "Session started with session_key {}",
         session_key
     );
@@ -640,6 +835,168 @@ pub async fn session_end(
         success: true,
         message: "Session ended".to_string(),
         session_key: None,
+    }))
+}
+
+// ============================================================================
+// Session Todos Endpoint
+// ============================================================================
+
+use crate::proxy::sessions::{TodoItem, TodoStatus};
+
+/// Response for GET /api/session/:user_id/todos
+#[derive(Debug, Serialize)]
+pub struct SessionTodosResponse {
+    /// User ID this belongs to
+    pub user_id: String,
+    /// When todos were last updated (None if never)
+    pub updated: Option<String>,
+    /// Number of todos
+    pub count: usize,
+    /// Breakdown by status
+    pub summary: TodoSummary,
+    /// The actual todo items
+    pub todos: Vec<TodoItemResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TodoSummary {
+    pub pending: usize,
+    pub in_progress: usize,
+    pub completed: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TodoItemResponse {
+    pub content: String,
+    pub status: String,
+    #[serde(rename = "activeForm")]
+    pub active_form: String,
+}
+
+impl From<&TodoItem> for TodoItemResponse {
+    fn from(item: &TodoItem) -> Self {
+        Self {
+            content: item.content.clone(),
+            status: item.status.to_string(),
+            active_form: item.active_form.clone(),
+        }
+    }
+}
+
+/// GET /api/session/:user_id/todos - Get tracked todos for a user session
+///
+/// Returns the current todo list state intercepted from TodoWrite tool calls.
+/// This is useful for:
+/// - Understanding what Claude is currently working on
+/// - Context recovery after compaction (todos are searchable keywords!)
+/// - Session visualization
+pub async fn get_session_todos(
+    State(state): State<crate::proxy::ProxyState>,
+    Path(user_id): Path<String>,
+) -> Result<Json<SessionTodosResponse>, ApiError> {
+    let sessions = state
+        .sessions
+        .lock()
+        .map_err(|e| ApiError::Internal(format!("Failed to lock sessions: {}", e)))?;
+
+    let user = UserId::new(&user_id);
+    let session = sessions
+        .get_user_session(&user)
+        .ok_or_else(|| ApiError::NotFound(format!("No active session for user: {}", user_id)))?;
+
+    // Build summary
+    let mut pending = 0;
+    let mut in_progress = 0;
+    let mut completed = 0;
+
+    for todo in &session.todos {
+        match todo.status {
+            TodoStatus::Pending => pending += 1,
+            TodoStatus::InProgress => in_progress += 1,
+            TodoStatus::Completed => completed += 1,
+        }
+    }
+
+    let response = SessionTodosResponse {
+        user_id: user_id.clone(),
+        updated: session.todos_updated.map(|dt| dt.to_rfc3339()),
+        count: session.todos.len(),
+        summary: TodoSummary {
+            pending,
+            in_progress,
+            completed,
+        },
+        todos: session.todos.iter().map(TodoItemResponse::from).collect(),
+    };
+
+    Ok(Json(response))
+}
+
+// ============================================================================
+// Hook Endpoints
+// ============================================================================
+
+/// Request body for POST /api/hook/precompact
+#[derive(Debug, Deserialize)]
+pub struct PreCompactHookRequest {
+    /// User's API key hash (first 16 chars of SHA-256)
+    pub user_id: String,
+    /// Trigger type: "manual" or "auto"
+    #[serde(default = "default_trigger")]
+    pub trigger: String,
+}
+
+fn default_trigger() -> String {
+    "manual".to_string()
+}
+
+/// POST /api/hook/precompact - Notify Aspy of an impending compact
+///
+/// Called by the PreCompact hook when Claude Code is about to compact.
+/// Creates a PreCompactHook event in the user's session for timeline tracking.
+pub async fn hook_precompact(
+    State(state): State<crate::proxy::ProxyState>,
+    Json(request): Json<PreCompactHookRequest>,
+) -> Result<Json<SessionActionResponse>, ApiError> {
+    let mut sessions = state
+        .sessions
+        .lock()
+        .map_err(|e| ApiError::Internal(format!("Failed to lock sessions: {}", e)))?;
+
+    let user_id = UserId::new(&request.user_id);
+
+    // Create the PreCompactHook event
+    let event = ProxyEvent::PreCompactHook {
+        timestamp: chrono::Utc::now(),
+        trigger: request.trigger.clone(),
+    };
+
+    // Try to get existing session, or create one if needed
+    let session_key = if let Some(session) = sessions.get_user_session_mut(&user_id) {
+        session.events.push_back(event);
+        session.key.to_string()
+    } else {
+        // No session exists - create one via hook source
+        let session = sessions.start_session(user_id.clone(), None, SessionSource::Hook, None);
+        let key = session.key.to_string();
+        // Need to get mutable ref again after start_session
+        if let Some(s) = sessions.get_user_session_mut(&user_id) {
+            s.events.push_back(event);
+        }
+        key
+    };
+
+    tracing::info!(
+        user_id = %user_id.short(),
+        trigger = %request.trigger,
+        "PreCompact hook received"
+    );
+
+    Ok(Json(SessionActionResponse {
+        success: true,
+        message: format!("PreCompact hook recorded (trigger: {})", request.trigger),
+        session_key: Some(session_key),
     }))
 }
 

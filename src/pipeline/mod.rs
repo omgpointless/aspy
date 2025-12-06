@@ -26,8 +26,6 @@ pub mod embeddings;
 pub mod lifestats;
 pub mod lifestats_query;
 pub mod logging;
-
-#[cfg(feature = "otel")]
 pub mod otel;
 
 /// Result of processing an event

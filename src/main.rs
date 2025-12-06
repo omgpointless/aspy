@@ -365,8 +365,7 @@ async fn main() -> Result<()> {
                 Ok(processor) => {
                     pipeline.register(processor);
 
-                    // Initialize OpenTelemetry exporter if configured (requires --features otel)
-                    #[cfg(feature = "otel")]
+                    // Initialize OpenTelemetry exporter if configured
                     if config.otel.is_configured() {
                         use pipeline::otel::OtelProcessor;
                         match OtelProcessor::new(&config.otel) {

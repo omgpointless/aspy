@@ -593,6 +593,261 @@ server.registerTool(
   }
 );
 
+// Tool: aspy_context_breakdown - Detailed context content analysis
+server.registerTool(
+  "aspy_context_breakdown",
+  {
+    title: "Context Breakdown",
+    description:
+      "Get a detailed breakdown of what's consuming your context window. Answers 'Why is my context so high?' by showing: tool_results (file contents, grep output), thinking (Claude's reasoning), text (conversation), and system prompt sizes.",
+    inputSchema: {},
+    outputSchema: {
+      available: z.boolean(),
+      message_count: z.number(),
+      summary: z.string(),
+      breakdown: z.object({
+        tool_results: z.object({
+          count: z.number(),
+          chars: z.number(),
+          estimated_tokens: z.number(),
+          pct: z.number(),
+        }),
+        tool_inputs: z.object({
+          count: z.number(),
+          chars: z.number(),
+          estimated_tokens: z.number(),
+          pct: z.number(),
+        }),
+        thinking: z.object({
+          chars: z.number(),
+          estimated_tokens: z.number(),
+          pct: z.number(),
+        }),
+        text: z.object({
+          chars: z.number(),
+          estimated_tokens: z.number(),
+          pct: z.number(),
+        }),
+        system: z.object({
+          chars: z.number(),
+          estimated_tokens: z.number(),
+          pct: z.number(),
+        }),
+      }),
+    },
+  },
+  async () => {
+    const userId = getUserId();
+    if (!userId) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Error: Cannot determine user identity. Ensure ANTHROPIC_API_KEY is set.",
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    interface ContextSnapshotResponse {
+      [key: string]: unknown;
+      user_id: string;
+      available: boolean;
+      message_count: number;
+      summary: string;
+      breakdown: {
+        tool_results: { count: number; chars: number; estimated_tokens: number; pct: number };
+        tool_inputs: { count: number; chars: number; estimated_tokens: number; pct: number };
+        thinking: { count: number; chars: number; estimated_tokens: number; pct: number };
+        text: { count: number; chars: number; estimated_tokens: number; pct: number };
+        system: { count: number; chars: number; estimated_tokens: number; pct: number };
+      };
+    }
+
+    const result = await fetchApi<ContextSnapshotResponse>(
+      `/api/context/snapshot?user=${userId}`
+    );
+
+    if (!result.ok) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${result.error.error}` }],
+        isError: true,
+      };
+    }
+
+    const data = result.data;
+
+    if (!data.available) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "📊 **Context Breakdown**: No snapshot available yet. Try after the first API request.",
+          },
+        ],
+        structuredContent: data,
+      };
+    }
+
+    // Build human-readable summary with visual bars
+    const b = data.breakdown;
+    const summaryParts = [
+      `📊 **Context Breakdown** (${data.message_count} messages)\n`,
+      data.summary,
+      "",
+      "**By Category:**",
+    ];
+
+    // Sort categories by percentage for display
+    const categories = [
+      { name: "Tool Results", pct: b.tool_results.pct, tokens: b.tool_results.estimated_tokens, count: b.tool_results.count },
+      { name: "Tool Inputs", pct: b.tool_inputs.pct, tokens: b.tool_inputs.estimated_tokens, count: b.tool_inputs.count },
+      { name: "Thinking", pct: b.thinking.pct, tokens: b.thinking.estimated_tokens, count: 0 },
+      { name: "Text", pct: b.text.pct, tokens: b.text.estimated_tokens, count: 0 },
+      { name: "System", pct: b.system.pct, tokens: b.system.estimated_tokens, count: 0 },
+    ].filter((c) => c.pct > 0.1);
+
+    categories.sort((a, b) => b.pct - a.pct);
+
+    for (const cat of categories) {
+      const bar = "█".repeat(Math.ceil(cat.pct / 5)) + "░".repeat(20 - Math.ceil(cat.pct / 5));
+      const countStr = cat.count > 0 ? ` (${cat.count} items)` : "";
+      summaryParts.push(
+        `  ${cat.name.padEnd(13)} ${bar} ${cat.pct.toFixed(1)}% (~${Math.round(cat.tokens / 1000)}K tokens)${countStr}`
+      );
+    }
+
+    return {
+      content: [
+        { type: "text" as const, text: summaryParts.join("\n") },
+        { type: "text" as const, text: JSON.stringify(data, null, 2) },
+      ],
+      structuredContent: data,
+    };
+  }
+);
+
+// Tool: aspy_todos - Get tracked todos from session
+server.registerTool(
+  "aspy_todos",
+  {
+    title: "Session Todos",
+    description:
+      "Get the current todo list state from your Claude Code session. Aspy intercepts TodoWrite tool calls to track what you're working on. Useful for context recovery - todo items are natural keywords!",
+    inputSchema: {},
+    outputSchema: {
+      user_id: z.string(),
+      updated: z.string().nullable(),
+      count: z.number(),
+      summary: z.object({
+        pending: z.number(),
+        in_progress: z.number(),
+        completed: z.number(),
+      }),
+      todos: z.array(
+        z.object({
+          content: z.string(),
+          status: z.string(),
+          activeForm: z.string(),
+        })
+      ),
+    },
+  },
+  async () => {
+    const userId = getUserId();
+    if (!userId) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Error: Cannot determine user identity. Ensure ANTHROPIC_API_KEY is set.",
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const result = await fetchApi<{
+      user_id: string;
+      updated: string | null;
+      count: number;
+      summary: { pending: number; in_progress: number; completed: number };
+      todos: Array<{ content: string; status: string; activeForm: string }>;
+    }>(`/api/session/${userId}/todos`);
+
+    if (!result.ok) {
+      // If 404, return empty todos (no session yet)
+      if (result.error.status === 404) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "📋 No todos tracked yet (session not found or no TodoWrite calls intercepted)",
+            },
+          ],
+          structuredContent: {
+            user_id: userId,
+            updated: null,
+            count: 0,
+            summary: { pending: 0, in_progress: 0, completed: 0 },
+            todos: [],
+          },
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: `Error: ${result.error.error}` }],
+        isError: true,
+      };
+    }
+
+    const data = result.data;
+
+    // Build human-readable summary
+    const summaryParts: string[] = [];
+
+    if (data.count === 0) {
+      summaryParts.push("📋 **No todos tracked** (no TodoWrite calls intercepted yet)");
+    } else {
+      summaryParts.push(`📋 **Todos** (${data.count} total)`);
+      summaryParts.push(
+        `   ⏳ Pending: ${data.summary.pending} | 🔄 In Progress: ${data.summary.in_progress} | ✅ Completed: ${data.summary.completed}`
+      );
+
+      // Show in-progress items prominently
+      const inProgress = data.todos.filter((t) => t.status === "in_progress");
+      if (inProgress.length > 0) {
+        summaryParts.push("\n**Currently working on:**");
+        for (const todo of inProgress) {
+          summaryParts.push(`   🔄 ${todo.activeForm}`);
+        }
+      }
+
+      // Show pending items
+      const pending = data.todos.filter((t) => t.status === "pending");
+      if (pending.length > 0) {
+        summaryParts.push("\n**Pending:**");
+        for (const todo of pending) {
+          summaryParts.push(`   ⏳ ${todo.content}`);
+        }
+      }
+    }
+
+    if (data.updated) {
+      const updatedTime = new Date(data.updated).toLocaleTimeString();
+      summaryParts.push(`\n_Last updated: ${updatedTime}_`);
+    }
+
+    return {
+      content: [
+        { type: "text" as const, text: summaryParts.join("\n") },
+        { type: "text" as const, text: JSON.stringify(data, null, 2) },
+      ],
+      structuredContent: data,
+    };
+  }
+);
+
 // ============================================================================
 // MEMORY TOOLS - Cross-session recall (search past sessions)
 // ============================================================================

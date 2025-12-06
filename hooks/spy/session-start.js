@@ -30,6 +30,7 @@ async function main() {
 
   const sessionId = sessionData.session_id;
   const source = sessionData.source || 'startup';
+  const transcriptPath = sessionData.transcript_path || null;
 
   if (!sessionId) {
     process.exit(0);
@@ -54,7 +55,12 @@ async function main() {
     const response = await fetch(`${ASPY_API_URL}/api/session/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, user_id: userId, source: 'hook' }),
+      body: JSON.stringify({
+        session_id: sessionId,
+        user_id: userId,
+        source: 'hook',
+        transcript_path: transcriptPath,
+      }),
       signal: controller.signal,
     });
 

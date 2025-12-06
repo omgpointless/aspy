@@ -108,6 +108,10 @@ pub struct FeatureDefinition {
     pub description: &'static str,
     /// Optional detail (e.g., "remote: text-embedding-3-small")
     pub detail: Option<String>,
+    /// If true, warn user when this feature is not configured (for new/recommended features)
+    pub highlight_if_missing: bool,
+    /// Config snippet to enable this feature (shown in warnings)
+    pub config_hint: Option<&'static str>,
 }
 
 impl FeatureDefinition {
@@ -120,6 +124,8 @@ impl FeatureDefinition {
             status: FeatureStatus::Active,
             description,
             detail: None,
+            highlight_if_missing: false,
+            config_hint: None,
         }
     }
 
@@ -142,6 +148,8 @@ impl FeatureDefinition {
             },
             description,
             detail: None,
+            highlight_if_missing: false,
+            config_hint: None,
         }
     }
 
@@ -164,12 +172,21 @@ impl FeatureDefinition {
             },
             description,
             detail: None,
+            highlight_if_missing: false,
+            config_hint: None,
         }
     }
 
     /// Add detail string (builder pattern)
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    /// Mark this feature to highlight in warnings if not configured (builder pattern)
+    pub fn highlight_when_missing(mut self, hint: &'static str) -> Self {
+        self.highlight_if_missing = true;
+        self.config_hint = Some(hint);
         self
     }
 }
@@ -224,6 +241,20 @@ impl StartupRegistry {
 
         result
     }
+
+    /// Get features that are not configured but marked as highlight_if_missing
+    pub fn missing_recommended(&self) -> Vec<&FeatureDefinition> {
+        self.features
+            .values()
+            .filter(|f| {
+                f.highlight_if_missing
+                    && matches!(
+                        f.status,
+                        FeatureStatus::Disabled | FeatureStatus::NotConfigured
+                    )
+            })
+            .collect()
+    }
 }
 
 /// Print the startup banner and module loading status using the registry
@@ -261,6 +292,24 @@ pub fn print_startup_with_registry(config: &Config, registry: &StartupRegistry) 
 
         for feature in features {
             print_feature_status(feature);
+        }
+    }
+
+    // Check for recommended features that aren't configured
+    let missing = registry.missing_recommended();
+    if !missing.is_empty() {
+        println!();
+        println!(
+            "  {YELLOW}⚠{RESET} {BOLD}New features available{RESET} {DIM}(not in your config){RESET}"
+        );
+        for feature in &missing {
+            println!(
+                "    {YELLOW}•{RESET} {BOLD}{}{RESET} - {}",
+                feature.name, feature.description
+            );
+            if let Some(hint) = feature.config_hint {
+                println!("      {DIM}Add: {hint}{RESET}");
+            }
         }
     }
 
@@ -369,6 +418,20 @@ pub fn log_startup_with_registry(config: &Config, registry: &StartupRegistry) {
                 detail,
                 status_note
             );
+        }
+    }
+
+    // Warn about recommended features that aren't configured
+    let missing = registry.missing_recommended();
+    if !missing.is_empty() {
+        tracing::warn!("⚠ New features available (not in config):");
+        for feature in &missing {
+            tracing::warn!("  • {} - {}", feature.name, feature.description);
+            if let Some(hint) = feature.config_hint {
+                // Show hint on single line for log readability
+                let hint_oneline = hint.replace('\n', " ");
+                tracing::warn!("    Add: {}", hint_oneline);
+            }
         }
     }
 

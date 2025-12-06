@@ -492,6 +492,9 @@ fn event_color_style(event: &ProxyEvent, theme: &Theme) -> Style {
         ProxyEvent::ResponseAugmented { .. } => Style::default()
             .fg(theme.api_usage)
             .add_modifier(Modifier::DIM),
+        ProxyEvent::PreCompactHook { .. } => Style::default()
+            .fg(theme.context_compact)
+            .add_modifier(Modifier::BOLD),
     }
 }
 

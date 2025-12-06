@@ -842,6 +842,123 @@ pub async fn session_end(
 }
 
 // ============================================================================
+// Session Reconnect Endpoint
+// ============================================================================
+
+/// Request body for POST /api/session/reconnect
+#[derive(Debug, Deserialize)]
+pub struct SessionReconnectRequest {
+    /// User's API key hash
+    pub user_id: String,
+    /// Path to Claude Code's transcript file
+    pub transcript_path: String,
+    /// Current session_id from Claude Code (for logging)
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+
+/// Response for session reconnect
+#[derive(Debug, Serialize)]
+pub struct SessionReconnectResponse {
+    /// Whether reconnection happened
+    pub reconnected: bool,
+    /// The session_id (either reconnected or newly associated)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Human-readable message
+    pub message: String,
+}
+
+/// POST /api/session/reconnect - Reconnect to existing session by transcript_path
+///
+/// Called by UserPromptSubmit hook on every user message. Checks if this
+/// transcript_path was seen before (in lifestats DB) and reconnects the
+/// current user to that session, preserving continuity across proxy restarts.
+pub async fn session_reconnect(
+    State(state): State<crate::proxy::ProxyState>,
+    Json(request): Json<SessionReconnectRequest>,
+) -> Result<Json<SessionReconnectResponse>, ApiError> {
+    // Need lifestats_query to check DB
+    let query = state
+        .lifestats_query
+        .as_ref()
+        .ok_or_else(|| ApiError::Internal("Lifestats query not available".to_string()))?;
+
+    // Check if we've seen this transcript before
+    let existing = query
+        .find_session_by_transcript(&request.transcript_path)
+        .map_err(|e| ApiError::Internal(format!("DB query failed: {}", e)))?;
+
+    if let Some((session_id, stored_user_id)) = existing {
+        // Verify user matches (security check)
+        if stored_user_id != request.user_id {
+            tracing::warn!(
+                transcript_path = %request.transcript_path,
+                stored_user = %stored_user_id,
+                request_user = %request.user_id,
+                "Transcript path belongs to different user, ignoring reconnect"
+            );
+            return Ok(Json(SessionReconnectResponse {
+                reconnected: false,
+                session_id: None,
+                message: "Transcript belongs to different user".to_string(),
+            }));
+        }
+
+        // Reconnect: update in-memory session to use this session_id
+        let mut sessions = state
+            .sessions
+            .lock()
+            .map_err(|e| ApiError::Internal(format!("Failed to lock sessions: {}", e)))?;
+
+        let user_id = UserId::new(&request.user_id);
+        let reconnected =
+            sessions.reconnect_to_session(&user_id, &session_id, request.transcript_path.clone());
+
+        if reconnected {
+            tracing::info!(
+                session_id = %session_id,
+                cc_session_id = ?request.session_id,
+                user_id = %request.user_id,
+                transcript_path = %request.transcript_path,
+                "Session reconnected via transcript_path"
+            );
+
+            return Ok(Json(SessionReconnectResponse {
+                reconnected: true,
+                session_id: Some(session_id),
+                message: "Reconnected to existing session".to_string(),
+            }));
+        }
+    }
+
+    // No existing session found, or reconnect failed
+    // Just store the transcript_path association for the current session
+    let mut sessions = state
+        .sessions
+        .lock()
+        .map_err(|e| ApiError::Internal(format!("Failed to lock sessions: {}", e)))?;
+
+    let user_id = UserId::new(&request.user_id);
+    if let Some(session) = sessions.get_user_session_mut(&user_id) {
+        if session.transcript_path.is_none() {
+            session.transcript_path = Some(request.transcript_path.clone());
+            tracing::debug!(
+                session_key = %session.key,
+                transcript_path = %request.transcript_path,
+                "Associated transcript_path with current session"
+            );
+        }
+    }
+
+    Ok(Json(SessionReconnectResponse {
+        reconnected: false,
+        session_id: None,
+        message: "No existing session found for transcript".to_string(),
+    }))
+}
+
+// ============================================================================
 // Session Todos Endpoint
 // ============================================================================
 

@@ -296,6 +296,10 @@ pub async fn start_proxy(
             axum::routing::post(api::session_start),
         )
         .route("/api/session/end", axum::routing::post(api::session_end))
+        .route(
+            "/api/session/reconnect",
+            axum::routing::post(api::session_reconnect),
+        )
         // Session todos endpoint
         .route(
             "/api/session/:user_id/todos",

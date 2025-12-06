@@ -159,6 +159,8 @@ pub enum SessionSource {
     Warmup,
     /// First request seen from this user (no hook, no warmup)
     FirstSeen,
+    /// Reconnected to historical session via transcript_path lookup
+    Reconnected,
 }
 
 impl std::fmt::Display for SessionSource {
@@ -167,6 +169,7 @@ impl std::fmt::Display for SessionSource {
             Self::Hook => write!(f, "hook"),
             Self::Warmup => write!(f, "warmup"),
             Self::FirstSeen => write!(f, "first-seen"),
+            Self::Reconnected => write!(f, "reconnected"),
         }
     }
 }
@@ -630,6 +633,59 @@ impl SessionManager {
                 self.archive_session(session);
             }
         }
+    }
+
+    /// Reconnect a user to an existing session (from DB lookup)
+    ///
+    /// Called when UserPromptSubmit hook identifies that this user was previously
+    /// working on this transcript_path. Replaces the current implicit session
+    /// with the historical session_id to preserve continuity.
+    ///
+    /// Returns true if reconnection succeeded.
+    pub fn reconnect_to_session(
+        &mut self,
+        user_id: &UserId,
+        session_id: &str,
+        transcript_path: String,
+    ) -> bool {
+        // Check if user already has a session
+        if let Some(current_key) = self.active_by_user.get(user_id).cloned() {
+            // If already using the target session, just ensure transcript_path is set
+            if current_key.to_string().contains(session_id) {
+                if let Some(session) = self.sessions.get_mut(&current_key) {
+                    session.transcript_path = Some(transcript_path);
+                }
+                return true;
+            }
+
+            // Archive the current (implicit) session
+            if let Some(mut old_session) = self.sessions.remove(&current_key) {
+                tracing::debug!(
+                    old_session = %current_key,
+                    new_session = %session_id,
+                    user = %user_id.short(),
+                    "Replacing implicit session with reconnected session"
+                );
+                old_session.end(EndReason::Superseded);
+                self.archive_session(old_session);
+            }
+            self.active_by_user.remove(user_id);
+        }
+
+        // Create session with the historical session_id
+        let key = SessionKey::explicit(session_id);
+        let mut session = Session::new(
+            key.clone(),
+            user_id.clone(),
+            SessionSource::Reconnected,
+            self.context_limit,
+        );
+        session.transcript_path = Some(transcript_path);
+
+        self.sessions.insert(key.clone(), session);
+        self.active_by_user.insert(user_id.clone(), key);
+
+        true
     }
 
     /// Record an event for a user

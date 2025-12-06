@@ -25,7 +25,7 @@
 
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -1701,6 +1701,38 @@ impl LifestatsQuery {
                 100.0
             },
         })
+    }
+
+    /// Find a session by transcript_path
+    ///
+    /// Used for session reconnection after proxy restart. Returns the most recent
+    /// session that was using this transcript file.
+    ///
+    /// # Arguments
+    /// * `transcript_path` - Path to Claude Code's transcript file
+    ///
+    /// # Returns
+    /// `Some((session_id, user_id))` if found, `None` otherwise
+    pub fn find_session_by_transcript(
+        &self,
+        transcript_path: &str,
+    ) -> anyhow::Result<Option<(String, String)>> {
+        let conn = self.pool.get()?;
+
+        let result: Option<(String, String)> = conn
+            .query_row(
+                r#"
+                SELECT id, user_id FROM sessions
+                WHERE transcript_path = ?1
+                ORDER BY started_at DESC
+                LIMIT 1
+                "#,
+                params![transcript_path],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+
+        Ok(result)
     }
 }
 

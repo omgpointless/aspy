@@ -11,6 +11,7 @@
 // - This module renders the final status
 
 use crate::config::{Config, VERSION};
+use crate::util::truncate_utf8_safe;
 use std::collections::HashMap;
 
 /// ANSI color codes for terminal output
@@ -23,18 +24,6 @@ mod colors {
     pub const YELLOW: &str = "\x1b[33m";
     pub const RED: &str = "\x1b[31m";
     pub const MAGENTA: &str = "\x1b[35m";
-}
-
-/// Safely truncate a string to at most `max_bytes` while respecting UTF-8 boundaries.
-fn truncate_utf8_safe(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

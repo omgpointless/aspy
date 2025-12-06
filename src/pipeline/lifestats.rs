@@ -18,27 +18,16 @@
 //!                             └──→ SQLite (WAL mode)
 //! ```
 
-use super::{EventProcessor, ProcessContext, ProcessResult};
+use super::{CompletionSignal, EventProcessor, ProcessContext, ProcessResult};
 use crate::events::ProxyEvent;
+use crate::util::truncate_utf8_safe;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-
-/// Safely truncate a string to at most `max_bytes` while respecting UTF-8 boundaries.
-fn truncate_utf8_safe(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
-}
 
 /// Known Claude Code rejection message patterns.
 /// These indicate the user rejected a tool call (not an actual error).
@@ -142,44 +131,6 @@ pub struct MetricsSnapshot {
 enum WriterCommand {
     Store(Box<ProxyEvent>, ProcessContext),
     Shutdown,
-}
-
-/// Completion signal for graceful shutdown
-///
-/// Uses a Condvar to block shutdown() until the writer thread has finished
-/// flushing its batch and exited cleanly.
-struct CompletionSignal {
-    mutex: Mutex<bool>,
-    condvar: Condvar,
-}
-
-impl CompletionSignal {
-    fn new() -> Self {
-        Self {
-            mutex: Mutex::new(false),
-            condvar: Condvar::new(),
-        }
-    }
-
-    /// Signal that the writer thread has completed
-    fn complete(&self) {
-        let mut done = self.mutex.lock().unwrap();
-        *done = true;
-        self.condvar.notify_all();
-    }
-
-    /// Wait for the writer thread to complete (with timeout)
-    fn wait(&self, timeout: Duration) -> bool {
-        let mut done = self.mutex.lock().unwrap();
-        while !*done {
-            let result = self.condvar.wait_timeout(done, timeout).unwrap();
-            done = result.0;
-            if result.1.timed_out() {
-                return false; // Timeout
-            }
-        }
-        true // Completed
-    }
 }
 
 /// Lifetime statistics processor

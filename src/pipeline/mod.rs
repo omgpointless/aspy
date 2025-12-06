@@ -20,6 +20,8 @@
 use crate::events::ProxyEvent;
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::sync::{Condvar, Mutex};
+use std::time::Duration;
 
 pub mod embedding_indexer;
 pub mod embeddings;
@@ -27,6 +29,62 @@ pub mod lifestats;
 pub mod lifestats_query;
 pub mod logging;
 pub mod otel;
+
+// ============================================================================
+// Shared Utilities
+// ============================================================================
+
+/// Completion signal for coordinating graceful shutdown between threads
+///
+/// Uses a Condvar to block shutdown() until the background thread has finished
+/// flushing its buffers and exited cleanly. Used by LifestatsProcessor,
+/// OtelProcessor, and EmbeddingIndexer.
+pub struct CompletionSignal {
+    mutex: Mutex<bool>,
+    condvar: Condvar,
+}
+
+impl CompletionSignal {
+    /// Create a new completion signal (initially not complete)
+    pub fn new() -> Self {
+        Self {
+            mutex: Mutex::new(false),
+            condvar: Condvar::new(),
+        }
+    }
+
+    /// Signal that the background thread has completed
+    pub fn complete(&self) {
+        let mut done = self.mutex.lock().unwrap();
+        *done = true;
+        self.condvar.notify_all();
+    }
+
+    /// Wait for the background thread to complete (with timeout)
+    ///
+    /// Returns `true` if completed, `false` if timed out.
+    pub fn wait(&self, timeout: Duration) -> bool {
+        let mut done = self.mutex.lock().unwrap();
+        while !*done {
+            let result = self.condvar.wait_timeout(done, timeout).unwrap();
+            done = result.0;
+            if result.1.timed_out() {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl Default for CompletionSignal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// Pipeline Types
+// ============================================================================
 
 /// Result of processing an event
 #[derive(Debug)]

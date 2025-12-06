@@ -24,6 +24,7 @@ mod storage;
 mod theme;
 mod tokens;
 mod tui;
+mod util;
 
 use anyhow::Result;
 use chrono::Utc;

@@ -28,37 +28,15 @@ use super::embeddings::{
     BatchEmbeddingResult, Embedding, EmbeddingConfig, EmbeddingError, EmbeddingProvider,
     EmbeddingStatus, ProviderType,
 };
+use super::CompletionSignal;
+use crate::util::truncate_utf8_safe;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// UTF-8 Safe Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Safely truncate a string to at most `max_bytes` while respecting UTF-8 boundaries.
-///
-/// Returns a string slice that:
-/// - Is at most `max_bytes` long
-/// - Never cuts a multi-byte character in half
-/// - Is always valid UTF-8
-fn truncate_utf8_safe(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-
-    // Find the last valid char boundary at or before max_bytes
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-
-    &s[..end]
-}
 
 /// Configuration for the embedding indexer
 #[derive(Debug, Clone)]
@@ -176,39 +154,6 @@ enum IndexerCommand {
     Reindex,
     /// Shutdown the indexer
     Shutdown,
-}
-
-/// Completion signal for graceful shutdown
-struct CompletionSignal {
-    mutex: Mutex<bool>,
-    condvar: Condvar,
-}
-
-impl CompletionSignal {
-    fn new() -> Self {
-        Self {
-            mutex: Mutex::new(false),
-            condvar: Condvar::new(),
-        }
-    }
-
-    fn complete(&self) {
-        let mut done = self.mutex.lock().unwrap();
-        *done = true;
-        self.condvar.notify_all();
-    }
-
-    fn wait(&self, timeout: Duration) -> bool {
-        let mut done = self.mutex.lock().unwrap();
-        while !*done {
-            let result = self.condvar.wait_timeout(done, timeout).unwrap();
-            done = result.0;
-            if result.1.timed_out() {
-                return false;
-            }
-        }
-        true
-    }
 }
 
 /// Clonable handle to the embedding indexer

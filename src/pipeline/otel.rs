@@ -21,7 +21,7 @@
 //!
 //! This module requires the `otel` feature to be enabled.
 
-use super::{EventProcessor, ProcessContext, ProcessResult};
+use super::{CompletionSignal, EventProcessor, ProcessContext, ProcessResult};
 use crate::config::OtelConfig;
 use crate::events::ProxyEvent;
 use opentelemetry::trace::{Span, SpanKind, Status, Tracer, TracerProvider as _};
@@ -30,7 +30,7 @@ use opentelemetry_application_insights::Exporter;
 use opentelemetry_sdk::trace::TracerProvider;
 use opentelemetry_sdk::Resource;
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -38,39 +38,6 @@ use std::time::Duration;
 enum ExporterCommand {
     Export(Box<ProxyEvent>, ProcessContext),
     Shutdown,
-}
-
-/// Completion signal for graceful shutdown
-struct CompletionSignal {
-    mutex: Mutex<bool>,
-    condvar: Condvar,
-}
-
-impl CompletionSignal {
-    fn new() -> Self {
-        Self {
-            mutex: Mutex::new(false),
-            condvar: Condvar::new(),
-        }
-    }
-
-    fn complete(&self) {
-        let mut done = self.mutex.lock().unwrap();
-        *done = true;
-        self.condvar.notify_all();
-    }
-
-    fn wait(&self, timeout: Duration) -> bool {
-        let mut done = self.mutex.lock().unwrap();
-        while !*done {
-            let result = self.condvar.wait_timeout(done, timeout).unwrap();
-            done = result.0;
-            if result.1.timed_out() {
-                return false;
-            }
-        }
-        true
-    }
 }
 
 /// OpenTelemetry export processor

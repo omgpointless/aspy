@@ -71,11 +71,12 @@ When adding a new feature with config, you **MUST** update all of these:
 
 ### Exhaustive Tests (Compile-Time Enforcement)
 
-**Don't rely on memory** — exhaustive tests in `config.rs` catch forgotten serialization:
+**Don't rely on memory** — exhaustive tests in `config.rs` catch forgotten steps:
 
 | Config Layer | Test Name | What It Catches |
 |--------------|-----------|-----------------|
-| `Transformers` | `test_all_transformers_have_toml_serialization` | Missing transformer in template |
+| `Transformers` | `test_all_transformers_have_toml_serialization` | Missing transformer in TOML output |
+| `Transformers` | `test_all_transformers_have_feature_definitions` | Missing transformer in startup display |
 | `Augmentation` | `test_all_augmenters_have_toml_serialization` | Missing augmenter field |
 | `Features` | `test_all_features_have_toml_serialization` | Missing feature flag |
 
@@ -83,6 +84,7 @@ When adding a new feature with config, you **MUST** update all of these:
 1. Test won't compile until you initialize the new field
 2. Test fails until you add serialization in `to_toml()`
 3. Test fails until you add the assertion
+4. Test fails until you add to `feature_definitions()` (for transformers)
 
 Run `cargo test test_all_` to verify all layers pass.
 

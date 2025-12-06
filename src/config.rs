@@ -245,6 +245,9 @@ pub struct Transformers {
     /// Tag editor configuration (operates on configurable XML-style tags)
     pub tag_editor: Option<crate::proxy::transformation::TagEditorConfig>,
 
+    /// System editor configuration (modifies system prompts)
+    pub system_editor: Option<crate::proxy::transformation::SystemEditorConfig>,
+
     /// Compact enhancer configuration (enhances compaction prompts with session context)
     pub compact_enhancer: Option<crate::proxy::transformation::CompactEnhancerConfig>,
 }
@@ -702,6 +705,8 @@ struct FileTransformers {
     enabled: Option<bool>,
     #[serde(rename = "tag-editor")]
     tag_editor: Option<crate::proxy::transformation::TagEditorConfig>,
+    #[serde(rename = "system-editor")]
+    system_editor: Option<crate::proxy::transformation::SystemEditorConfig>,
     #[serde(rename = "compact-enhancer")]
     compact_enhancer: Option<crate::proxy::transformation::CompactEnhancerConfig>,
 }
@@ -1039,6 +1044,59 @@ impl Config {
                                     output.push_str(&format!("when.client_id = \"{}\"\n", ci));
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Serialize system-editor if configured
+        if let Some(ref editor) = self.transformers.system_editor {
+            if editor.enabled && !editor.rules.is_empty() {
+                output.push_str(
+                    r#"
+# ─────────────────────────────────────────────────────────────────────────────
+# SYSTEM EDITOR
+# ─────────────────────────────────────────────────────────────────────────────
+# Modifies system prompts in API requests.
+
+[transformers.system-editor]
+enabled = true
+"#,
+                );
+
+                for rule in &editor.rules {
+                    output.push_str("\n[[transformers.system-editor.rules]]\n");
+                    match rule {
+                        crate::proxy::transformation::system_editor::RuleConfig::Append {
+                            content,
+                        } => {
+                            output.push_str("type = \"append\"\n");
+                            if content.contains('\n') {
+                                output
+                                    .push_str(&format!("content = \"\"\"\n{}\n\"\"\"\n", content));
+                            } else {
+                                output.push_str(&format!("content = \"{}\"\n", content));
+                            }
+                        }
+                        crate::proxy::transformation::system_editor::RuleConfig::Prepend {
+                            content,
+                        } => {
+                            output.push_str("type = \"prepend\"\n");
+                            if content.contains('\n') {
+                                output
+                                    .push_str(&format!("content = \"\"\"\n{}\n\"\"\"\n", content));
+                            } else {
+                                output.push_str(&format!("content = \"{}\"\n", content));
+                            }
+                        }
+                        crate::proxy::transformation::system_editor::RuleConfig::Replace {
+                            pattern,
+                            replacement,
+                        } => {
+                            output.push_str("type = \"replace\"\n");
+                            output.push_str(&format!("pattern = \"{}\"\n", pattern));
+                            output.push_str(&format!("replacement = \"{}\"\n", replacement));
                         }
                     }
                 }
@@ -1494,6 +1552,7 @@ service_version = "{otel_service_version}"
         let transformers = Transformers {
             enabled: file_transformers.enabled.unwrap_or(false),
             tag_editor: file_transformers.tag_editor,
+            system_editor: file_transformers.system_editor,
             compact_enhancer: file_transformers.compact_enhancer,
         };
 
@@ -1700,6 +1759,25 @@ impl Config {
             "Request tag editing",
         ));
 
+        // System editor: optional (modifies system prompts)
+        let system_editor_active = self.transformers.enabled
+            && self
+                .transformers
+                .system_editor
+                .as_ref()
+                .map(|c| c.enabled && !c.rules.is_empty())
+                .unwrap_or(false);
+        features.push(
+            FeatureDefinition::optional(
+                "system-editor",
+                "system",
+                FeatureCategory::Pipeline,
+                system_editor_active,
+                "System prompt editing",
+            )
+            .highlight_when_missing("[transformers.system-editor]\nenabled = true"),
+        );
+
         // Compact enhancer: optional (enhances compaction prompts)
         let compact_enhancer_active = self.transformers.enabled
             && self
@@ -1846,8 +1924,9 @@ mod tests {
     /// to be missing from user configs.
     #[test]
     fn test_all_transformers_have_toml_serialization() {
+        use crate::proxy::transformation::system_editor::RuleConfig as SystemRuleConfig;
         use crate::proxy::transformation::{
-            CompactEnhancerConfig, PositionConfig, RuleConfig, TagEditorConfig,
+            CompactEnhancerConfig, PositionConfig, RuleConfig, SystemEditorConfig, TagEditorConfig,
         };
 
         // ─────────────────────────────────────────────────────────────────────
@@ -1868,6 +1947,14 @@ mod tests {
             }],
         });
 
+        // System editor with minimal valid config
+        config.transformers.system_editor = Some(SystemEditorConfig {
+            enabled: true,
+            rules: vec![SystemRuleConfig::Append {
+                content: "test".to_string(),
+            }],
+        });
+
         // Compact enhancer with minimal valid config
         config.transformers.compact_enhancer = Some(CompactEnhancerConfig { enabled: true });
 
@@ -1884,6 +1971,14 @@ mod tests {
         assert!(
             toml_str.contains("[transformers.tag-editor]"),
             "tag-editor missing from TOML output!\n\
+             Did you forget to serialize it in transformers_to_toml()?\n\
+             TOML output:\n{}",
+            toml_str
+        );
+
+        assert!(
+            toml_str.contains("[transformers.system-editor]"),
+            "system-editor missing from TOML output!\n\
              Did you forget to serialize it in transformers_to_toml()?\n\
              TOML output:\n{}",
             toml_str
@@ -1922,6 +2017,20 @@ mod tests {
         assert!(tag_editor.enabled, "tag_editor.enabled should be true");
         assert_eq!(tag_editor.rules.len(), 1, "tag_editor should have 1 rule");
 
+        // Verify system-editor
+        let system_editor = transformers
+            .system_editor
+            .expect("system_editor should be present");
+        assert!(
+            system_editor.enabled,
+            "system_editor.enabled should be true"
+        );
+        assert_eq!(
+            system_editor.rules.len(),
+            1,
+            "system_editor should have 1 rule"
+        );
+
         // Verify compact-enhancer
         let compact = transformers
             .compact_enhancer
@@ -1947,11 +2056,108 @@ mod tests {
         );
 
         assert!(
+            toml_str.contains("transformers.system-editor")
+                || toml_str.contains("# [transformers.system-editor]"),
+            "system-editor not documented in default template!\n\
+             Add a commented example so users can discover this feature."
+        );
+
+        assert!(
             toml_str.contains("transformers.compact-enhancer")
                 || toml_str.contains("# [transformers.compact-enhancer]"),
             "compact-enhancer not documented in default template!\n\
              Add a commented example so users can discover this feature."
         );
+    }
+
+    /// EXHAUSTIVE TEST: Ensures every transformer has a feature_definitions entry.
+    ///
+    /// When you add a new transformer:
+    /// 1. Add the field to `Transformers` struct
+    /// 2. THIS TEST WILL FAIL until you add it to `feature_definitions()`
+    ///
+    /// This prevents the "forgot to add to startup display" bug.
+    #[test]
+    fn test_all_transformers_have_feature_definitions() {
+        use crate::proxy::transformation::system_editor::RuleConfig as SystemRuleConfig;
+        use crate::proxy::transformation::{
+            CompactEnhancerConfig, PositionConfig, RuleConfig, SystemEditorConfig, TagEditorConfig,
+        };
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STEP 1: Create config with ALL transformer fields populated and enabled.
+        // When you add a new transformer, ADD IT HERE or the test won't compile.
+        // ─────────────────────────────────────────────────────────────────────
+        let mut config = Config::default();
+        config.transformers.enabled = true;
+
+        config.transformers.tag_editor = Some(TagEditorConfig {
+            enabled: true,
+            rules: vec![RuleConfig::Inject {
+                tag: "test".to_string(),
+                content: "test".to_string(),
+                position: PositionConfig::End,
+                when: None,
+            }],
+        });
+
+        config.transformers.system_editor = Some(SystemEditorConfig {
+            enabled: true,
+            rules: vec![SystemRuleConfig::Append {
+                content: "test".to_string(),
+            }],
+        });
+
+        config.transformers.compact_enhancer = Some(CompactEnhancerConfig { enabled: true });
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STEP 2: Get feature definitions
+        // ─────────────────────────────────────────────────────────────────────
+        let features = config.feature_definitions();
+        let feature_ids: Vec<&str> = features.iter().map(|f| f.id).collect();
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STEP 3: Assert EVERY transformer appears in feature_definitions.
+        // When you add a new transformer, ADD AN ASSERTION HERE.
+        // ─────────────────────────────────────────────────────────────────────
+
+        assert!(
+            feature_ids.contains(&"tag-editor"),
+            "tag-editor missing from feature_definitions()!\n\
+             Add it to Config::feature_definitions() so it shows in startup logs.\n\
+             Features found: {:?}",
+            feature_ids
+        );
+
+        assert!(
+            feature_ids.contains(&"system-editor"),
+            "system-editor missing from feature_definitions()!\n\
+             Add it to Config::feature_definitions() so it shows in startup logs.\n\
+             Features found: {:?}",
+            feature_ids
+        );
+
+        assert!(
+            feature_ids.contains(&"compact-enhancer"),
+            "compact-enhancer missing from feature_definitions()!\n\
+             Add it to Config::feature_definitions() so it shows in startup logs.\n\
+             Features found: {:?}",
+            feature_ids
+        );
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STEP 4: Verify they show as ACTIVE when enabled
+        // ─────────────────────────────────────────────────────────────────────
+        use crate::startup::FeatureStatus;
+        for id in ["tag-editor", "system-editor", "compact-enhancer"] {
+            let feature = features.iter().find(|f| f.id == id).unwrap();
+            assert!(
+                matches!(feature.status, FeatureStatus::Active),
+                "{} should be active when enabled in config, but was {:?}",
+                id,
+                feature.status
+            );
+        }
     }
 
     /// EXHAUSTIVE TEST: Ensures every augmentation field is serialized to TOML.

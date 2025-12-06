@@ -24,10 +24,12 @@
 //! Worst case: the original unmodified request goes through.
 
 mod compact_enhancer;
+pub mod system_editor;
 mod tag_editor;
 
 // Re-exports for config parsing and transformer implementations
 pub use compact_enhancer::{CompactEnhancer, CompactEnhancerConfig};
+pub use system_editor::{SystemEditor, SystemEditorConfig};
 #[allow(unused_imports)]
 pub use tag_editor::{
     InjectPosition, PositionConfig, RuleConfig, TagEditor, TagEditorConfig, TagRule, WhenCondition,
@@ -305,6 +307,28 @@ impl TransformationPipeline {
                     }
                     Err(e) => {
                         tracing::warn!("Failed to create tag-editor: {}. Transformer disabled.", e);
+                    }
+                }
+            }
+        }
+
+        // System editor (opt-in)
+        if let Some(ref system_config) = config.system_editor {
+            if system_config.enabled {
+                match SystemEditor::from_config(system_config) {
+                    Ok(editor) => {
+                        let rule_count = editor.rule_count();
+                        pipeline.register(editor);
+                        tracing::info!(
+                            "Registered system-editor transformer ({} rules)",
+                            rule_count
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to create system-editor: {}. Transformer disabled.",
+                            e
+                        );
                     }
                 }
             }

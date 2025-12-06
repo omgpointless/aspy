@@ -134,7 +134,7 @@ impl CompactEnhancer {
         );
 
         // Add todos section if we have tracked todos
-        if let Some(todos) = ctx.todos {
+        if let Some(ref todos) = ctx.todos {
             if !todos.is_empty() {
                 injection.push_str("\n\n**Tracked Task State (from TodoWrite):**\n");
 

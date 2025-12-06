@@ -38,6 +38,7 @@ pub use tag_editor::{
 use axum::http::StatusCode;
 use serde_json::Value;
 use std::borrow::Cow;
+use std::sync::Arc;
 
 // ============================================================================
 // Transform Result
@@ -194,7 +195,7 @@ pub struct TransformContext<'a> {
 
     /// Current tracked todos (intercepted from TodoWrite)
     /// Used by: CompactEnhancer to inject task context into compaction prompt
-    pub todos: Option<&'a [crate::proxy::sessions::TodoItem]>,
+    pub todos: Option<Arc<[crate::proxy::sessions::TodoItem]>>,
     // Future: semantic_context for RAG injection
     // pub semantic_context: Option<&'a SemanticContext>,
 }

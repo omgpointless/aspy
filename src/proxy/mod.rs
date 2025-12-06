@@ -663,16 +663,7 @@ async fn proxy_handler(
 
                 // Attach todos to context (empty slice if none)
                 if !session_todos.is_empty() {
-                    // SAFETY: session_todos lives until ctx is used
-                    // We leak this to get a static lifetime since ctx is used synchronously
-                    /*
-                       The Box::leak pattern for todos is intentional - compaction is rare (once per
-                       context fill) and the leaked memory is bounded by the "todo list size". A small trade-off
-                       for clean lifetime management in the sync transformer pipeline.
-                    */
-                    let todos_static: &'static [sessions::TodoItem] =
-                        Box::leak(session_todos.into_boxed_slice());
-                    ctx.todos = Some(todos_static);
+                    ctx.todos = Some(std::sync::Arc::from(session_todos));
                 }
 
                 // Fallback: if no session available, count user messages in request

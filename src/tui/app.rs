@@ -187,6 +187,10 @@ pub struct App {
     /// Streaming state machine (idle → thinking → generating)
     streaming_sm: StreamingStateMachine,
 
+    /// Which session triggered the current streaming state
+    /// Used to filter animations to only show for the selected session
+    streaming_session: Option<String>,
+
     /// Real-time streaming thinking content (shared with proxy)
     pub streaming_thinking: Option<StreamingThinking>,
 
@@ -265,6 +269,7 @@ impl App {
             theme_config,
             config,
             streaming_sm: StreamingStateMachine::new(),
+            streaming_session: None,
             animation_frame: 0,
             streaming_thinking: None,
             modal: None,
@@ -278,8 +283,21 @@ impl App {
     // ─────────────────────────────────────────────────────────────
 
     /// Get current streaming state (for UI display)
+    ///
+    /// Only returns non-Idle states if the streaming session matches the
+    /// currently selected session. This prevents animation bleed between
+    /// multiple concurrent sessions.
     pub fn streaming_state(&self) -> StreamingState {
-        self.streaming_sm.state()
+        // Check if the streaming session matches the selected session
+        let selected = self.effective_session();
+        let streaming = self.streaming_session.as_deref();
+
+        // Only show streaming state if sessions match (or both are None)
+        if selected == streaming {
+            self.streaming_sm.state()
+        } else {
+            StreamingState::Idle
+        }
     }
 
     /// Advance animation frame (call on each render tick)
@@ -480,6 +498,7 @@ impl App {
             ProxyEvent::Request { .. } => {
                 self.stats.total_requests += 1;
                 self.streaming_sm.on_request();
+                self.streaming_session = tracked_event.user_id.clone();
             }
             ProxyEvent::Response {
                 status, ttfb, body, ..
@@ -500,6 +519,7 @@ impl App {
                 }
 
                 self.streaming_sm.on_response();
+                self.streaming_session = None; // Clear on idle
             }
             ProxyEvent::ToolCall { tool_name, .. } => {
                 self.stats.total_tool_calls += 1;
@@ -511,6 +531,7 @@ impl App {
                     .or_insert(0) += 1;
 
                 self.streaming_sm.on_tool_call(tool_name);
+                self.streaming_session = tracked_event.user_id.clone();
             }
             ProxyEvent::ToolResult {
                 tool_name,
@@ -570,6 +591,10 @@ impl App {
                 model_tokens.calls += 1;
 
                 self.streaming_sm.on_api_usage();
+                // ApiUsage is terminal - clear streaming session if we went idle
+                if self.streaming_sm.state() == StreamingState::Idle {
+                    self.streaming_session = None;
+                }
             }
             ProxyEvent::Thinking { token_estimate, .. } => {
                 // Track thinking blocks (stats only - no state transition)
@@ -580,6 +605,7 @@ impl App {
             }
             ProxyEvent::ThinkingStarted { .. } => {
                 self.streaming_sm.on_thinking_started();
+                self.streaming_session = tracked_event.user_id.clone();
             }
             ProxyEvent::ContextCompact { new_context, .. } => {
                 // Context was compacted - update stats and context state

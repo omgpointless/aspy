@@ -1,0 +1,287 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "# Aspy Observability Dashboard\n\nReal-time monitoring for Claude Code proxy sessions.\n\n---"
+      },
+      "name": "header"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "time-range",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "type": 4,
+            "isRequired": true,
+            "value": {
+              "durationMs": 3600000
+            },
+            "typeSettings": {
+              "selectableValues": [
+                { "durationMs": 1800000, "displayText": "30 minutes" },
+                { "durationMs": 3600000, "displayText": "1 hour" },
+                { "durationMs": 21600000, "displayText": "6 hours" },
+                { "durationMs": 86400000, "displayText": "24 hours" },
+                { "durationMs": 604800000, "displayText": "7 days" }
+              ]
+            },
+            "label": "Time Range"
+          },
+          {
+            "id": "session-filter",
+            "version": "KqlParameterItem/1.0",
+            "name": "SessionFilter",
+            "type": 2,
+            "isRequired": false,
+            "query": "requests\n| where timestamp {TimeRange}\n| extend session = tostring(customDimensions.[\"session.id\"])\n| where isnotempty(session)\n| distinct session\n| order by session desc\n| take 20",
+            "typeSettings": {
+              "additionalResourceOptions": ["value::all"]
+            },
+            "defaultValue": "value::all",
+            "label": "Session"
+          }
+        ],
+        "style": "pills",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components"
+      },
+      "name": "parameters"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Performance Overview"
+      },
+      "name": "section-performance"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "requests\n| where timestamp {TimeRange}\n| where name == \"api.response\"\n| summarize\n    p50 = percentile(duration, 50),\n    p95 = percentile(duration, 95),\n    p99 = percentile(duration, 99)\n  by bin(timestamp, 5m)\n| render timechart",
+        "size": 0,
+        "title": "Request Latency (ms)",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "timechart",
+        "chartSettings": {
+          "seriesLabelSettings": [
+            { "seriesName": "p50", "label": "Median" },
+            { "seriesName": "p95", "label": "95th percentile" },
+            { "seriesName": "p99", "label": "99th percentile" }
+          ]
+        }
+      },
+      "customWidth": "50",
+      "name": "latency-chart"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "requests\n| where timestamp {TimeRange}\n| summarize\n    Total = count(),\n    Failed = countif(success == false),\n    SuccessRate = round(100.0 * countif(success == true) / count(), 1)\n  by bin(timestamp, 5m)\n| render timechart",
+        "size": 0,
+        "title": "Request Volume & Success Rate",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "timechart"
+      },
+      "customWidth": "50",
+      "name": "success-rate-chart"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Token Usage & Costs"
+      },
+      "name": "section-tokens"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "dependencies\n| where timestamp {TimeRange}\n| where name == \"api.usage\"\n| extend\n    input = toint(customDimensions.[\"tokens.input\"]),\n    output = toint(customDimensions.[\"tokens.output\"]),\n    cache_read = toint(customDimensions.[\"tokens.cache_read\"]),\n    cache_creation = toint(customDimensions.[\"tokens.cache_creation\"])\n| summarize\n    InputTokens = sum(input),\n    OutputTokens = sum(output),\n    CacheRead = sum(cache_read),\n    CacheCreation = sum(cache_creation)\n  by bin(timestamp, 5m)\n| render timechart",
+        "size": 0,
+        "title": "Token Usage Over Time",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "timechart"
+      },
+      "customWidth": "50",
+      "name": "token-usage-chart"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "dependencies\n| where timestamp {TimeRange}\n| where name == \"api.usage\"\n| extend\n    cache_read = todouble(customDimensions.[\"tokens.cache_read\"]),\n    input = todouble(customDimensions.[\"tokens.input\"])\n| summarize\n    TotalInput = sum(input),\n    TotalCacheRead = sum(cache_read)\n| extend CacheHitRatio = round(100.0 * TotalCacheRead / (TotalInput + 0.001), 1)\n| project CacheHitRatio, TotalCacheRead, TotalInput",
+        "size": 4,
+        "title": "Cache Efficiency",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": { "columnMatch": "CacheHitRatio", "formatter": 1 },
+          "leftContent": { "columnMatch": "CacheHitRatio", "formatter": 12, "numberFormat": { "unit": 1, "options": { "style": "decimal" } } }
+        }
+      },
+      "customWidth": "50",
+      "name": "cache-efficiency"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Transform & Augmentation Activity"
+      },
+      "name": "section-transforms"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "dependencies\n| where timestamp {TimeRange}\n| where name == \"transform.request\"\n| extend delta = toint(customDimensions.[\"tokens.delta\"])\n| summarize\n    TokensSaved = sum(-delta),\n    TransformCount = count()\n  by bin(timestamp, 15m)\n| render timechart",
+        "size": 0,
+        "title": "Transform Token Savings",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "timechart",
+        "chartSettings": {
+          "seriesLabelSettings": [
+            { "seriesName": "TokensSaved", "label": "Tokens Saved", "color": "green" }
+          ]
+        }
+      },
+      "customWidth": "50",
+      "name": "transform-savings-chart"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "dependencies\n| where timestamp {TimeRange}\n| where name == \"augment.response\"\n| extend injected = toint(customDimensions.[\"tokens.injected\"])\n| summarize\n    TokensInjected = sum(injected),\n    AugmentCount = count()\n  by bin(timestamp, 15m)\n| render timechart",
+        "size": 0,
+        "title": "Augmentation Activity",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "timechart",
+        "chartSettings": {
+          "seriesLabelSettings": [
+            { "seriesName": "TokensInjected", "label": "Tokens Injected", "color": "blue" }
+          ]
+        }
+      },
+      "customWidth": "50",
+      "name": "augment-activity-chart"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Tool Execution Patterns"
+      },
+      "name": "section-tools"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "dependencies\n| where timestamp {TimeRange}\n| where name startswith \"tool.\"\n| where name !endswith \".result\"\n| extend tool = tostring(customDimensions.[\"tool.name\"])\n| summarize Count = count() by tool\n| order by Count desc\n| take 15\n| render piechart",
+        "size": 0,
+        "title": "Tool Usage Distribution",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "piechart"
+      },
+      "customWidth": "50",
+      "name": "tool-distribution"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "dependencies\n| where timestamp {TimeRange}\n| where name startswith \"tool.\" and name endswith \".result\"\n| extend\n    tool = tostring(customDimensions.[\"tool.name\"]),\n    duration_ms = toint(customDimensions.[\"tool.duration_ms\"]),\n    success = tobool(customDimensions.[\"tool.success\"])\n| summarize\n    p50 = percentile(duration_ms, 50),\n    p95 = percentile(duration_ms, 95),\n    SuccessRate = round(100.0 * countif(success) / count(), 1),\n    Count = count()\n  by tool\n| order by Count desc\n| take 10",
+        "size": 0,
+        "title": "Tool Performance Summary",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            { "columnMatch": "p50", "formatter": 0, "numberFormat": { "unit": 23 } },
+            { "columnMatch": "p95", "formatter": 0, "numberFormat": { "unit": 23 } },
+            { "columnMatch": "SuccessRate", "formatter": 0, "numberFormat": { "unit": 1 } }
+          ]
+        }
+      },
+      "customWidth": "50",
+      "name": "tool-performance-table"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "dependencies\n| where timestamp {TimeRange}\n| where name startswith \"tool.\"\n| where name !endswith \".result\"\n| extend tool = tostring(customDimensions.[\"tool.name\"])\n| summarize Count = count() by tool, bin(timestamp, 5m)\n| render timechart",
+        "size": 0,
+        "title": "Tool Calls Over Time",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "timechart"
+      },
+      "name": "tool-timeline-chart"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Context & Compaction"
+      },
+      "name": "section-context"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "dependencies\n| where timestamp {TimeRange}\n| where name == \"context.compact\"\n| extend\n    previous = toint(customDimensions.[\"context.previous\"]),\n    new_ctx = toint(customDimensions.[\"context.new\"]),\n    reduction = toint(customDimensions.[\"context.reduction\"])\n| project timestamp, previous, new_ctx, reduction\n| order by timestamp desc",
+        "size": 0,
+        "title": "Compaction Events",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            { "columnMatch": "timestamp", "formatter": 6 },
+            { "columnMatch": "reduction", "formatter": 8, "formatOptions": { "palette": "greenRed" } }
+          ]
+        }
+      },
+      "customWidth": "50",
+      "name": "compaction-table"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "requests\n| where timestamp {TimeRange}\n| where success == false\n| extend\n    error_msg = tostring(customDimensions.[\"error.message\"]),\n    session = tostring(customDimensions.[\"session.id\"])\n| project timestamp, name, error_msg, session\n| order by timestamp desc\n| take 20",
+        "size": 0,
+        "title": "Recent Errors",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table"
+      },
+      "customWidth": "50",
+      "name": "errors-table"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "---\n*Dashboard powered by Aspy OpenTelemetry integration*"
+      },
+      "name": "footer"
+    }
+  ],
+  "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+}

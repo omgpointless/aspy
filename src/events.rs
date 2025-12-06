@@ -243,15 +243,8 @@ pub struct Stats {
     pub total_cache_creation_tokens: u64,
     pub total_cache_read_tokens: u64,
 
-    // Context window tracking (most recent API call's context size)
-    /// Current context size = input + cache_creation + cache_read tokens from last ApiUsage
-    pub current_context_tokens: u64,
-    /// Last seen cache_read_tokens (for compact detection)
-    pub last_cached_tokens: u64,
     /// Number of context compacts detected this session
     pub compact_count: usize,
-    /// Configured context limit (from config file, default 147K)
-    pub configured_context_limit: u64,
 
     // Thinking block tracking
     pub thinking_blocks: usize,
@@ -260,10 +253,6 @@ pub struct Stats {
     /// Session-level turn count (increments on fresh user prompts, persists across compaction)
     /// A "fresh" turn = user prompt with no tool_result blocks (not a tool continuation)
     pub turn_count: u64,
-
-    // === Session metadata ===
-    /// When the session started (absolute time for reports)
-    pub session_started: Option<DateTime<Utc>>,
 
     // === Distribution tracking for Statistics view ===
     /// API calls per model: "claude-opus-4-5-20251101" -> 65
@@ -384,25 +373,6 @@ impl Stats {
         }
     }
 
-    /// Get context window usage as percentage (0-100)
-    /// Returns None if no context data available yet
-    pub fn context_usage_percent(&self) -> Option<f64> {
-        if self.current_context_tokens == 0 {
-            return None;
-        }
-        let limit = self.context_limit();
-        Some((self.current_context_tokens as f64 / limit as f64) * 100.0)
-    }
-
-    /// Get the configured context limit
-    pub fn context_limit(&self) -> u64 {
-        if self.configured_context_limit > 0 {
-            self.configured_context_limit
-        } else {
-            147_000 // Default fallback
-        }
-    }
-
     /// Update ONLY historical ring buffers (for TUI use)
     /// The TUI handles aggregate stats manually for TUI-specific logic
     pub fn update_history(&mut self, event: &ProxyEvent) {
@@ -508,10 +478,6 @@ impl Stats {
                 self.total_output_tokens += *output_tokens as u64;
                 self.total_cache_creation_tokens += *cache_creation_tokens as u64;
                 self.total_cache_read_tokens += *cache_read_tokens as u64;
-
-                // Update context tracking
-                self.current_context_tokens = (*input_tokens + *cache_read_tokens) as u64;
-                self.last_cached_tokens = *cache_read_tokens as u64;
 
                 // Track per-model stats
                 let model_stats = self.model_tokens.entry(model.clone()).or_default();
@@ -654,14 +620,10 @@ impl Default for Stats {
             total_output_tokens: 0,
             total_cache_creation_tokens: 0,
             total_cache_read_tokens: 0,
-            current_context_tokens: 0,
-            last_cached_tokens: 0,
             compact_count: 0,
-            configured_context_limit: 0,
             thinking_blocks: 0,
             thinking_tokens: 0,
             turn_count: 0,
-            session_started: None,
             model_calls: HashMap::new(),
             model_tokens: HashMap::new(),
             tool_calls_by_name: HashMap::new(),

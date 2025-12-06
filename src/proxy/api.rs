@@ -202,14 +202,13 @@ pub async fn get_stats(
             (Stats::default(), None, 0)
         }
     } else {
-        // No filter - use global stats
+        // No filter - use global stats (no session start time for global)
         let stats = state
             .stats
             .lock()
             .map_err(|e| ApiError::Internal(format!("Failed to lock stats: {}", e)))?;
-        let started = stats.session_started;
         let count = stats.total_requests;
-        (stats.clone(), started, count)
+        (stats.clone(), None, count)
     };
 
     // Calculate session duration
@@ -433,54 +432,48 @@ pub struct ContextQuery {
     pub user: Option<String>,
 }
 
-/// GET /api/context - Returns context window status
+/// GET /api/context - Returns context window status for a specific user session
 ///
 /// Query params:
-///   - user: Filter to specific user's session context (api_key_hash)
+///   - user: REQUIRED - User's session context (api_key_hash, e.g., "b0acf41e12907b7b")
+///
+/// Context is inherently per-session, so user filter is required.
 pub async fn get_context(
     State(state): State<crate::proxy::ProxyState>,
     Query(params): Query<ContextQuery>,
 ) -> Result<Json<ContextResponse>, ApiError> {
-    // If user filter provided, get stats from their session; otherwise use global
-    let stats = if let Some(ref user_hash) = params.user {
-        let sessions = state
-            .sessions
-            .lock()
-            .map_err(|e| ApiError::Internal(format!("Failed to lock sessions: {}", e)))?;
+    // User filter is required - context is per-session, not global
+    let user_hash = params.user.ok_or_else(|| {
+        ApiError::BadRequest(
+            "Context is per-session. Please provide ?user=<api_key_hash> parameter. \
+             Use /api/sessions to list active user sessions and their IDs."
+                .to_string(),
+        )
+    })?;
 
-        let user_id = UserId::new(user_hash);
-        if let Some(session) = sessions.get_user_session(&user_id) {
-            session.stats.clone()
-        } else {
-            Stats::default()
-        }
-    } else {
-        let stats = state
-            .stats
-            .lock()
-            .map_err(|e| ApiError::Internal(format!("Failed to lock stats: {}", e)))?;
-        stats.clone()
-    };
+    let sessions = state
+        .sessions
+        .lock()
+        .map_err(|e| ApiError::Internal(format!("Failed to lock sessions: {}", e)))?;
 
-    let limit = stats.context_limit();
-    let current = stats.current_context_tokens;
-    let usage_pct = if limit > 0 {
-        (current as f64 / limit as f64) * 100.0
-    } else {
-        0.0
-    };
+    let user_id = UserId::new(&user_hash);
+    let session = sessions
+        .get_user_session(&user_id)
+        .ok_or_else(|| ApiError::NotFound(format!("No active session for user: {}", user_hash)))?;
+
+    // Get context from session's ContextState
+    let ctx = &session.context;
+    let usage_pct = ctx.percentage();
 
     let response = ContextResponse {
-        current_tokens: current,
-        limit_tokens: limit,
+        current_tokens: ctx.current_tokens,
+        limit_tokens: ctx.limit,
         usage_pct,
         warning_level: ContextWarningLevel::from_percentage(usage_pct),
-        compacts: stats.compact_count,
+        compacts: session.stats.compact_count,
         breakdown: ContextBreakdown {
-            input: stats
-                .current_context_tokens
-                .saturating_sub(stats.last_cached_tokens),
-            cached: stats.last_cached_tokens,
+            input: ctx.input_tokens(),
+            cached: ctx.last_cached,
         },
     };
 
@@ -701,7 +694,7 @@ pub async fn get_sessions(
 #[derive(Debug)]
 pub enum ApiError {
     Internal(String),
-    #[allow(dead_code)] // Reserved for future 404 responses
+    BadRequest(String),
     NotFound(String),
 }
 
@@ -709,6 +702,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match self {
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
         };
 

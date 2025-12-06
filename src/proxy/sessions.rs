@@ -172,6 +172,79 @@ impl std::fmt::Display for SessionSource {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Context State
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-session context window state (not aggregatable)
+///
+/// This represents the current state of a session's context window - values that
+/// get overwritten on each API call rather than accumulated. Unlike Stats which
+/// can be meaningfully summed/merged across sessions, ContextState is inherently
+/// per-session: each Claude Code conversation has its own context window.
+///
+/// # Why separate from Stats?
+/// - `current_tokens` = "what is the context size RIGHT NOW" (snapshot)
+/// - Stats fields = "how many tokens have we used TOTAL" (aggregate)
+///
+/// Mixing these in Stats caused semantic confusion in multi-user scenarios
+/// where global "current context" was meaningless (just "whoever was last").
+#[derive(Debug, Clone, Default)]
+pub struct ContextState {
+    /// Current context size from last ApiUsage event
+    /// This is input + cache_creation + cache_read tokens
+    pub current_tokens: u64,
+
+    /// Cache tokens from last ApiUsage (for input vs cached breakdown)
+    pub last_cached: u64,
+
+    /// Context limit from config (copied per-session for convenience)
+    pub limit: u64,
+}
+
+impl ContextState {
+    /// Create with a specific context limit
+    pub fn with_limit(limit: u64) -> Self {
+        Self {
+            current_tokens: 0,
+            last_cached: 0,
+            limit,
+        }
+    }
+
+    /// Calculate context usage percentage
+    pub fn percentage(&self) -> f64 {
+        if self.limit == 0 {
+            0.0
+        } else {
+            (self.current_tokens as f64 / self.limit as f64) * 100.0
+        }
+    }
+
+    /// Get the input tokens (non-cached portion)
+    pub fn input_tokens(&self) -> u64 {
+        self.current_tokens.saturating_sub(self.last_cached)
+    }
+
+    /// Update from an ApiUsage event
+    pub fn update_from_api_usage(
+        &mut self,
+        input_tokens: u32,
+        cache_creation_tokens: u32,
+        cache_read_tokens: u32,
+    ) {
+        self.current_tokens =
+            input_tokens as u64 + cache_creation_tokens as u64 + cache_read_tokens as u64;
+        self.last_cached = cache_read_tokens as u64;
+    }
+
+    /// Update after context compaction
+    pub fn update_from_compact(&mut self, new_context: u64) {
+        self.current_tokens = new_context;
+        self.last_cached = 0;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Session
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -202,8 +275,11 @@ pub struct Session {
     /// When we last saw activity (monotonic, for timeout detection)
     pub last_activity: Instant,
 
-    /// Session-specific statistics
+    /// Session-specific statistics (aggregatable metrics)
     pub stats: Stats,
+
+    /// Context window state (per-session, not aggregatable)
+    pub context: ContextState,
 
     /// Recent events buffer (most recent last)
     pub events: VecDeque<ProxyEvent>,
@@ -214,7 +290,14 @@ pub struct Session {
 
 impl Session {
     /// Create a new session
-    pub fn new(key: SessionKey, user_id: UserId, source: SessionSource) -> Self {
+    ///
+    /// The `context_limit` is typically from config.context_limit.
+    pub fn new(
+        key: SessionKey,
+        user_id: UserId,
+        source: SessionSource,
+        context_limit: u64,
+    ) -> Self {
         let claude_session_id = match &key {
             SessionKey::Explicit(id) => Some(id.clone()),
             SessionKey::Implicit(_) => None,
@@ -228,6 +311,7 @@ impl Session {
             started: Utc::now(),
             last_activity: Instant::now(),
             stats: Stats::default(),
+            context: ContextState::with_limit(context_limit),
             events: VecDeque::with_capacity(MAX_SESSION_EVENTS),
             status: SessionStatus::Active,
         }
@@ -240,6 +324,30 @@ impl Session {
 
         // Update stats based on event type
         self.stats.update(&event);
+
+        // Update context state for relevant events
+        match &event {
+            ProxyEvent::ApiUsage {
+                input_tokens,
+                cache_creation_tokens,
+                cache_read_tokens,
+                model,
+                ..
+            } => {
+                // Don't update context for Haiku (summarization, not main conversation)
+                if !model.contains("haiku") {
+                    self.context.update_from_api_usage(
+                        *input_tokens,
+                        *cache_creation_tokens,
+                        *cache_read_tokens,
+                    );
+                }
+            }
+            ProxyEvent::ContextCompact { new_context, .. } => {
+                self.context.update_from_compact(*new_context);
+            }
+            _ => {}
+        }
 
         // Add to event buffer (bounded)
         if self.events.len() >= MAX_SESSION_EVENTS {
@@ -295,22 +403,26 @@ pub struct SessionManager {
 
     /// Idle timeout configuration
     idle_timeout: Duration,
+
+    /// Context limit from config (passed to new sessions)
+    context_limit: u64,
 }
 
 impl Default for SessionManager {
     fn default() -> Self {
-        Self::new(DEFAULT_IDLE_TIMEOUT)
+        Self::new(DEFAULT_IDLE_TIMEOUT, 147_000) // Default context limit
     }
 }
 
 impl SessionManager {
-    /// Create a new session manager with specified idle timeout
-    pub fn new(idle_timeout: Duration) -> Self {
+    /// Create a new session manager with specified idle timeout and context limit
+    pub fn new(idle_timeout: Duration, context_limit: u64) -> Self {
         Self {
             sessions: HashMap::new(),
             active_by_user: HashMap::new(),
             history: VecDeque::with_capacity(100),
             idle_timeout,
+            context_limit,
         }
     }
 
@@ -367,7 +479,7 @@ impl SessionManager {
         }
 
         // Create and insert new session
-        let session = Session::new(key.clone(), user_id.clone(), source);
+        let session = Session::new(key.clone(), user_id.clone(), source, self.context_limit);
         self.sessions.insert(key.clone(), session);
         self.active_by_user.insert(user_id, key.clone());
 

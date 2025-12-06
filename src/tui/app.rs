@@ -20,9 +20,11 @@ use super::traits::{Handled, Interactive, Zoomable};
 use crate::config::Config;
 use crate::events::{ProxyEvent, Stats, TrackedEvent};
 use crate::logging::LogBuffer;
+use crate::proxy::sessions::ContextState;
 use crate::theme::{Theme, ThemeConfig};
 use crate::StreamingThinking;
 use crossterm::event::KeyEvent;
+use std::collections::HashSet;
 use std::time::SystemTime;
 
 // Re-export StreamingState for backward compatibility with ui.rs
@@ -86,6 +88,9 @@ pub struct App {
     /// Accumulated statistics (tokens, costs, tool calls, etc.)
     pub stats: Stats,
 
+    /// Context window state for TUI display (mirrors selected session or global)
+    pub context_state: ContextState,
+
     /// Shared statistics (synced for HTTP API access)
     shared_stats: crate::proxy::api::SharedStats,
 
@@ -107,6 +112,9 @@ pub struct App {
 
     /// Currently selected session for viewing (None = auto-select first)
     pub selected_session: Option<String>,
+
+    /// Models that have been announced in the log (state, not stats)
+    announced_models: HashSet<String>,
 
     // ─────────────────────────────────────────────────────────────────────────
     // Navigation & Selection
@@ -227,16 +235,14 @@ impl App {
         let theme = Theme::by_name_with_config(&config.theme, &theme_config);
         let preset = get_preset(&config.preset);
 
-        // Initialize local stats with context limit from config
-        let stats = Stats {
-            configured_context_limit: config.context_limit,
-            ..Default::default()
-        };
+        // Initialize context state with limit from config
+        let context_state = ContextState::with_limit(config.context_limit);
 
         Self {
             events: Vec::new(),
             should_quit: false,
-            stats,
+            stats: Stats::default(),
+            context_state,
             shared_stats,
             shared_events,
             start_time: SystemTime::now(),
@@ -249,6 +255,7 @@ impl App {
             log_buffer,
             active_sessions: Vec::new(),
             selected_session: None,
+            announced_models: HashSet::new(),
             topic: TopicInfo::default(),
             view: View::default(),
             focused: FocusablePanel::default(),
@@ -456,11 +463,6 @@ impl App {
 
     /// Add a new event and update statistics
     pub fn add_event(&mut self, tracked_event: TrackedEvent) {
-        // Set session start time on first event
-        if self.stats.session_started.is_none() {
-            self.stats.session_started = Some(chrono::Utc::now());
-        }
-
         // Register session if user_id is known (non-"unknown")
         if let Some(ref user_id) = tracked_event.user_id {
             self.register_session(user_id);
@@ -547,17 +549,13 @@ impl App {
 
                 // Track context only for non-Haiku models (Opus/Sonnet carry the conversation)
                 // Haiku is used for quick side-tasks and doesn't reflect actual context usage
-                // Note: Compact detection moved to Parser layer for proper logging
-                //
-                // Context = input + cache_creation + cache_read because:
-                // - When cache is being CREATED, those tokens appear in cache_creation (not cache_read)
-                // - This prevents false "green" status during cache warmup
                 let is_haiku = model.contains("haiku");
                 if !is_haiku {
-                    self.stats.current_context_tokens = *input_tokens as u64
-                        + *cache_creation_tokens as u64
-                        + *cache_read_tokens as u64;
-                    self.stats.last_cached_tokens = *cache_read_tokens as u64;
+                    self.context_state.update_from_api_usage(
+                        *input_tokens,
+                        *cache_creation_tokens,
+                        *cache_read_tokens,
+                    );
                 }
 
                 // Track model calls for distribution
@@ -584,10 +582,9 @@ impl App {
                 self.streaming_sm.on_thinking_started();
             }
             ProxyEvent::ContextCompact { new_context, .. } => {
-                // Context was compacted - update stats
+                // Context was compacted - update stats and context state
                 self.stats.compact_count += 1;
-                self.stats.current_context_tokens = *new_context;
-                self.stats.last_cached_tokens = 0;
+                self.context_state.update_from_compact(*new_context);
             }
             _ => {}
         }
@@ -619,7 +616,7 @@ impl App {
 
     /// Check and log milestone events to the system log panel
     /// This adds personality and useful info as events flow through
-    fn check_milestones(&self, event: &ProxyEvent) {
+    fn check_milestones(&mut self, event: &ProxyEvent) {
         // First request - connection established!
         if self.stats.total_requests == 1 && matches!(event, ProxyEvent::Request { .. }) {
             tracing::info!("🎯 First contact! Claude Code connected.");
@@ -650,10 +647,9 @@ impl App {
 
         // Model detection and cache tips on ApiUsage
         if let ProxyEvent::ApiUsage { model, .. } = event {
-            // First API usage - show which model is active
-            if self.stats.model_calls.is_empty()
-                || self.stats.model_calls.values().sum::<u32>() == 1
-            {
+            // Log each new model the first time it's seen
+            if !self.announced_models.contains(model) {
+                self.announced_models.insert(model.clone());
                 let model_short = if model.contains("opus") {
                     "Opus"
                 } else if model.contains("sonnet") {

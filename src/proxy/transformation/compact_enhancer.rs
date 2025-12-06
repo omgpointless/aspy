@@ -239,10 +239,17 @@ impl RequestTransformer for CompactEnhancer {
                 if Self::append_to_message(user_msg, &injection) {
                     // Estimate tokens for the injection
                     let tokens_added = crate::tokens::estimate_tokens(&injection);
-                    return TransformResult::modified_with_tokens(
+
+                    tracing::info!(
+                        tokens_injected = tokens_added,
+                        "Compaction detected - injected Aspy continuity context"
+                    );
+
+                    return TransformResult::modified_with_info(
                         new_body,
                         0, // We don't track what was there before (injection only)
                         tokens_added,
+                        vec!["Compaction detected, injected <aspy-continuity/>".to_string()],
                     );
                 }
             }

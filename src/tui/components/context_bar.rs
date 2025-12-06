@@ -18,10 +18,10 @@ use ratatui::{
 /// - Color-coded fill based on usage level
 /// - Special "compact pending" state when over limit
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let stats = &app.stats;
+    let ctx = &app.context_state;
 
-    let (label, pct, color) = if stats.current_context_tokens > 0 {
-        let pct = stats.context_usage_percent().unwrap_or(0.0);
+    let (label, pct, color) = if ctx.current_tokens > 0 {
+        let pct = ctx.percentage();
         let over_limit = pct >= 100.0;
 
         let color = if over_limit {
@@ -39,14 +39,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             // Don't show embarrassing >100%, signal compact is pending
             format!(
                 "Context: {} / {} (~100%, compact pending)",
-                format_number(stats.current_context_tokens),
-                format_number(stats.context_limit()),
+                format_number(ctx.current_tokens),
+                format_number(ctx.limit),
             )
         } else {
             format!(
                 "Context: {} / {} ({:.1}%)",
-                format_number(stats.current_context_tokens),
-                format_number(stats.context_limit()),
+                format_number(ctx.current_tokens),
+                format_number(ctx.limit),
                 pct
             )
         };

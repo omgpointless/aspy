@@ -939,102 +939,127 @@ impl Config {
 
     /// Serialize transformers config to TOML (returns empty string if not configured)
     fn transformers_to_toml(&self) -> String {
-        // If no tag editor configured, return empty (comments in template suffice)
-        let Some(ref editor) = self.transformers.tag_editor else {
-            return String::new();
-        };
-
-        if !editor.enabled || editor.rules.is_empty() {
-            return String::new();
-        }
-
-        let mut output = String::from("\n[transformers.tag-editor]\nenabled = true\n");
-
         use crate::proxy::transformation::{PositionConfig, RuleConfig};
 
-        for rule in &editor.rules {
-            output.push_str("\n[[transformers.tag-editor.rules]]\n");
-            match rule {
-                RuleConfig::Inject {
-                    tag,
-                    content,
-                    position,
-                    when,
-                } => {
-                    output.push_str("type = \"inject\"\n");
-                    output.push_str(&format!("tag = \"{}\"\n", tag));
-                    // Escape content for TOML multiline if needed
-                    if content.contains('\n') {
-                        output.push_str(&format!("content = \"\"\"\n{}\n\"\"\"\n", content));
-                    } else {
-                        output.push_str(&format!("content = \"{}\"\n", content));
-                    }
-                    match position {
-                        PositionConfig::Start => {
-                            output.push_str("position = \"start\"\n");
+        let mut output = String::new();
+
+        // Serialize tag-editor if configured
+        if let Some(ref editor) = self.transformers.tag_editor {
+            if editor.enabled && !editor.rules.is_empty() {
+                output.push_str("\n[transformers.tag-editor]\nenabled = true\n");
+
+                for rule in &editor.rules {
+                    output.push_str("\n[[transformers.tag-editor.rules]]\n");
+                    match rule {
+                        RuleConfig::Inject {
+                            tag,
+                            content,
+                            position,
+                            when,
+                        } => {
+                            output.push_str("type = \"inject\"\n");
+                            output.push_str(&format!("tag = \"{}\"\n", tag));
+                            // Escape content for TOML multiline if needed
+                            if content.contains('\n') {
+                                output
+                                    .push_str(&format!("content = \"\"\"\n{}\n\"\"\"\n", content));
+                            } else {
+                                output.push_str(&format!("content = \"{}\"\n", content));
+                            }
+                            match position {
+                                PositionConfig::Start => {
+                                    output.push_str("position = \"start\"\n");
+                                }
+                                PositionConfig::End => {
+                                    // end is default, can omit
+                                }
+                                PositionConfig::Before { pattern } => {
+                                    output.push_str(&format!(
+                                        "position.before.pattern = \"{}\"\n",
+                                        pattern
+                                    ));
+                                }
+                                PositionConfig::After { pattern } => {
+                                    output.push_str(&format!(
+                                        "position.after.pattern = \"{}\"\n",
+                                        pattern
+                                    ));
+                                }
+                            }
+                            // Output when condition using dotted keys (valid TOML for array elements)
+                            if let Some(cond) = when {
+                                if let Some(ref tn) = cond.turn_number {
+                                    output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
+                                }
+                                if let Some(ref tr) = cond.has_tool_results {
+                                    output
+                                        .push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
+                                }
+                                if let Some(ref ci) = cond.client_id {
+                                    output.push_str(&format!("when.client_id = \"{}\"\n", ci));
+                                }
+                            }
                         }
-                        PositionConfig::End => {
-                            // end is default, can omit
+                        RuleConfig::Remove { tag, pattern, when } => {
+                            output.push_str("type = \"remove\"\n");
+                            output.push_str(&format!("tag = \"{}\"\n", tag));
+                            output.push_str(&format!("pattern = \"{}\"\n", pattern));
+                            if let Some(cond) = when {
+                                if let Some(ref tn) = cond.turn_number {
+                                    output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
+                                }
+                                if let Some(ref tr) = cond.has_tool_results {
+                                    output
+                                        .push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
+                                }
+                                if let Some(ref ci) = cond.client_id {
+                                    output.push_str(&format!("when.client_id = \"{}\"\n", ci));
+                                }
+                            }
                         }
-                        PositionConfig::Before { pattern } => {
-                            output
-                                .push_str(&format!("position.before.pattern = \"{}\"\n", pattern));
-                        }
-                        PositionConfig::After { pattern } => {
-                            output.push_str(&format!("position.after.pattern = \"{}\"\n", pattern));
-                        }
-                    }
-                    // Output when condition using dotted keys (valid TOML for array elements)
-                    if let Some(cond) = when {
-                        if let Some(ref tn) = cond.turn_number {
-                            output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
-                        }
-                        if let Some(ref tr) = cond.has_tool_results {
-                            output.push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
-                        }
-                        if let Some(ref ci) = cond.client_id {
-                            output.push_str(&format!("when.client_id = \"{}\"\n", ci));
+                        RuleConfig::Replace {
+                            tag,
+                            pattern,
+                            replacement,
+                            when,
+                        } => {
+                            output.push_str("type = \"replace\"\n");
+                            output.push_str(&format!("tag = \"{}\"\n", tag));
+                            output.push_str(&format!("pattern = \"{}\"\n", pattern));
+                            output.push_str(&format!("replacement = \"{}\"\n", replacement));
+                            if let Some(cond) = when {
+                                if let Some(ref tn) = cond.turn_number {
+                                    output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
+                                }
+                                if let Some(ref tr) = cond.has_tool_results {
+                                    output
+                                        .push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
+                                }
+                                if let Some(ref ci) = cond.client_id {
+                                    output.push_str(&format!("when.client_id = \"{}\"\n", ci));
+                                }
+                            }
                         }
                     }
                 }
-                RuleConfig::Remove { tag, pattern, when } => {
-                    output.push_str("type = \"remove\"\n");
-                    output.push_str(&format!("tag = \"{}\"\n", tag));
-                    output.push_str(&format!("pattern = \"{}\"\n", pattern));
-                    if let Some(cond) = when {
-                        if let Some(ref tn) = cond.turn_number {
-                            output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
-                        }
-                        if let Some(ref tr) = cond.has_tool_results {
-                            output.push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
-                        }
-                        if let Some(ref ci) = cond.client_id {
-                            output.push_str(&format!("when.client_id = \"{}\"\n", ci));
-                        }
-                    }
-                }
-                RuleConfig::Replace {
-                    tag,
-                    pattern,
-                    replacement,
-                    when,
-                } => {
-                    output.push_str("type = \"replace\"\n");
-                    output.push_str(&format!("tag = \"{}\"\n", tag));
-                    output.push_str(&format!("pattern = \"{}\"\n", pattern));
-                    output.push_str(&format!("replacement = \"{}\"\n", replacement));
-                    if let Some(cond) = when {
-                        if let Some(ref tn) = cond.turn_number {
-                            output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
-                        }
-                        if let Some(ref tr) = cond.has_tool_results {
-                            output.push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
-                        }
-                        if let Some(ref ci) = cond.client_id {
-                            output.push_str(&format!("when.client_id = \"{}\"\n", ci));
-                        }
-                    }
-                }
+            }
+        }
+
+        // Serialize compact-enhancer if configured
+        if let Some(ref compact) = self.transformers.compact_enhancer {
+            if compact.enabled {
+                output.push_str(
+                    r#"
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPACTION ENHANCER
+# ─────────────────────────────────────────────────────────────────────────────
+# Detects Anthropic's compaction prompt and injects continuity guidance.
+# The summarizing Claude writes a handoff note; the continuing Claude reads it.
+
+[transformers.compact-enhancer]
+enabled = true
+"#,
+                );
             }
         }
 
@@ -1163,6 +1188,10 @@ enabled = {transformers_enabled}
 # type = "replace"
 # pattern = "version (\\d+\\.\\d+)"  # Capture the version number
 # replacement = "version $1-patched"  # Use $1, $2, etc. for captured groups
+#
+# Compaction Enhancer - inject continuity guidance when Claude Code runs /compact
+# [transformers.compact-enhancer]
+# enabled = true
 {transformers_section}
 # ─────────────────────────────────────────────────────────────────────────────
 # OPENTELEMETRY EXPORT (Optional)
@@ -1784,5 +1813,106 @@ mod tests {
             .and_then(|t| t.tag_editor)
             .expect("tag_editor should be present");
         assert_eq!(tag_editor.rules.len(), 2, "Should have 2 rules");
+    }
+
+    /// EXHAUSTIVE TEST: Ensures every transformer field is serialized to TOML.
+    ///
+    /// When you add a new transformer:
+    /// 1. Add the field to `Transformers` struct
+    /// 2. Add the field to `FileTransformers` struct
+    /// 3. THIS TEST WILL FAIL until you:
+    ///    a. Initialize it below with a minimal config
+    ///    b. Add serialization in `transformers_to_toml()`
+    ///    c. Add the assertion for the TOML key
+    ///
+    /// This prevents the "forgot to serialize" bug that caused compact-enhancer
+    /// to be missing from user configs.
+    #[test]
+    fn test_all_transformers_have_toml_serialization() {
+        use crate::proxy::transformation::{
+            CompactEnhancerConfig, PositionConfig, RuleConfig, TagEditorConfig,
+        };
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STEP 1: Create config with ALL transformer fields populated.
+        // When you add a new transformer, ADD IT HERE or the test won't compile.
+        // ─────────────────────────────────────────────────────────────────────
+        let mut config = Config::default();
+        config.transformers.enabled = true;
+
+        // Tag editor with minimal valid config
+        config.transformers.tag_editor = Some(TagEditorConfig {
+            enabled: true,
+            rules: vec![RuleConfig::Inject {
+                tag: "test".to_string(),
+                content: "test".to_string(),
+                position: PositionConfig::End,
+                when: None,
+            }],
+        });
+
+        // Compact enhancer with minimal valid config
+        config.transformers.compact_enhancer = Some(CompactEnhancerConfig { enabled: true });
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STEP 2: Generate TOML output
+        // ─────────────────────────────────────────────────────────────────────
+        let toml_str = config.to_toml();
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STEP 3: Assert EVERY transformer appears in output.
+        // When you add a new transformer, ADD AN ASSERTION HERE.
+        // ─────────────────────────────────────────────────────────────────────
+
+        assert!(
+            toml_str.contains("[transformers.tag-editor]"),
+            "tag-editor missing from TOML output!\n\
+             Did you forget to serialize it in transformers_to_toml()?\n\
+             TOML output:\n{}",
+            toml_str
+        );
+
+        assert!(
+            toml_str.contains("[transformers.compact-enhancer]"),
+            "compact-enhancer missing from TOML output!\n\
+             Did you forget to serialize it in transformers_to_toml()?\n\
+             TOML output:\n{}",
+            toml_str
+        );
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STEP 4: Verify round-trip works (catches TOML syntax errors)
+        // ─────────────────────────────────────────────────────────────────────
+        let parsed: Result<FileConfig, _> = toml::from_str(&toml_str);
+        assert!(
+            parsed.is_ok(),
+            "Config with all transformers should round-trip.\nError: {:?}",
+            parsed.err()
+        );
+    }
+
+    /// Ensures the DEFAULT template includes commented examples for all transformers.
+    /// This catches the discoverability problem: feature works but users don't know it exists.
+    #[test]
+    fn test_default_template_documents_all_transformers() {
+        let config = Config::default();
+        let toml_str = config.to_toml();
+
+        // Default config has no transformers enabled, but should have COMMENTED examples
+        // for users to discover them.
+
+        assert!(
+            toml_str.contains("transformers.tag-editor")
+                || toml_str.contains("# [transformers.tag-editor]"),
+            "tag-editor not documented in default template!\n\
+             Add a commented example so users can discover this feature."
+        );
+
+        assert!(
+            toml_str.contains("transformers.compact-enhancer")
+                || toml_str.contains("# [transformers.compact-enhancer]"),
+            "compact-enhancer not documented in default template!\n\
+             Add a commented example so users can discover this feature."
+        );
     }
 }

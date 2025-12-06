@@ -405,8 +405,13 @@ pub fn parse_markdown(markdown: &str) -> Vec<StyledSegment> {
             Event::Html(html) | Event::InlineHtml(html) => {
                 let html_str = html.to_string();
 
-                // Check if this is an opening tag like <system-reminder>
-                if let Some(tag_name) = parse_opening_xml_tag(&html_str) {
+                // First check for self-closing tags like <aspy-context/>
+                if let Some(tag_name) = parse_self_closing_xml_tag(&html_str) {
+                    segments.push(StyledSegment::XmlTag {
+                        tag: tag_name,
+                        content: String::new(), // Empty content for self-closing
+                    });
+                } else if let Some(tag_name) = parse_opening_xml_tag(&html_str) {
                     // Check if it's self-closing with content in same event
                     if let Some((tag, content)) = parse_complete_xml_tag(&html_str) {
                         segments.push(StyledSegment::XmlTag { tag, content });
@@ -537,6 +542,21 @@ fn parse_closing_xml_tag(s: &str) -> Option<String> {
     if s.starts_with("</") && s.ends_with('>') {
         let tag_name = &s[2..s.len() - 1];
         return Some(tag_name.trim().to_string());
+    }
+    None
+}
+
+/// Parse a self-closing XML tag like `<aspy-context/>` and return the tag name
+fn parse_self_closing_xml_tag(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.starts_with('<') && !s.starts_with("</") && s.ends_with("/>") {
+        // Extract tag name: "<tag-name/>" -> "tag-name"
+        let inner = &s[1..s.len() - 2]; // Remove < and />
+        let tag_name = inner.split_whitespace().next()?;
+        // Skip HTML comments
+        if !tag_name.starts_with('!') {
+            return Some(tag_name.to_string());
+        }
     }
     None
 }
@@ -820,56 +840,72 @@ pub fn segments_to_lines(
                 flush_line(&mut lines, &mut current_spans);
                 current_width = 0;
 
-                // Use a distinct style: bordered box with tag name header
-                // Opening line with tag name
-                let header = format!("┌─ <{}> ", tag);
-                let header_pad = "─".repeat(width.saturating_sub(header.len() + 1).max(3));
-                lines.push(Line::from(vec![
-                    Span::styled(header, Style::default().fg(theme.rate_limit)),
-                    Span::styled(
-                        format!("{}┐", header_pad),
-                        Style::default()
-                            .fg(theme.border)
-                            .add_modifier(Modifier::DIM),
-                    ),
-                ]));
+                // For self-closing tags (empty content), use a compact single-line format
+                if content.is_empty() {
+                    let line_content = format!("── <{}/> ", tag);
+                    let line_pad = "─".repeat(width.saturating_sub(line_content.len()).max(3));
+                    lines.push(Line::from(vec![
+                        Span::styled(line_content, Style::default().fg(theme.rate_limit)),
+                        Span::styled(
+                            line_pad,
+                            Style::default()
+                                .fg(theme.border)
+                                .add_modifier(Modifier::DIM),
+                        ),
+                    ]));
+                    lines.push(Line::from(""));
+                } else {
+                    // Use a distinct style: bordered box with tag name header
+                    // Opening line with tag name
+                    let header = format!("┌─ <{}> ", tag);
+                    let header_pad = "─".repeat(width.saturating_sub(header.len() + 1).max(3));
+                    lines.push(Line::from(vec![
+                        Span::styled(header, Style::default().fg(theme.rate_limit)),
+                        Span::styled(
+                            format!("{}┐", header_pad),
+                            Style::default()
+                                .fg(theme.border)
+                                .add_modifier(Modifier::DIM),
+                        ),
+                    ]));
 
-                // Content lines with left border
-                for line in content.lines() {
-                    let wrapped = wrap_text(line, width.saturating_sub(4));
-                    for wrapped_line in wrapped {
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                "│ ".to_string(),
-                                Style::default()
-                                    .fg(theme.border)
-                                    .add_modifier(Modifier::DIM),
-                            ),
-                            Span::styled(
-                                wrapped_line,
-                                Style::default()
-                                    .fg(theme.foreground)
-                                    .add_modifier(Modifier::DIM),
-                            ),
-                        ]));
+                    // Content lines with left border
+                    for line in content.lines() {
+                        let wrapped = wrap_text(line, width.saturating_sub(4));
+                        for wrapped_line in wrapped {
+                            lines.push(Line::from(vec![
+                                Span::styled(
+                                    "│ ".to_string(),
+                                    Style::default()
+                                        .fg(theme.border)
+                                        .add_modifier(Modifier::DIM),
+                                ),
+                                Span::styled(
+                                    wrapped_line,
+                                    Style::default()
+                                        .fg(theme.foreground)
+                                        .add_modifier(Modifier::DIM),
+                                ),
+                            ]));
+                        }
                     }
+
+                    // Closing line
+                    let footer = format!("└─ </{}> ", tag);
+                    let footer_pad = "─".repeat(width.saturating_sub(footer.len() + 1).max(3));
+                    lines.push(Line::from(vec![
+                        Span::styled(footer, Style::default().fg(theme.rate_limit)),
+                        Span::styled(
+                            format!("{}┘", footer_pad),
+                            Style::default()
+                                .fg(theme.border)
+                                .add_modifier(Modifier::DIM),
+                        ),
+                    ]));
+
+                    // Add spacing after
+                    lines.push(Line::from(""));
                 }
-
-                // Closing line
-                let footer = format!("└─ </{}> ", tag);
-                let footer_pad = "─".repeat(width.saturating_sub(footer.len() + 1).max(3));
-                lines.push(Line::from(vec![
-                    Span::styled(footer, Style::default().fg(theme.rate_limit)),
-                    Span::styled(
-                        format!("{}┘", footer_pad),
-                        Style::default()
-                            .fg(theme.border)
-                            .add_modifier(Modifier::DIM),
-                    ),
-                ]));
-
-                // Add spacing after
-                lines.push(Line::from(""));
             }
         }
     }
@@ -1441,6 +1477,55 @@ mod tests {
         assert!(
             all_text.contains("system-reminder"),
             "Output should contain tag name"
+        );
+    }
+
+    #[test]
+    fn test_self_closing_xml_tag() {
+        // Test that self-closing XML tags like <aspy-context/> are parsed and rendered
+        let md = "Some text <aspy-context/> more text";
+        let segments = parse_markdown(md);
+
+        println!("Segments for self-closing tag test:");
+        for (i, seg) in segments.iter().enumerate() {
+            println!("  {}: {:?}", i, seg);
+        }
+
+        // Should have an XmlTag segment with empty content
+        let xml_tag = segments
+            .iter()
+            .find(|s| matches!(s, StyledSegment::XmlTag { tag, .. } if tag == "aspy-context"));
+        assert!(
+            xml_tag.is_some(),
+            "Expected XmlTag segment with tag='aspy-context'"
+        );
+
+        if let Some(StyledSegment::XmlTag { content, .. }) = xml_tag {
+            assert!(
+                content.is_empty(),
+                "Self-closing tag should have empty content"
+            );
+        }
+
+        // Test rendering
+        let theme = Theme::default();
+        let lines = render_markdown(md, 80, &theme);
+
+        println!("\nRendered lines for self-closing tag:");
+        for (i, line) in lines.iter().enumerate() {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            println!("  {}: {:?}", i, text);
+        }
+
+        // Check that the tag name appears in the output with self-closing syntax
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(
+            all_text.contains("aspy-context/>"),
+            "Output should contain self-closing tag: {}",
+            all_text
         );
     }
 }

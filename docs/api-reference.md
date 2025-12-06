@@ -158,11 +158,13 @@ curl "http://127.0.0.1:8080/api/events?type=Thinking&user=b0acf41e12907b7b"
 
 Returns context window status including current usage and warning level.
 
+> **Note:** Context is inherently per-session, so the `user` parameter is required.
+
 **Query Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `user` | string | Filter by user ID (API key hash) |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `user` | string | **Yes** | User ID (API key hash, e.g., `b0acf41e12907b7b`) |
 
 **Response:**
 
@@ -189,10 +191,22 @@ Returns context window status including current usage and warning level.
 | `high` | 85-95% | High risk of compaction |
 | `critical` | > 95% | Compaction imminent |
 
+**Error Response (missing user):**
+
+```json
+{
+  "error": "Context is per-session. Please provide ?user=<api_key_hash> parameter. Use /api/sessions to list active user sessions and their IDs."
+}
+```
+
 **Example:**
 
 ```bash
-curl http://127.0.0.1:8080/api/context
+# Get context for specific user (required)
+curl "http://127.0.0.1:8080/api/context?user=b0acf41e12907b7b"
+
+# Find your user ID first
+curl http://127.0.0.1:8080/api/sessions | jq '.sessions[].user_id'
 ```
 
 ---
@@ -568,7 +582,10 @@ All endpoints may return error responses:
 
 ```bash
 #!/bin/bash
-CONTEXT=$(curl -s http://127.0.0.1:8080/api/context)
+# Note: Replace USER_ID with your API key hash (use /api/sessions to find it)
+USER_ID="b0acf41e12907b7b"
+
+CONTEXT=$(curl -s "http://127.0.0.1:8080/api/context?user=${USER_ID}")
 USAGE=$(echo "$CONTEXT" | jq -r '.usage_pct')
 WARNING=$(echo "$CONTEXT" | jq -r '.warning_level')
 

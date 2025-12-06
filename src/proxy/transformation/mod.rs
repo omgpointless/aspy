@@ -112,7 +112,11 @@ impl TransformResult {
         }
     }
 
-    /// Helper to create a Modified result with token tracking
+    /// Helper to create a Modified result with token tracking but no modification descriptions
+    ///
+    /// Future: May be used by simple transformers that only need token tracking without
+    /// detailed modification messages (e.g., whitespace normalizers, simple injectors).
+    #[allow(dead_code)]
     pub fn modified_with_tokens(body: Value, before: u32, after: u32) -> Self {
         Self::Modified {
             body,

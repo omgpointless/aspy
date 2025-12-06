@@ -219,9 +219,10 @@ impl OtelProcessor {
                 body_size,
                 ..
             } => {
+                // Server kind: Claude Code is calling US (the proxy)
                 let mut span = tracer
                     .span_builder("api.request")
-                    .with_kind(SpanKind::Client)
+                    .with_kind(SpanKind::Server)
                     .start(tracer);
 
                 span.set_attribute(KeyValue::new("request.id", id.clone()));
@@ -244,9 +245,10 @@ impl OtelProcessor {
                 duration,
                 ..
             } => {
+                // Server kind: We are responding TO Claude Code
                 let mut span = tracer
                     .span_builder("api.response")
-                    .with_kind(SpanKind::Client)
+                    .with_kind(SpanKind::Server)
                     .start(tracer);
 
                 span.set_attribute(KeyValue::new("request.id", request_id.clone()));
@@ -257,6 +259,10 @@ impl OtelProcessor {
                     "http.duration_ms",
                     duration.as_millis() as i64,
                 ));
+
+                if let Some(session) = &ctx.session_id {
+                    span.set_attribute(KeyValue::new("session.id", session.to_string()));
+                }
 
                 if *status >= 400 {
                     span.set_status(Status::error(format!("HTTP {}", status)));
@@ -356,15 +362,21 @@ impl OtelProcessor {
             ProxyEvent::Error {
                 message, context, ..
             } => {
+                // Server kind: Error in handling client request
                 let mut span = tracer
                     .span_builder("api.error")
-                    .with_kind(SpanKind::Internal)
+                    .with_kind(SpanKind::Server)
                     .start(tracer);
 
                 span.set_attribute(KeyValue::new("error.message", message.clone()));
                 if let Some(ctx_str) = context {
                     span.set_attribute(KeyValue::new("error.context", ctx_str.clone()));
                 }
+
+                if let Some(session) = &ctx.session_id {
+                    span.set_attribute(KeyValue::new("session.id", session.to_string()));
+                }
+
                 span.set_status(Status::error(message.clone()));
 
                 span.end();
@@ -390,15 +402,66 @@ impl OtelProcessor {
                 span.end();
             }
 
+            ProxyEvent::RequestTransformed {
+                transformer,
+                tokens_before,
+                tokens_after,
+                modifications,
+                ..
+            } => {
+                // Internal: Aspy transforming the request before forwarding
+                let mut span = tracer
+                    .span_builder("transform.request")
+                    .with_kind(SpanKind::Internal)
+                    .start(tracer);
+
+                span.set_attribute(KeyValue::new("transformer", transformer.clone()));
+                span.set_attribute(KeyValue::new("tokens.before", *tokens_before as i64));
+                span.set_attribute(KeyValue::new("tokens.after", *tokens_after as i64));
+                span.set_attribute(KeyValue::new(
+                    "tokens.delta",
+                    (*tokens_after as i64) - (*tokens_before as i64),
+                ));
+                span.set_attribute(KeyValue::new(
+                    "modifications.count",
+                    modifications.len() as i64,
+                ));
+
+                if let Some(session) = &ctx.session_id {
+                    span.set_attribute(KeyValue::new("session.id", session.to_string()));
+                }
+
+                span.end();
+            }
+
+            ProxyEvent::ResponseAugmented {
+                augmenter,
+                tokens_injected,
+                ..
+            } => {
+                // Internal: Aspy augmenting the response before returning to client
+                let mut span = tracer
+                    .span_builder("augment.response")
+                    .with_kind(SpanKind::Internal)
+                    .start(tracer);
+
+                span.set_attribute(KeyValue::new("augmenter", augmenter.clone()));
+                span.set_attribute(KeyValue::new("tokens.injected", *tokens_injected as i64));
+
+                if let Some(session) = &ctx.session_id {
+                    span.set_attribute(KeyValue::new("session.id", session.to_string()));
+                }
+
+                span.end();
+            }
+
             // Events we don't export (too verbose or not useful for telemetry)
             ProxyEvent::Thinking { .. }
             | ProxyEvent::ThinkingStarted { .. }
             | ProxyEvent::UserPrompt { .. }
             | ProxyEvent::AssistantResponse { .. }
             | ProxyEvent::HeadersCaptured { .. }
-            | ProxyEvent::RateLimitUpdate { .. }
-            | ProxyEvent::RequestTransformed { .. }
-            | ProxyEvent::ResponseAugmented { .. } => {
+            | ProxyEvent::RateLimitUpdate { .. } => {
                 // Skip - these are either too verbose or internal to Aspy
             }
         }

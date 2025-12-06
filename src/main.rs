@@ -284,10 +284,7 @@ async fn main() -> Result<()> {
 
     // Create shared statistics for HTTP API endpoints
     // TUI updates this as events arrive, API reads it for queries
-    let shared_stats = Arc::new(Mutex::new(events::Stats {
-        configured_context_limit: config.context_limit,
-        ..Default::default()
-    }));
+    let shared_stats = Arc::new(Mutex::new(events::Stats::default()));
 
     // Create shared events buffer for HTTP API endpoints
     // TUI syncs events here, API reads them for queries
@@ -295,7 +292,10 @@ async fn main() -> Result<()> {
 
     // Create session manager for multi-user tracking
     // Tracks sessions by API key hash, manages session lifecycle
-    let shared_sessions = Arc::new(Mutex::new(proxy::sessions::SessionManager::default()));
+    let shared_sessions = Arc::new(Mutex::new(proxy::sessions::SessionManager::new(
+        proxy::sessions::DEFAULT_IDLE_TIMEOUT,
+        config.context_limit,
+    )));
 
     // Spawn the storage task (if enabled)
     // This runs in the background, writing events to disk

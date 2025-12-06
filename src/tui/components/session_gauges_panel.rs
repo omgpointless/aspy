@@ -6,6 +6,7 @@
 // - Request success rate (reliability indicator)
 
 use crate::events::Stats;
+use crate::proxy::sessions::ContextState;
 use crate::theme::Theme;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -19,7 +20,13 @@ pub struct SessionGaugesPanel;
 
 impl SessionGaugesPanel {
     /// Render the panel to a frame
-    pub fn render(frame: &mut Frame, area: Rect, stats: &Stats, theme: &Theme) {
+    pub fn render(
+        frame: &mut Frame,
+        area: Rect,
+        stats: &Stats,
+        context: &ContextState,
+        theme: &Theme,
+    ) {
         // Split into 3 equal vertical sections for gauges
         let gauge_chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -51,7 +58,7 @@ impl SessionGaugesPanel {
         frame.render_widget(cache_gauge, gauge_chunks[0]);
 
         // === Context Window Gauge ===
-        let context_pct = stats.context_usage_percent().unwrap_or(0.0);
+        let context_pct = context.percentage();
         let context_color = match context_pct as u8 {
             0..=69 => Color::Green,
             70..=84 => Color::Yellow,
@@ -59,8 +66,8 @@ impl SessionGaugesPanel {
         };
         let context_label = format!(
             "{:.0}K / {:.0}K ({:.1}%)",
-            stats.current_context_tokens as f64 / 1000.0,
-            stats.context_limit() as f64 / 1000.0,
+            context.current_tokens as f64 / 1000.0,
+            context.limit as f64 / 1000.0,
             context_pct
         );
         let context_gauge = Gauge::default()

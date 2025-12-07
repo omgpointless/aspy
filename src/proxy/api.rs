@@ -1569,7 +1569,7 @@ fn truncate_around_match(text: &str, keyword: &str, max_len: usize) -> String {
 // Lifestats Endpoints
 // ═════════════════════════════════════════════════════════════════════════════
 
-use crate::pipeline::lifestats_query::{
+use crate::pipeline::cortex_query::{
     ContextMatch, LifetimeStats, PromptMatch, ResponseMatch, SearchMode, ThinkingMatch, TodoMatch,
 };
 
@@ -1618,7 +1618,7 @@ pub async fn lifestats_cleanup(
     State(_state): State<super::ProxyState>,
 ) -> Result<impl IntoResponse, StatusCode> {
     // Phase 2 TODO: Implement manual cleanup trigger
-    // This requires exposing a method on LifestatsProcessor to trigger cleanup
+    // This requires exposing a method on CortexProcessor to trigger cleanup
     // For now, rely on automatic 24h cleanup
     Ok(Json(serde_json::json!({
         "status": "not_implemented",

@@ -640,7 +640,7 @@ fn print_embeddings_status_live(status: &LiveIndexerStatus) {
 
 /// Print status from direct database query (fallback when proxy not running)
 fn print_embeddings_status_db(config: &Config) {
-    use crate::pipeline::lifestats_query::LifestatsQuery;
+    use crate::pipeline::cortex_query::CortexQuery;
 
     let db_path = &config.lifestats.db_path;
 
@@ -656,7 +656,7 @@ fn print_embeddings_status_db(config: &Config) {
         return;
     }
 
-    match LifestatsQuery::new(db_path) {
+    match CortexQuery::new(db_path) {
         Ok(query) => {
             match query.embedding_stats() {
                 Ok(stats) => {

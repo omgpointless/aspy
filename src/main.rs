@@ -436,17 +436,17 @@ async fn main() -> Result<()> {
         // Initialize event processing pipeline and query interface
         let (pipeline, lifestats_query, embedding_indexer) = if config.lifestats.enabled {
             use pipeline::{
+                cortex::CortexProcessor,
+                cortex_query::CortexQuery,
                 embedding_indexer::EmbeddingIndexer,
                 embeddings::{self, AuthMethod, EmbeddingConfig, ProviderType},
-                lifestats::LifestatsProcessor,
-                lifestats_query::LifestatsQuery,
                 EventPipeline,
             };
 
             let mut pipeline = EventPipeline::new();
 
             // Create lifestats config from main config
-            let lifestats_config = pipeline::lifestats::LifestatsConfig {
+            let lifestats_config = pipeline::cortex::CortexConfig {
                 db_path: config.lifestats.db_path.clone(),
                 store_thinking: config.lifestats.store_thinking,
                 store_tool_io: config.lifestats.store_tool_io,
@@ -459,7 +459,7 @@ async fn main() -> Result<()> {
                 ),
             };
 
-            match LifestatsProcessor::new(lifestats_config) {
+            match CortexProcessor::new(lifestats_config) {
                 Ok(processor) => {
                     pipeline.register(processor);
 
@@ -482,7 +482,7 @@ async fn main() -> Result<()> {
                     }
 
                     // Initialize query interface (read-only connection pool)
-                    match LifestatsQuery::new(&config.lifestats.db_path) {
+                    match CortexQuery::new(&config.lifestats.db_path) {
                         Ok(query) => {
                             registry.activate("lifestats");
                             tracing::info!(

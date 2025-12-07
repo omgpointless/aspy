@@ -8,7 +8,7 @@
 //! ```text
 //! EventPipeline (sync)
 //!     │
-//!     └──→ LifestatsProcessor.process()
+//!     └──→ CortexProcessor.process()
 //!             │
 //!             └──→ std::sync::mpsc::Sender (bounded)
 //!                     │
@@ -43,9 +43,9 @@ fn is_user_rejection(output: &str) -> bool {
         .any(|pattern| output.contains(pattern))
 }
 
-/// Configuration for lifestats storage
+/// Configuration for cortex storage
 #[derive(Debug, Clone)]
-pub struct LifestatsConfig {
+pub struct CortexConfig {
     /// Path to SQLite database file
     pub db_path: PathBuf,
     /// Whether to store thinking blocks (can be large)
@@ -64,7 +64,7 @@ pub struct LifestatsConfig {
     pub flush_interval: Duration,
 }
 
-impl Default for LifestatsConfig {
+impl Default for CortexConfig {
     fn default() -> Self {
         Self {
             db_path: PathBuf::from("./data/lifestats.db"),
@@ -79,9 +79,9 @@ impl Default for LifestatsConfig {
     }
 }
 
-/// Metrics for observability of the lifestats system itself
+/// Metrics for observability of the cortex system itself
 #[derive(Debug, Default)]
-pub struct LifestatsMetrics {
+pub struct CortexMetrics {
     /// Events successfully stored
     pub events_stored: AtomicU64,
     /// Events dropped due to backpressure (channel full)
@@ -96,7 +96,7 @@ pub struct LifestatsMetrics {
     pub flush_count: AtomicU64,
 }
 
-impl LifestatsMetrics {
+impl CortexMetrics {
     #[allow(dead_code)] // Phase 2: Used by /api/lifestats/health endpoint
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
@@ -136,7 +136,7 @@ enum WriterCommand {
 /// Lifetime statistics processor
 ///
 /// Writes events to SQLite using a dedicated thread.
-pub struct LifestatsProcessor {
+pub struct CortexProcessor {
     /// Channel to send events to writer thread
     tx: SyncSender<WriterCommand>,
     /// Handle to writer thread (for join on shutdown)
@@ -144,17 +144,17 @@ pub struct LifestatsProcessor {
     /// Completion signal for graceful shutdown
     completion: Arc<CompletionSignal>,
     /// Shared metrics
-    metrics: Arc<LifestatsMetrics>,
+    metrics: Arc<CortexMetrics>,
     /// Config for reference (reserved for future introspection API)
     #[allow(dead_code)] // Phase 2: Config introspection
-    config: LifestatsConfig,
+    config: CortexConfig,
 }
 
-impl LifestatsProcessor {
-    /// Create a new lifestats processor
+impl CortexProcessor {
+    /// Create a new cortex processor
     ///
     /// Spawns a dedicated OS thread for database writes.
-    pub fn new(config: LifestatsConfig) -> anyhow::Result<Self> {
+    pub fn new(config: CortexConfig) -> anyhow::Result<Self> {
         // Ensure parent directory exists
         if let Some(parent) = config.db_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -164,7 +164,7 @@ impl LifestatsProcessor {
         let (tx, rx) = mpsc::sync_channel::<WriterCommand>(config.channel_buffer);
 
         // Shared metrics
-        let metrics = Arc::new(LifestatsMetrics::default());
+        let metrics = Arc::new(CortexMetrics::default());
         let writer_metrics = metrics.clone();
 
         // Completion signal for graceful shutdown
@@ -175,15 +175,16 @@ impl LifestatsProcessor {
         let writer_config = config.clone();
 
         // Spawn dedicated writer thread (NOT tokio task)
-        let writer_handle = thread::Builder::new()
-            .name("lifestats-writer".into())
-            .spawn(move || {
-                if let Err(e) = Self::writer_thread(rx, writer_config, writer_metrics) {
-                    tracing::error!("Lifestats writer thread error: {}", e);
-                }
-                // Signal completion regardless of success/failure
-                writer_completion.complete();
-            })?;
+        let writer_handle =
+            thread::Builder::new()
+                .name("cortex-writer".into())
+                .spawn(move || {
+                    if let Err(e) = Self::writer_thread(rx, writer_config, writer_metrics) {
+                        tracing::error!("Cortex writer thread error: {}", e);
+                    }
+                    // Signal completion regardless of success/failure
+                    writer_completion.complete();
+                })?;
 
         Ok(Self {
             tx,
@@ -221,8 +222,8 @@ impl LifestatsProcessor {
     /// Dedicated writer thread - runs SQLite operations
     fn writer_thread(
         rx: mpsc::Receiver<WriterCommand>,
-        config: LifestatsConfig,
-        metrics: Arc<LifestatsMetrics>,
+        config: CortexConfig,
+        metrics: Arc<CortexMetrics>,
     ) -> anyhow::Result<()> {
         // Open connection with WAL mode
         let conn = Connection::open(&config.db_path)?;
@@ -261,7 +262,7 @@ impl LifestatsProcessor {
                     if !batch.is_empty() {
                         Self::flush_batch(&conn, &mut batch, &config, &metrics)?;
                     }
-                    tracing::debug!("Lifestats writer thread shutting down");
+                    tracing::debug!("Cortex writer thread shutting down");
                     break;
                 }
                 Err(RecvTimeoutError::Timeout) => {
@@ -313,8 +314,8 @@ impl LifestatsProcessor {
     fn flush_batch(
         conn: &Connection,
         batch: &mut Vec<(ProxyEvent, ProcessContext)>,
-        config: &LifestatsConfig,
-        metrics: &LifestatsMetrics,
+        config: &CortexConfig,
+        metrics: &CortexMetrics,
     ) -> anyhow::Result<()> {
         if batch.is_empty() {
             return Ok(());
@@ -585,7 +586,7 @@ impl LifestatsProcessor {
             [],
         )?;
 
-        tracing::info!("Migrated lifestats database from v1 to v2");
+        tracing::info!("Migrated Cortex database from v1 to v2");
         Ok(())
     }
 
@@ -623,7 +624,7 @@ impl LifestatsProcessor {
             [],
         )?;
 
-        tracing::info!("Migrated lifestats database from v2 to v3 (added is_rejection)");
+        tracing::info!("Migrated Cortex database from v2 to v3 (added is_rejection)");
         Ok(())
     }
 
@@ -702,7 +703,7 @@ impl LifestatsProcessor {
             [],
         )?;
 
-        tracing::info!("Migrated lifestats database from v3 to v4 (added embedding tables)");
+        tracing::info!("Migrated cortex database from v3 to v4 (added embedding tables)");
         Ok(())
     }
 
@@ -731,7 +732,7 @@ impl LifestatsProcessor {
         )?;
 
         tracing::info!(
-            "Migrated lifestats database from v4 to v5 (added transcript_path to sessions)"
+            "Migrated Cortex database from v4 to v5 (added transcript_path to sessions)"
         );
         Ok(())
     }
@@ -800,7 +801,7 @@ impl LifestatsProcessor {
             [],
         )?;
 
-        tracing::info!("Migrated lifestats database from v5 to v6 (added todos table)");
+        tracing::info!("Migrated Cortex database from v5 to v6 (added todos table)");
         Ok(())
     }
 
@@ -843,7 +844,7 @@ impl LifestatsProcessor {
             [],
         )?;
 
-        tracing::info!("Migrated lifestats database from v6 to v7 (fixed FTS5 external content)");
+        tracing::info!("Migrated Cortex database from v6 to v7 (fixed FTS5 external content)");
         Ok(())
     }
 
@@ -1028,7 +1029,7 @@ impl LifestatsProcessor {
         conn: &Connection,
         event: &ProxyEvent,
         ctx: &ProcessContext,
-        config: &LifestatsConfig,
+        config: &CortexConfig,
     ) -> anyhow::Result<()> {
         let session_id = ctx.session_id.as_deref();
 
@@ -1228,9 +1229,9 @@ impl LifestatsProcessor {
     }
 }
 
-impl EventProcessor for LifestatsProcessor {
+impl EventProcessor for CortexProcessor {
     fn name(&self) -> &'static str {
-        "lifestats"
+        "cortex"
     }
 
     fn process(&self, event: &ProxyEvent, ctx: &ProcessContext) -> ProcessResult {
@@ -1246,13 +1247,13 @@ impl EventProcessor for LifestatsProcessor {
                 // Backpressure: channel full
                 self.metrics.events_dropped.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!(
-                    "Lifestats backpressure: dropped event (total dropped: {})",
+                    "Cortex backpressure: dropped event (total dropped: {})",
                     self.metrics.events_dropped.load(Ordering::Relaxed)
                 );
             }
             Err(mpsc::TrySendError::Disconnected(_)) => {
                 // Writer thread died
-                tracing::error!("Lifestats writer thread disconnected");
+                tracing::error!("Cortex writer thread disconnected");
             }
         }
 
@@ -1269,18 +1270,18 @@ impl EventProcessor for LifestatsProcessor {
         const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
         if !self.completion.wait(SHUTDOWN_TIMEOUT) {
             tracing::warn!(
-                "Lifestats writer thread did not complete within {:?}",
+                "Cortex writer thread did not complete within {:?}",
                 SHUTDOWN_TIMEOUT
             );
             return Err(anyhow::anyhow!("Shutdown timeout"));
         }
 
-        tracing::debug!("Lifestats processor shutdown complete");
+        tracing::debug!("Cortex processor shutdown complete");
         Ok(())
     }
 }
 
-impl Drop for LifestatsProcessor {
+impl Drop for CortexProcessor {
     fn drop(&mut self) {
         // Ensure writer thread is signaled
         let _ = self.tx.send(WriterCommand::Shutdown);

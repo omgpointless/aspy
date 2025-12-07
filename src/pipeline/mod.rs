@@ -23,10 +23,10 @@ use std::sync::Arc;
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
+pub mod cortex;
+pub mod cortex_query;
 pub mod embedding_indexer;
 pub mod embeddings;
-pub mod lifestats;
-pub mod lifestats_query;
 pub mod logging;
 pub mod otel;
 
@@ -37,7 +37,7 @@ pub mod otel;
 /// Completion signal for coordinating graceful shutdown between threads
 ///
 /// Uses a Condvar to block shutdown() until the background thread has finished
-/// flushing its buffers and exited cleanly. Used by LifestatsProcessor,
+/// flushing its buffers and exited cleanly. Used by CortexProcessor,
 /// OtelProcessor, and EmbeddingIndexer.
 pub struct CompletionSignal {
     mutex: Mutex<bool>,

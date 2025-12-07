@@ -1,4 +1,4 @@
-//! Query interface for lifestats database
+//! Query interface for Cortex database
 //!
 //! Provides structured queries for context recovery, used by MCP tools.
 //! Uses connection pooling for efficient concurrent access.
@@ -8,7 +8,7 @@
 //! ```text
 //! MCP Tools / HTTP API
 //!         │
-//!         └──→ LifestatsQuery (r2d2 pool)
+//!         └──→ CortexQuery (r2d2 pool)
 //!                 │
 //!                 ├──→ SQLite Reader Connection 1
 //!                 ├──→ SQLite Reader Connection 2
@@ -19,7 +19,7 @@
 //!
 //! # WAL Mode Concurrency
 //!
-//! The lifestats database uses WAL (Write-Ahead Logging) mode, which allows
+//! The cortex database uses WAL (Write-Ahead Logging) mode, which allows
 //! multiple concurrent readers while the writer thread is active. The connection
 //! pool manages up to 4 read-only connections for query parallelism.
 
@@ -44,7 +44,7 @@ use std::path::Path;
 /// # Examples
 ///
 /// ```rust
-/// use aspy::pipeline::lifestats_query::SearchMode;
+/// use aspy::pipeline::cortext_query::SearchMode;
 ///
 /// // Phrase mode - escapes everything
 /// let query = SearchMode::Phrase.process("user's query");
@@ -256,17 +256,17 @@ pub struct ToolStats {
     pub errors: i64,
 }
 
-/// Query interface for lifestats database
+/// Query interface for cortex database
 ///
 /// Uses connection pooling for efficient concurrent access.
 ///
 /// # Example
 ///
 /// ```rust,no_run
-/// use aspy::pipeline::lifestats_query::{LifestatsQuery, SearchMode};
+/// use aspy::pipeline::cortex_query::{CortexQuery, SearchMode};
 ///
 /// # fn main() -> anyhow::Result<()> {
-/// let query = LifestatsQuery::new("./data/lifestats.db")?;
+/// let query = CortexQuery::new("./data/lifestats.db")?;
 ///
 /// // Search thinking blocks
 /// let results = query.search_thinking("solarized theme", 10, SearchMode::Phrase)?;
@@ -276,11 +276,11 @@ pub struct ToolStats {
 /// # Ok(())
 /// # }
 /// ```
-pub struct LifestatsQuery {
+pub struct CortexQuery {
     pool: Pool<SqliteConnectionManager>,
 }
 
-impl LifestatsQuery {
+impl CortexQuery {
     /// Create a new query interface with connection pool
     ///
     /// # Arguments

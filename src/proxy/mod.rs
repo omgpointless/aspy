@@ -122,7 +122,7 @@ pub struct ProxyState {
     /// Event processing pipeline (optional, for lifestats storage and other processors)
     pipeline: Option<Arc<EventPipeline>>,
     /// Query interface for lifestats database (optional, requires lifestats enabled)
-    pub lifestats_query: Option<Arc<crate::pipeline::lifestats_query::LifestatsQuery>>,
+    pub lifestats_query: Option<Arc<crate::pipeline::cortex_query::CortexQuery>>,
     /// Translation pipeline for OpenAI ↔ Anthropic format conversion
     translation: Arc<TranslationPipeline>,
     /// Transformation pipeline for request modification (system-reminder editing, etc.)
@@ -167,7 +167,7 @@ pub struct SharedState {
     /// Event processing pipeline (optional)
     pub pipeline: Option<Arc<EventPipeline>>,
     /// Query interface for lifestats database (optional, requires lifestats enabled)
-    pub lifestats_query: Option<Arc<crate::pipeline::lifestats_query::LifestatsQuery>>,
+    pub lifestats_query: Option<Arc<crate::pipeline::cortex_query::CortexQuery>>,
     /// Handle to the embedding indexer (optional, requires embeddings enabled)
     pub embedding_indexer: Option<crate::pipeline::embedding_indexer::IndexerHandle>,
 }

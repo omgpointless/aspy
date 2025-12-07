@@ -6,7 +6,7 @@
 //! # Architecture
 //!
 //! ```text
-//! LifestatsProcessor (stores content)
+//! CortexProcessor (stores content)
 //!         │
 //!         └──→ SQLite (thinking_blocks, user_prompts, responses)
 //!                 │

@@ -1666,11 +1666,11 @@ impl Config {
                 "JSONL logging",
             ),
             FeatureDefinition::optional(
-                "lifestats",
-                "lifestats",
+                "cortex",
+                "cortex",
                 FeatureCategory::Storage,
                 self.lifestats.enabled,
-                "SQLite history",
+                "Cortex Memory (SQLite)",
             ),
             // ─────────────────────────────────────────────────────────────────
             // Pipeline

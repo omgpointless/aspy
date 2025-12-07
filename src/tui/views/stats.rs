@@ -94,7 +94,13 @@ fn render_overview_tab(f: &mut Frame, area: Rect, app: &App) {
         .split(area);
 
     // === Left: Session Gauges ===
-    SessionGaugesPanel::render(f, chunks[0], &app.stats, &app.context_state, &app.theme);
+    SessionGaugesPanel::render(
+        f,
+        chunks[0],
+        &app.stats,
+        app.effective_context(),
+        &app.theme,
+    );
 
     // === Right: Session Summary ===
     render_session_summary(f, chunks[1], app);

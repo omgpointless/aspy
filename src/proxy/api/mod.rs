@@ -125,6 +125,7 @@ pub(crate) fn event_type_name(event: &ProxyEvent) -> &'static str {
         ProxyEvent::PreCompactHook { .. } => "PreCompactHook",
         ProxyEvent::ContextRecovery { .. } => "ContextRecovery",
         ProxyEvent::TodoSnapshot { .. } => "TodoSnapshot",
+        ProxyEvent::ContextEstimate { .. } => "ContextEstimate",
     }
 }
 

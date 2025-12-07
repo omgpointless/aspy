@@ -88,8 +88,13 @@ pub struct App {
     /// Accumulated statistics (tokens, costs, tool calls, etc.)
     pub stats: Stats,
 
-    /// Context window state for TUI display (mirrors selected session or global)
+    /// Context window state for TUI display (global fallback)
+    /// Note: For multi-session, use `effective_context()` which checks per-user context first
     pub context_state: ContextState,
+
+    /// Per-user context tracking for multi-session scenarios
+    /// Maps user_id -> their context window state
+    per_user_context: std::collections::HashMap<String, ContextState>,
 
     /// Shared statistics (synced for HTTP API access)
     shared_stats: crate::proxy::api::SharedStats,
@@ -247,6 +252,7 @@ impl App {
             should_quit: false,
             stats: Stats::default(),
             context_state,
+            per_user_context: std::collections::HashMap::new(),
             shared_stats,
             shared_events,
             start_time: SystemTime::now(),
@@ -572,11 +578,25 @@ impl App {
                 // Haiku is used for quick side-tasks and doesn't reflect actual context usage
                 let is_haiku = model.contains("haiku");
                 if !is_haiku {
+                    // Update global context (fallback for single-session)
                     self.context_state.update_from_api_usage(
                         *input_tokens,
                         *cache_creation_tokens,
                         *cache_read_tokens,
                     );
+
+                    // Update per-user context for multi-session tracking
+                    if let Some(ref user_id) = tracked_event.user_id {
+                        let user_ctx = self
+                            .per_user_context
+                            .entry(user_id.clone())
+                            .or_insert_with(|| ContextState::with_limit(self.config.context_limit));
+                        user_ctx.update_from_api_usage(
+                            *input_tokens,
+                            *cache_creation_tokens,
+                            *cache_read_tokens,
+                        );
+                    }
                 }
 
                 // Track model calls for distribution
@@ -611,6 +631,32 @@ impl App {
                 // Context was compacted - update stats and context state
                 self.stats.compact_count += 1;
                 self.context_state.update_from_compact(*new_context);
+
+                // Update per-user context for multi-session tracking
+                if let Some(ref user_id) = tracked_event.user_id {
+                    if let Some(user_ctx) = self.per_user_context.get_mut(user_id) {
+                        user_ctx.update_from_compact(*new_context);
+                    }
+                }
+            }
+            ProxyEvent::ContextEstimate {
+                estimated_tokens, ..
+            } => {
+                // Initialize per-user context from DB estimate on session resume
+                // This allows the context bar to show a value immediately instead of
+                // "waiting for API call"
+                if let Some(ref user_id) = tracked_event.user_id {
+                    let user_ctx = self
+                        .per_user_context
+                        .entry(user_id.clone())
+                        .or_insert_with(|| ContextState::with_limit(self.config.context_limit));
+                    user_ctx.current_tokens = *estimated_tokens;
+                    tracing::debug!(
+                        user_id = %user_id,
+                        estimated_tokens = %estimated_tokens,
+                        "TUI received context estimate for session resume"
+                    );
+                }
             }
             _ => {}
         }
@@ -741,6 +787,20 @@ impl App {
         self.selected_session
             .as_deref()
             .or_else(|| self.active_sessions.first().map(|s| s.as_str()))
+    }
+
+    /// Get the context state for the currently selected session
+    ///
+    /// Returns the per-user context if available, otherwise falls back to global context.
+    /// This ensures the context bar shows the correct context for multi-session scenarios.
+    pub fn effective_context(&self) -> &ContextState {
+        if let Some(session) = self.effective_session() {
+            if let Some(ctx) = self.per_user_context.get(session) {
+                return ctx;
+            }
+        }
+        // Fallback to global context (for single-session or unknown users)
+        &self.context_state
     }
 
     /// Get filtered events for current session

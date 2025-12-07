@@ -443,6 +443,17 @@ pub(crate) fn format_event_line(tracked: &TrackedEvent) -> String {
                 completed_count
             )
         }
+        ProxyEvent::ContextEstimate {
+            timestamp,
+            estimated_tokens,
+        } => {
+            format!(
+                "[{}] {}📊 Context Estimate: {} tokens",
+                timestamp.format("%H:%M:%S"),
+                user_prefix,
+                estimated_tokens
+            )
+        }
     }
 }
 
@@ -1004,5 +1015,21 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
                 todos_display
             ))
         }
+        ProxyEvent::ContextEstimate {
+            timestamp,
+            estimated_tokens,
+        } => RenderableContent::Markdown(format!(
+            "{}## 📊 Context Estimate\n\n\
+            **Timestamp:** {}\n\n\
+            ---\n\n\
+            ### Estimated Context\n\n\
+            **Tokens:** {}\n\n\
+            ---\n\n\
+            *This estimate was loaded from historical API usage data\n\
+            when the session resumed.*",
+            tracking_header,
+            timestamp.to_rfc3339(),
+            estimated_tokens
+        )),
     }
 }

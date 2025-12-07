@@ -18,7 +18,8 @@ use ratatui::{
 /// - Color-coded fill based on usage level
 /// - Special "compact pending" state when over limit
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let ctx = &app.context_state;
+    // Use effective_context() to get the selected session's context (or global fallback)
+    let ctx = app.effective_context();
 
     let (label, pct, color) = if ctx.current_tokens > 0 {
         let pct = ctx.percentage();

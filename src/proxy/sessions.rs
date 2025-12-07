@@ -574,12 +574,17 @@ impl SessionManager {
     /// Start a new session (from hook or warmup detection)
     ///
     /// If the user already has an active session, it's superseded.
+    ///
+    /// If `estimated_context` is provided, the session's context state is initialized
+    /// to that value instead of starting at 0. This is used when resuming a session
+    /// with a known transcript_path that has historical data in the database.
     pub fn start_session(
         &mut self,
         user_id: UserId,
         session_id: Option<String>,
         source: SessionSource,
         transcript_path: Option<String>,
+        estimated_context: Option<u64>,
     ) -> &Session {
         // Create session key
         let key = match session_id {
@@ -627,6 +632,18 @@ impl SessionManager {
         // Create and insert new session
         let mut session = Session::new(key.clone(), user_id.clone(), source, self.context_limit);
         session.transcript_path = transcript_path;
+
+        // If we have an estimated context from DB, set it so the context window
+        // doesn't appear empty on resume
+        if let Some(tokens) = estimated_context {
+            session.context.current_tokens = tokens;
+            tracing::debug!(
+                session_key = %key,
+                estimated_tokens = tokens,
+                "Initialized context from DB estimate on session start"
+            );
+        }
+
         self.sessions.insert(key.clone(), session);
         self.active_by_user.insert(user_id, key.clone());
 
@@ -753,7 +770,7 @@ impl SessionManager {
             }
             None => {
                 // Create implicit session on first event (no transcript path available)
-                self.start_session(user_id.clone(), None, SessionSource::FirstSeen, None);
+                self.start_session(user_id.clone(), None, SessionSource::FirstSeen, None, None);
                 // Record the event in the newly created session
                 if let Some(key) = self.active_by_user.get(user_id) {
                     if let Some(session) = self.sessions.get_mut(key) {
@@ -945,6 +962,7 @@ mod tests {
             Some("session1".to_string()),
             SessionSource::Hook,
             None,
+            None,
         );
         assert_eq!(manager.active_count(), 1);
 
@@ -953,6 +971,7 @@ mod tests {
             user.clone(),
             Some("session2".to_string()),
             SessionSource::Hook,
+            None,
             None,
         );
         assert_eq!(manager.active_count(), 1);

@@ -43,6 +43,7 @@ impl EventProcessor for LoggingProcessor {
             ProxyEvent::PreCompactHook { .. } => "PreCompactHook",
             ProxyEvent::ContextRecovery { .. } => "ContextRecovery",
             ProxyEvent::TodoSnapshot { .. } => "TodoSnapshot",
+            ProxyEvent::ContextEstimate { .. } => "ContextEstimate",
         };
 
         // Log event type with context

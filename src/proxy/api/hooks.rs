@@ -56,7 +56,8 @@ pub async fn hook_precompact(
         session.key.to_string()
     } else {
         // No session exists - create one via hook source
-        let session = sessions.start_session(user_id.clone(), None, SessionSource::Hook, None);
+        let session =
+            sessions.start_session(user_id.clone(), None, SessionSource::Hook, None, None);
         let key = session.key.to_string();
         // Need to get mutable ref again after start_session
         if let Some(s) = sessions.get_user_session_mut(&user_id) {

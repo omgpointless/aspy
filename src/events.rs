@@ -184,6 +184,17 @@ pub enum ProxyEvent {
         in_progress_count: u32,
         completed_count: u32,
     },
+
+    /// Context window estimate from historical data
+    ///
+    /// Emitted when a session resumes and we have historical context data.
+    /// This allows the TUI to show the estimated context immediately instead
+    /// of "waiting for API call".
+    ContextEstimate {
+        timestamp: DateTime<Utc>,
+        /// Estimated context tokens from last known API usage
+        estimated_tokens: u64,
+    },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -264,7 +275,8 @@ impl TrackedEvent {
             | ProxyEvent::ResponseAugmented { timestamp, .. }
             | ProxyEvent::PreCompactHook { timestamp, .. }
             | ProxyEvent::ContextRecovery { timestamp, .. }
-            | ProxyEvent::TodoSnapshot { timestamp, .. } => *timestamp,
+            | ProxyEvent::TodoSnapshot { timestamp, .. }
+            | ProxyEvent::ContextEstimate { timestamp, .. } => *timestamp,
         }
     }
 }

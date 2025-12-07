@@ -1,6 +1,7 @@
 // Session management endpoints
 
 use super::ApiError;
+use crate::events::{ProxyEvent, TrackedEvent};
 use crate::proxy::sessions::{EndReason, SessionKey, SessionSource, TodoItem, TodoStatus, UserId};
 use axum::{
     extract::{Path, State},
@@ -53,15 +54,12 @@ pub struct SessionActionResponse {
 ///
 /// Called by the SessionStart hook when Claude Code starts.
 /// Creates a new session, superseding any previous session for this user.
+/// If a transcript_path is provided and exists in the database, estimates
+/// the context window from historical data.
 pub async fn session_start(
     State(state): State<crate::proxy::ProxyState>,
     Json(request): Json<SessionStartRequest>,
 ) -> Result<Json<SessionActionResponse>, ApiError> {
-    let mut sessions = state
-        .sessions
-        .lock()
-        .map_err(|e| ApiError::Internal(format!("Failed to lock sessions: {}", e)))?;
-
     let user_id = UserId::new(&request.user_id);
     let source = match request.source.as_deref() {
         Some("hook") => SessionSource::Hook,
@@ -69,27 +67,103 @@ pub async fn session_start(
         _ => SessionSource::Hook, // Default for explicit start
     };
 
+    // If transcript_path is provided, check if we have historical context data
+    let estimated_context = if let Some(ref transcript_path) = request.transcript_path {
+        if let Some(query) = state.cortex_query.as_ref() {
+            // First find the session_id for this transcript
+            match query.find_session_by_transcript(transcript_path) {
+                Ok(Some((session_id, _user_id))) => {
+                    // Then get the last context tokens for that session
+                    match query.get_session_last_context(&session_id) {
+                        Ok(context) => {
+                            if context.is_some() {
+                                tracing::debug!(
+                                    transcript_path = %transcript_path,
+                                    session_id = %session_id,
+                                    estimated_context = ?context,
+                                    "Found historical context for transcript"
+                                );
+                            }
+                            context
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                transcript_path = %transcript_path,
+                                error = %e,
+                                "Failed to query context estimate"
+                            );
+                            None
+                        }
+                    }
+                }
+                Ok(None) => None, // New transcript, no history
+                Err(e) => {
+                    tracing::warn!(
+                        transcript_path = %transcript_path,
+                        error = %e,
+                        "Failed to find session by transcript"
+                    );
+                    None
+                }
+            }
+        } else {
+            None // No cortex query available
+        }
+    } else {
+        None // No transcript_path provided
+    };
+
     tracing::debug!(
         session_id = %request.session_id,
         user_id = %request.user_id,
         source = %source,
+        estimated_context = ?estimated_context,
         "Starting session via hook for user {} with session {}",
         user_id.short(),
         request.session_id
     );
+
+    let mut sessions = state
+        .sessions
+        .lock()
+        .map_err(|e| ApiError::Internal(format!("Failed to lock sessions: {}", e)))?;
 
     let session = sessions.start_session(
         user_id,
         Some(request.session_id.clone()),
         source,
         request.transcript_path.clone(),
+        estimated_context,
     );
     let session_key = session.key.to_string();
+
+    // Drop the sessions lock before sending events
+    drop(sessions);
+
+    // If we have an estimated context from historical data, emit an event
+    // so the TUI can update its per-user context state immediately
+    if let Some(tokens) = estimated_context {
+        let event = ProxyEvent::ContextEstimate {
+            timestamp: Utc::now(),
+            estimated_tokens: tokens,
+        };
+        let tracked = TrackedEvent {
+            user_id: Some(request.user_id.clone()),
+            session_id: Some(request.session_id.clone()),
+            tracked_at: Utc::now(),
+            event,
+        };
+
+        // Send to TUI and storage (use try_send to avoid async, ignore errors)
+        let _ = state.event_tx_tui.try_send(tracked.clone());
+        let _ = state.event_tx_storage.try_send(tracked);
+    }
 
     tracing::info!(
         session_id = %request.session_id,
         source = %source,
         transcript_path = ?request.transcript_path,
+        estimated_context = ?estimated_context,
         "Session started with session_key {}",
         session_key
     );

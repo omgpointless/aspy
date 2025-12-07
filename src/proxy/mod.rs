@@ -98,9 +98,9 @@ pub struct ProxyState {
     /// Parser for extracting tool calls
     parser: Parser,
     /// Channel for sending tracked events to TUI (includes user/session context)
-    event_tx_tui: mpsc::Sender<TrackedEvent>,
+    pub(crate) event_tx_tui: mpsc::Sender<TrackedEvent>,
     /// Channel for sending tracked events to storage (includes user/session context)
-    event_tx_storage: mpsc::Sender<TrackedEvent>,
+    pub(crate) event_tx_storage: mpsc::Sender<TrackedEvent>,
     /// Target API URL (default, used when no client routing configured)
     api_url: String,
     /// Shared buffer for streaming thinking content to TUI

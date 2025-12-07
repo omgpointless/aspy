@@ -1583,9 +1583,13 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
         };
 
         // Parse raw body for debugging (only when translation occurred)
+        // Use the correct assembler based on backend format
         let raw_body = if needs_translation && is_messages_endpoint {
             let body_str = std::str::from_utf8(&raw_accumulated).unwrap_or("");
-            sse::assemble_to_json(body_str)
+            match translation_ctx.backend_format {
+                translation::ApiFormat::OpenAI => sse::assemble_openai_to_json(body_str),
+                translation::ApiFormat::Anthropic => sse::assemble_to_json(body_str),
+            }
         } else {
             None
         };

@@ -192,14 +192,18 @@ impl OpenAiToAnthropicResponse {
             // Handle tool calls
             if let Some(tool_calls) = &choice.delta.tool_calls {
                 for tc in tool_calls {
-                    // New tool call starting (has id and name)
-                    if tc.id.is_some()
-                        || tc
-                            .function
-                            .as_ref()
-                            .map(|f| f.name.is_some())
-                            .unwrap_or(false)
-                    {
+                    // New tool call starting (has non-empty id or name)
+                    // Important: Check for non-empty strings, not just Some(_)
+                    // Some providers send empty strings on subsequent chunks
+                    let has_new_id = tc.id.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+                    let has_new_name = tc
+                        .function
+                        .as_ref()
+                        .and_then(|f| f.name.as_ref())
+                        .map(|n| !n.is_empty())
+                        .unwrap_or(false);
+
+                    if has_new_id || has_new_name {
                         // Close previous block if we were in text
                         if !ctx.accumulated_content.is_empty() {
                             let block_stop = ContentBlockStopEvent {

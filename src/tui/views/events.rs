@@ -51,6 +51,12 @@ impl RenderableContent {
     }
 }
 
+/// Safely truncate a string to at most `max_chars` characters.
+/// This avoids panics from slicing at invalid UTF-8 byte boundaries.
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
+}
+
 /// Main render function for the Events view
 pub fn render(f: &mut Frame, area: Rect, app: &mut App) {
     // When zoomed, render only the focused panel at full size
@@ -185,7 +191,7 @@ pub(crate) fn format_event_line(tracked: &TrackedEvent) -> String {
                 timestamp.format("%H:%M:%S"),
                 user_prefix,
                 tool_name,
-                &id[..8]
+                truncate_str(id, 8)
             )
         }
         ProxyEvent::ToolResult {
@@ -471,11 +477,8 @@ fn format_tracking_header(tracked: &TrackedEvent) -> String {
     if let Some(ref session_id) = tracked.session_id {
         // Show truncated session_id (first 16 chars) for readability
         // Implicit sessions (~user-xxxx) are ~13 chars, explicit UUIDs are longer
-        let short = if session_id.len() > 16 {
-            &session_id[..16]
-        } else {
-            session_id
-        };
+        // Use truncate_str for safe UTF-8 handling
+        let short = truncate_str(session_id, 16);
         // Italics for secondary info (session is less important than user)
         lines.push(format!("*Session: {}*", short));
     }
@@ -585,12 +588,23 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
             ttfb,
             duration,
             body,
-            raw_body: _,
+            raw_body,
         } => {
             let body_content = if let Some(json_body) = body {
                 format!(
                     "\n\n---\n\n```json\n{}\n```",
                     serde_json::to_string_pretty(json_body)
+                        .unwrap_or_else(|_| "Failed to format".to_string())
+                )
+            } else {
+                String::new()
+            };
+
+            // Show raw backend response when translation occurred
+            let raw_body_content = if let Some(raw_json) = raw_body {
+                format!(
+                    "\n\n---\n\n### Raw Backend Response\n\n```json\n{}\n```",
+                    serde_json::to_string_pretty(raw_json)
                         .unwrap_or_else(|_| "Failed to format".to_string())
                 )
             } else {
@@ -604,7 +618,7 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
                 **Status:** {}  \n\
                 **Body Size:** {} bytes  \n\
                 **TTFB:** {}ms  \n\
-                **Total Duration:** {:.2}s{}",
+                **Total Duration:** {:.2}s{}{}",
                 tracking_header,
                 request_id,
                 timestamp.to_rfc3339(),
@@ -612,7 +626,8 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
                 body_size,
                 ttfb.as_millis(),
                 duration.as_secs_f64(),
-                body_content
+                body_content,
+                raw_body_content
             ))
         }
         ProxyEvent::Error {

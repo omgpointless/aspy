@@ -232,6 +232,147 @@ pub fn assemble_to_json(body: &str) -> Option<serde_json::Value> {
     }
 }
 
+/// Assemble OpenAI-format SSE stream into a JSON object for debugging/display
+///
+/// OpenAI SSE format uses:
+/// - `choices[].delta.content` for text
+/// - `choices[].delta.tool_calls[]` for tool calls
+/// - `choices[].finish_reason` for stop reason
+/// - `model` at the top level
+/// - `usage` for token counts (on final chunk)
+///
+/// Returns a JSON object with model, content, stop_reason, usage, and a note
+/// that this was assembled from an OpenAI-format stream.
+pub fn assemble_openai_to_json(body: &str) -> Option<serde_json::Value> {
+    let mut content = String::new();
+    let mut model = String::new();
+    let mut finish_reason: Option<String> = None;
+    let mut usage_data: Option<serde_json::Value> = None;
+    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+    // Track tool call arguments by index
+    let mut tool_args: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    let mut tool_names: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    let mut tool_ids: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+
+    for line in body.lines() {
+        let Some(data) = parse_sse_data_line(line.trim()) else {
+            continue;
+        };
+
+        // Extract model (available on every chunk)
+        if model.is_empty() {
+            if let Some(m) = data.get("model").and_then(|v| v.as_str()) {
+                model = m.to_string();
+            }
+        }
+
+        // Extract content from choices[].delta
+        if let Some(choices) = data.get("choices").and_then(|v| v.as_array()) {
+            for choice in choices {
+                // Accumulate text content
+                if let Some(text) = choice
+                    .get("delta")
+                    .and_then(|d| d.get("content"))
+                    .and_then(|c| c.as_str())
+                {
+                    content.push_str(text);
+                }
+
+                // Accumulate tool calls
+                if let Some(tool_call_deltas) = choice
+                    .get("delta")
+                    .and_then(|d| d.get("tool_calls"))
+                    .and_then(|t| t.as_array())
+                {
+                    for tc in tool_call_deltas {
+                        let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+
+                        // Capture tool ID (only if non-empty)
+                        if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
+                            if !id.is_empty() {
+                                tool_ids.insert(index, id.to_string());
+                            }
+                        }
+
+                        // Capture function name (only if non-empty)
+                        if let Some(name) = tc
+                            .get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                        {
+                            if !name.is_empty() {
+                                tool_names.insert(index, name.to_string());
+                            }
+                        }
+
+                        // Accumulate function arguments
+                        if let Some(args) = tc
+                            .get("function")
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(|a| a.as_str())
+                        {
+                            tool_args.entry(index).or_default().push_str(args);
+                        }
+                    }
+                }
+
+                // Extract finish_reason
+                if let Some(reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
+                    finish_reason = Some(reason.to_string());
+                }
+            }
+        }
+
+        // Extract usage (usually on final chunk)
+        if let Some(usage) = data.get("usage") {
+            if !usage.is_null() {
+                usage_data = Some(usage.clone());
+            }
+        }
+    }
+
+    // Build tool_calls array from accumulated data
+    let max_index = tool_ids
+        .keys()
+        .chain(tool_names.keys())
+        .chain(tool_args.keys())
+        .max()
+        .copied();
+    if let Some(max) = max_index {
+        for i in 0..=max {
+            if tool_ids.contains_key(&i) || tool_names.contains_key(&i) {
+                tool_calls.push(json!({
+                    "id": tool_ids.get(&i).cloned().unwrap_or_default(),
+                    "type": "function",
+                    "function": {
+                        "name": tool_names.get(&i).cloned().unwrap_or_default(),
+                        "arguments": tool_args.get(&i).cloned().unwrap_or_default()
+                    }
+                }));
+            }
+        }
+    }
+
+    if !content.is_empty() || !model.is_empty() || !tool_calls.is_empty() {
+        Some(json!({
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": if content.is_empty() { serde_json::Value::Null } else { json!(content) },
+                    "tool_calls": if tool_calls.is_empty() { serde_json::Value::Null } else { json!(tool_calls) }
+                },
+                "finish_reason": finish_reason
+            }],
+            "usage": usage_data,
+            "_note": "Assembled from OpenAI-format SSE stream"
+        }))
+    } else {
+        None
+    }
+}
+
 // ============================================================================
 // Internal Helpers
 // ============================================================================

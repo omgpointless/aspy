@@ -1247,6 +1247,22 @@ enabled = {transformers_enabled}
 # pattern = "version (\\d+\\.\\d+)"  # Capture the version number
 # replacement = "version $1-patched"  # Use $1, $2, etc. for captured groups
 #
+# System Editor - modify the system prompt (CLAUDE.md, etc.)
+# Rule types: append, prepend, replace
+#
+# Example: Append instructions to the system prompt
+# [transformers.system-editor]
+# enabled = true
+# [[transformers.system-editor.rules]]
+# type = "append"
+# content = "Always prioritize security best practices."
+#
+# Example: Replace text in the system prompt
+# [[transformers.system-editor.rules]]
+# type = "replace"
+# pattern = "old text"
+# replacement = "new text"
+#
 # Compaction Enhancer - inject continuity guidance when Claude Code runs /compact
 # [transformers.compact-enhancer]
 # enabled = true
@@ -1418,7 +1434,7 @@ service_version = "{otel_service_version}"
             .ok()
             .and_then(|v| v.parse().ok())
             .or(file.context_limit)
-            .unwrap_or(147_000);
+            .unwrap_or(150_000);
 
         // Theme: env > file > default ("Spy Dark" is the project's signature theme)
         let theme = std::env::var("ASPY_THEME")
@@ -1618,7 +1634,7 @@ impl Default for Config {
             log_dir: PathBuf::from("./logs"),
             enable_tui: true,
             demo_mode: false,
-            context_limit: 147_000,
+            context_limit: 150_000,
             theme: "Spy Dark".to_string(),
             use_theme_background: true,
             preset: "classic".to_string(),

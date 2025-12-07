@@ -204,7 +204,7 @@ pub async fn start_proxy(
         .pool_max_idle_per_host(10)
         // Force HTTP/1.1 to avoid HTTP/2 connection reset issues with some providers
         .http1_only()
-        .user_agent("aspy/0.1.0")
+        .user_agent("aspy/0.2.0")
         .build()
         .context("Failed to create HTTP client")?;
 

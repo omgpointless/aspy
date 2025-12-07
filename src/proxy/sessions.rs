@@ -522,7 +522,7 @@ pub struct SessionManager {
 
 impl Default for SessionManager {
     fn default() -> Self {
-        Self::new(DEFAULT_IDLE_TIMEOUT, 147_000) // Default context limit
+        Self::new(DEFAULT_IDLE_TIMEOUT, 150_000) // Default context limit
     }
 }
 

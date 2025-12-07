@@ -878,6 +878,13 @@ pub async fn session_reconnect(
     State(state): State<crate::proxy::ProxyState>,
     Json(request): Json<SessionReconnectRequest>,
 ) -> Result<Json<SessionReconnectResponse>, ApiError> {
+    tracing::debug!(
+        user_id = %request.user_id,
+        transcript_path = %request.transcript_path,
+        cc_session_id = ?request.session_id,
+        "UserPromptSubmit hook triggered"
+    );
+
     // Need lifestats_query to check DB
     let query = state
         .lifestats_query

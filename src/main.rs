@@ -397,7 +397,7 @@ async fn main() -> Result<()> {
 
     // Spawn the storage task (if enabled)
     // This runs in the background, writing events to disk
-    let storage_handle = if config.features.storage {
+    let storage_handle = if config.features.json_logging {
         let storage_config = config.clone();
         let storage_session_id = session_id.clone();
         Some(tokio::spawn(async move {
@@ -434,7 +434,7 @@ async fn main() -> Result<()> {
         })
     } else {
         // Initialize event processing pipeline and query interface
-        let (pipeline, lifestats_query, embedding_indexer) = if config.lifestats.enabled {
+        let (pipeline, lifestats_query, embedding_indexer) = if config.cortex.enabled {
             use pipeline::{
                 cortex::CortexProcessor,
                 cortex_query::CortexQuery,
@@ -447,16 +447,14 @@ async fn main() -> Result<()> {
 
             // Create lifestats config from main config
             let lifestats_config = pipeline::cortex::CortexConfig {
-                db_path: config.lifestats.db_path.clone(),
-                store_thinking: config.lifestats.store_thinking,
-                store_tool_io: config.lifestats.store_tool_io,
-                max_thinking_size: config.lifestats.max_thinking_size,
-                retention_days: config.lifestats.retention_days,
-                channel_buffer: config.lifestats.channel_buffer,
-                batch_size: config.lifestats.batch_size,
-                flush_interval: std::time::Duration::from_secs(
-                    config.lifestats.flush_interval_secs,
-                ),
+                db_path: config.cortex.db_path.clone(),
+                store_thinking: config.cortex.store_thinking,
+                store_tool_io: config.cortex.store_tool_io,
+                max_thinking_size: config.cortex.max_thinking_size,
+                retention_days: config.cortex.retention_days,
+                channel_buffer: config.cortex.channel_buffer,
+                batch_size: config.cortex.batch_size,
+                flush_interval: std::time::Duration::from_secs(config.cortex.flush_interval_secs),
             };
 
             match CortexProcessor::new(lifestats_config) {
@@ -482,12 +480,12 @@ async fn main() -> Result<()> {
                     }
 
                     // Initialize query interface (read-only connection pool)
-                    match CortexQuery::new(&config.lifestats.db_path) {
+                    match CortexQuery::new(&config.cortex.db_path) {
                         Ok(query) => {
                             registry.activate("lifestats");
                             tracing::info!(
                                 "Lifestats initialized (SQLite: {})",
-                                config.lifestats.db_path.display()
+                                config.cortex.db_path.display()
                             );
 
                             // Initialize embedding indexer if configured
@@ -519,7 +517,7 @@ async fn main() -> Result<()> {
 
                                 // Create indexer config
                                 let indexer_config = pipeline::embedding_indexer::IndexerConfig {
-                                    db_path: config.lifestats.db_path.clone(),
+                                    db_path: config.cortex.db_path.clone(),
                                     embedding_config: embed_config.clone(),
                                     poll_interval: std::time::Duration::from_secs(
                                         config.embeddings.poll_interval_secs,

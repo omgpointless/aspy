@@ -157,7 +157,7 @@ fn handle_config_show() {
     println!("log_dir = {:?}", config.log_dir.display().to_string());
     println!();
     println!("[features]");
-    println!("storage = {}", config.features.storage);
+    println!("storage = {}", config.features.json_logging);
     println!("thinking_panel = {}", config.features.thinking_panel);
     println!("stats = {}", config.features.stats);
     println!();
@@ -491,7 +491,7 @@ fn handle_config_init() {
     println!("└────────────────────────────────────────────────────────────────────────────┘");
     println!();
 
-    config.features.storage = prompt_bool("Enable session logging (JSONL files)?", true);
+    config.features.json_logging = prompt_bool("Enable session logging (JSONL files)?", true);
     config.features.thinking_panel =
         prompt_bool("Enable thinking panel (Claude's reasoning)?", true);
     config.features.stats = prompt_bool("Enable stats tracking (tokens, costs)?", true);
@@ -642,7 +642,7 @@ fn print_embeddings_status_live(status: &LiveIndexerStatus) {
 fn print_embeddings_status_db(config: &Config) {
     use crate::pipeline::cortex_query::CortexQuery;
 
-    let db_path = &config.lifestats.db_path;
+    let db_path = &config.cortex.db_path;
 
     if !db_path.exists() {
         println!("Embeddings Status (Offline)");
@@ -793,7 +793,7 @@ fn try_api_trigger_reindex(config: &Config) -> bool {
 fn handle_embeddings_reindex_db(config: &Config) {
     use rusqlite::Connection;
 
-    let db_path = &config.lifestats.db_path;
+    let db_path = &config.cortex.db_path;
 
     if !db_path.exists() {
         eprintln!("Error: Database not found at {}", db_path.display());

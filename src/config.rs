@@ -17,7 +17,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug, Clone)]
 pub struct Features {
     /// Storage module: write events to JSONL files
-    pub storage: bool,
+    pub json_logging: bool,
 
     /// Thinking panel: show Claude's extended thinking
     pub thinking_panel: bool,
@@ -29,7 +29,7 @@ pub struct Features {
 impl Default for Features {
     fn default() -> Self {
         Self {
-            storage: true,
+            json_logging: true,
             thinking_panel: true,
             stats: true,
         }
@@ -620,7 +620,7 @@ pub struct Config {
     pub logging: LoggingConfig,
 
     /// Lifetime statistics storage configuration
-    pub lifestats: LifestatsConfig,
+    pub cortex: LifestatsConfig,
 
     /// Embeddings configuration for semantic search
     pub embeddings: EmbeddingsConfig,
@@ -1271,7 +1271,7 @@ service_version = "{otel_service_version}"
             limit = self.context_limit,
             bind = self.bind_addr,
             log_dir = self.log_dir.display(),
-            storage = self.features.storage,
+            storage = self.features.json_logging,
             thinking = self.features.thinking_panel,
             stats = self.features.stats,
             ctx_warn = self.augmentation.context_warning,
@@ -1281,15 +1281,15 @@ service_version = "{otel_service_version}"
             log_file_dir = self.logging.file_dir.display(),
             log_file_rotation = self.logging.file_rotation.as_str(),
             log_file_prefix = self.logging.file_prefix,
-            lifestats_enabled = self.lifestats.enabled,
-            lifestats_db_path = self.lifestats.db_path.display(),
-            lifestats_store_thinking = self.lifestats.store_thinking,
-            lifestats_store_tool_io = self.lifestats.store_tool_io,
-            lifestats_max_thinking_size = self.lifestats.max_thinking_size,
-            lifestats_retention_days = self.lifestats.retention_days,
-            lifestats_channel_buffer = self.lifestats.channel_buffer,
-            lifestats_batch_size = self.lifestats.batch_size,
-            lifestats_flush_interval_secs = self.lifestats.flush_interval_secs,
+            lifestats_enabled = self.cortex.enabled,
+            lifestats_db_path = self.cortex.db_path.display(),
+            lifestats_store_thinking = self.cortex.store_thinking,
+            lifestats_store_tool_io = self.cortex.store_tool_io,
+            lifestats_max_thinking_size = self.cortex.max_thinking_size,
+            lifestats_retention_days = self.cortex.retention_days,
+            lifestats_channel_buffer = self.cortex.channel_buffer,
+            lifestats_batch_size = self.cortex.batch_size,
+            lifestats_flush_interval_secs = self.cortex.flush_interval_secs,
             translation_enabled = self.translation.enabled,
             translation_auto_detect = self.translation.auto_detect,
             translation_model_mapping = if self.translation.model_mapping.is_empty() {
@@ -1425,7 +1425,7 @@ service_version = "{otel_service_version}"
         // Default: enabled (opt-out pattern)
         let file_features = file.features.unwrap_or_default();
         let features = Features {
-            storage: file_features.storage.unwrap_or(true),
+            json_logging: file_features.storage.unwrap_or(true),
             thinking_panel: file_features.thinking_panel.unwrap_or(true),
             stats: file_features.stats.unwrap_or(true),
         };
@@ -1589,7 +1589,7 @@ service_version = "{otel_service_version}"
             features,
             augmentation,
             logging,
-            lifestats,
+            cortex: lifestats,
             embeddings,
             translation,
             transformers,
@@ -1614,7 +1614,7 @@ impl Default for Config {
             features: Features::default(),
             augmentation: Augmentation::default(),
             logging: LoggingConfig::default(),
-            lifestats: LifestatsConfig::default(),
+            cortex: LifestatsConfig::default(),
             embeddings: EmbeddingsConfig::default(),
             translation: Translation::default(),
             transformers: Transformers::default(),
@@ -1659,17 +1659,17 @@ impl Config {
             // Storage
             // ─────────────────────────────────────────────────────────────────
             FeatureDefinition::optional(
-                "storage",
-                "storage",
+                "jsonl-logging",
+                "jsonl-logging",
                 FeatureCategory::Storage,
-                self.features.storage,
+                self.features.json_logging,
                 "JSONL logging",
             ),
             FeatureDefinition::optional(
                 "cortex",
                 "cortex",
                 FeatureCategory::Storage,
-                self.lifestats.enabled,
+                self.cortex.enabled,
                 "Cortex Memory (SQLite)",
             ),
             // ─────────────────────────────────────────────────────────────────
@@ -2238,7 +2238,7 @@ mod tests {
         let mut config = Config::default();
 
         // All current feature flags (defaults are all true, so flip to false)
-        config.features.storage = false;
+        config.features.json_logging = false;
         config.features.thinking_panel = false;
         config.features.stats = false;
 

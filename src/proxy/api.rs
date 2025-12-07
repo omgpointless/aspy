@@ -1570,7 +1570,7 @@ fn truncate_around_match(text: &str, keyword: &str, max_len: usize) -> String {
 // ═════════════════════════════════════════════════════════════════════════════
 
 use crate::pipeline::lifestats_query::{
-    ContextMatch, LifetimeStats, PromptMatch, ResponseMatch, SearchMode, ThinkingMatch,
+    ContextMatch, LifetimeStats, PromptMatch, ResponseMatch, SearchMode, ThinkingMatch, TodoMatch,
 };
 
 /// Response for lifestats health endpoint
@@ -1673,6 +1673,14 @@ pub struct ContextSearchResponse {
     pub results: Vec<ContextMatch>,
 }
 
+/// Response wrapper for todo history search
+#[derive(Debug, Serialize)]
+pub struct TodoSearchResponse {
+    pub query: Option<String>,
+    pub timeframe: Option<String>,
+    pub results: Vec<TodoMatch>,
+}
+
 /// GET /api/lifestats/search/thinking - Search thinking blocks
 ///
 /// Query params:
@@ -1750,6 +1758,59 @@ pub async fn lifestats_search_responses(
     Ok(Json(ResponseSearchResponse {
         query: params.query,
         mode: format!("{:?}", params.mode),
+        results,
+    }))
+}
+
+/// Query parameters for todo history endpoint
+#[derive(Debug, Deserialize)]
+pub struct TodoHistoryQuery {
+    /// Optional search query (searches todo content)
+    #[serde(rename = "q")]
+    pub query: Option<String>,
+    /// Maximum results (default: 10, max: 100)
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    /// Days to look back (default: all time)
+    pub days: Option<u32>,
+    /// Search mode: "phrase" (default), "natural", "raw"
+    #[serde(default)]
+    pub mode: SearchMode,
+}
+
+/// GET /api/lifestats/todos - Search or list todo history
+///
+/// Query params:
+///   - q: Optional search query (searches todo content)
+///   - limit: Max results (default: 10, max: 100)
+///   - days: Optional days to look back
+///   - mode: phrase|natural|raw (default: phrase)
+pub async fn lifestats_todos(
+    State(state): State<super::ProxyState>,
+    Query(params): Query<TodoHistoryQuery>,
+) -> Result<Json<TodoSearchResponse>, ApiError> {
+    let query_interface = state
+        .lifestats_query
+        .as_ref()
+        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+
+    let limit = params.limit.min(100);
+
+    let results = if let Some(ref q) = params.query {
+        // Search mode: use FTS
+        query_interface
+            .search_todos(q, limit, params.mode)
+            .map_err(|e| ApiError::Internal(format!("Todo search failed: {}", e)))?
+    } else {
+        // List mode: get recent todos
+        query_interface
+            .get_recent_todos(limit, params.days)
+            .map_err(|e| ApiError::Internal(format!("Todo list failed: {}", e)))?
+    };
+
+    Ok(Json(TodoSearchResponse {
+        query: params.query,
+        timeframe: params.days.map(|d| format!("{} days", d)),
         results,
     }))
 }

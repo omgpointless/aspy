@@ -1464,6 +1464,122 @@ server.registerTool(
   }
 );
 
+// Tool: aspy_todos_history - Search todo history across sessions
+interface TodoMatch {
+  session_id: string | null;
+  timestamp: string;
+  content: string;
+  todos_json: string;
+  pending_count: number;
+  in_progress_count: number;
+  completed_count: number;
+  rank: number;
+}
+
+interface TodoSearchResponse {
+  [key: string]: unknown;
+  query: string | null;
+  timeframe: string | null;
+  results: TodoMatch[];
+}
+
+server.registerTool(
+  "aspy_todos_history",
+  {
+    title: "Todo History",
+    description:
+      "Search your todo history across sessions. Use for 'what was I working on?' queries. Shows past TodoWrite snapshots stored in cortex.",
+    inputSchema: {
+      query: z
+        .string()
+        .min(2)
+        .optional()
+        .describe("Optional search query to find specific todos"),
+      days: z
+        .number()
+        .min(1)
+        .max(365)
+        .optional()
+        .describe("Days to look back (e.g., 1 for today, 7 for this week)"),
+      limit: z
+        .number()
+        .min(1)
+        .max(50)
+        .default(10)
+        .describe("Maximum results (default: 10)"),
+    },
+    outputSchema: {
+      query: z.string().nullable(),
+      timeframe: z.string().nullable(),
+      results: z.array(
+        z.object({
+          session_id: z.string().nullable(),
+          timestamp: z.string(),
+          content: z.string(),
+          todos_json: z.string(),
+          pending_count: z.number(),
+          in_progress_count: z.number(),
+          completed_count: z.number(),
+          rank: z.number(),
+        })
+      ),
+    },
+  },
+  async ({ query, days, limit = 10 }) => {
+    const params = new URLSearchParams();
+    if (query) params.set("q", query);
+    if (days) params.set("days", String(days));
+    params.set("limit", String(limit));
+
+    const result = await fetchApi<TodoSearchResponse>(
+      `/api/lifestats/todos?${params}`
+    );
+
+    if (!result.ok) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${result.error.error}` }],
+        isError: true,
+      };
+    }
+
+    const data = result.data;
+
+    const summaryParts: string[] = [];
+    if (query) {
+      summaryParts.push(`📋 Found ${data.results.length} todo snapshot(s) matching "${query}":`);
+    } else if (days) {
+      summaryParts.push(`📋 Found ${data.results.length} todo snapshot(s) from last ${days} day(s):`);
+    } else {
+      summaryParts.push(`📋 Found ${data.results.length} recent todo snapshot(s):`);
+    }
+
+    if (data.results.length === 0) {
+      summaryParts.push("\nNo todo history found.");
+    } else {
+      summaryParts.push("");
+      for (const r of data.results) {
+        const session = r.session_id?.slice(0, 8) ?? "unknown";
+        const date = r.timestamp.split("T")[0];
+        const time = r.timestamp.split("T")[1]?.slice(0, 5) ?? "";
+        summaryParts.push(`**[${date} ${time}]** (session: ${session})`);
+        summaryParts.push(`  ⬜ ${r.pending_count} pending | 🔄 ${r.in_progress_count} in progress | ✅ ${r.completed_count} done`);
+        if (r.content) {
+          summaryParts.push(`  ${r.content.slice(0, 200)}${r.content.length > 200 ? "..." : ""}`);
+        }
+        summaryParts.push("");
+      }
+    }
+
+    return {
+      content: [
+        { type: "text" as const, text: summaryParts.join("\n") },
+        { type: "text" as const, text: JSON.stringify(data, null, 2) },
+      ],
+      structuredContent: data,
+    };
+  }
+);
+
 // ============================================================================
 // LIFETIME TOOLS - All-time statistics and configuration
 // ============================================================================

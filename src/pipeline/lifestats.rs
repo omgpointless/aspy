@@ -413,6 +413,9 @@ impl LifestatsProcessor {
         if current_version < 6 {
             Self::migrate_v5_to_v6(conn)?;
         }
+        if current_version < 7 {
+            Self::migrate_v6_to_v7(conn)?;
+        }
 
         Ok(())
     }
@@ -798,6 +801,49 @@ impl LifestatsProcessor {
         )?;
 
         tracing::info!("Migrated lifestats database from v5 to v6 (added todos table)");
+        Ok(())
+    }
+
+    /// v6 → v7: Fix FTS5 external content mode bug
+    ///
+    /// The v6 migration incorrectly created todos_fts with external content mode
+    /// (`content=todos`) but the todos table has no `content` column. This migration
+    /// recreates the FTS table as standalone and re-indexes existing todos.
+    fn migrate_v6_to_v7(conn: &Connection) -> anyhow::Result<()> {
+        // Drop broken FTS table
+        conn.execute("DROP TABLE IF EXISTS todos_fts", [])?;
+
+        // Recreate FTS5 as standalone (no external content mode)
+        conn.execute_batch(
+            r#"
+            CREATE VIRTUAL TABLE IF NOT EXISTS todos_fts USING fts5(
+                content,
+                tokenize='porter unicode61'
+            );
+            "#,
+        )?;
+
+        // Re-index any existing todos
+        let mut stmt = conn.prepare("SELECT id, todos_json FROM todos")?;
+        let todos: Vec<(i64, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(Result::ok)
+            .collect();
+
+        for (rowid, todos_json) in todos {
+            let fts_content = Self::extract_todo_content_for_fts(&todos_json);
+            conn.execute(
+                "INSERT INTO todos_fts(rowid, content) VALUES (?1, ?2)",
+                params![rowid, fts_content],
+            )?;
+        }
+
+        conn.execute(
+            "UPDATE metadata SET value = '7' WHERE key = 'schema_version'",
+            [],
+        )?;
+
+        tracing::info!("Migrated lifestats database from v6 to v7 (fixed FTS5 external content)");
         Ok(())
     }
 

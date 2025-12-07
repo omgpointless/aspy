@@ -174,6 +174,21 @@ pub struct ResponseMatch {
     pub rank: f64,
 }
 
+/// Query result for todo searches
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoMatch {
+    pub session_id: Option<String>,
+    pub timestamp: String,
+    /// Concatenated todo content (from FTS index)
+    pub content: String,
+    /// Full todo list as JSON (original format)
+    pub todos_json: String,
+    pub pending_count: u32,
+    pub in_progress_count: u32,
+    pub completed_count: u32,
+    pub rank: f64,
+}
+
 /// Type of context match
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -436,6 +451,141 @@ impl LifestatsQuery {
                 timestamp: row.get(1)?,
                 content: row.get(2)?,
                 rank: row.get(3)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Search todos by keyword (FTS5)
+    ///
+    /// Uses FTS5 full-text search with BM25 ranking on todo content.
+    ///
+    /// # Arguments
+    /// * `query` - The search query
+    /// * `limit` - Maximum number of results
+    /// * `mode` - How to interpret the query (default: Phrase)
+    ///
+    /// # Returns
+    /// Results sorted by relevance (lower rank = more relevant)
+    pub fn search_todos(
+        &self,
+        query: &str,
+        limit: usize,
+        mode: SearchMode,
+    ) -> anyhow::Result<Vec<TodoMatch>> {
+        let conn = self.conn()?;
+        let safe_query = mode.process(query);
+
+        let sql = r#"
+            SELECT
+                t.session_id,
+                t.timestamp,
+                f.content,
+                t.todos_json,
+                t.pending_count,
+                t.in_progress_count,
+                t.completed_count,
+                bm25(todos_fts) as rank
+            FROM todos_fts f
+            JOIN todos t ON f.rowid = t.id
+            WHERE todos_fts MATCH ?1
+            ORDER BY rank
+            LIMIT ?2
+        "#;
+
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(params![safe_query, limit as i64], |row| {
+            Ok(TodoMatch {
+                session_id: row.get(0)?,
+                timestamp: row.get(1)?,
+                content: row.get(2)?,
+                todos_json: row.get(3)?,
+                pending_count: row.get(4)?,
+                in_progress_count: row.get(5)?,
+                completed_count: row.get(6)?,
+                rank: row.get(7)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get recent todos (no search, just latest snapshots)
+    ///
+    /// Returns the most recent todo snapshots, optionally filtered by timeframe.
+    ///
+    /// # Arguments
+    /// * `limit` - Maximum number of results
+    /// * `days` - Optional number of days to look back
+    ///
+    /// # Returns
+    /// Results sorted by timestamp (most recent first)
+    pub fn get_recent_todos(
+        &self,
+        limit: usize,
+        days: Option<u32>,
+    ) -> anyhow::Result<Vec<TodoMatch>> {
+        let conn = self.conn()?;
+
+        let sql = if let Some(d) = days {
+            format!(
+                r#"
+                SELECT
+                    t.session_id,
+                    t.timestamp,
+                    COALESCE(f.content, '') as content,
+                    t.todos_json,
+                    t.pending_count,
+                    t.in_progress_count,
+                    t.completed_count,
+                    0.0 as rank
+                FROM todos t
+                LEFT JOIN todos_fts f ON f.rowid = t.id
+                WHERE t.timestamp > datetime('now', '-{} days')
+                ORDER BY t.timestamp DESC
+                LIMIT ?1
+                "#,
+                d
+            )
+        } else {
+            r#"
+            SELECT
+                t.session_id,
+                t.timestamp,
+                COALESCE(f.content, '') as content,
+                t.todos_json,
+                t.pending_count,
+                t.in_progress_count,
+                t.completed_count,
+                0.0 as rank
+            FROM todos t
+            LEFT JOIN todos_fts f ON f.rowid = t.id
+            ORDER BY t.timestamp DESC
+            LIMIT ?1
+            "#
+            .to_string()
+        };
+
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(TodoMatch {
+                session_id: row.get(0)?,
+                timestamp: row.get(1)?,
+                content: row.get(2)?,
+                todos_json: row.get(3)?,
+                pending_count: row.get(4)?,
+                in_progress_count: row.get(5)?,
+                completed_count: row.get(6)?,
+                rank: row.get(7)?,
             })
         })?;
 

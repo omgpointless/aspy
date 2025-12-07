@@ -340,6 +340,10 @@ pub async fn start_proxy(
             axum::routing::get(api::lifestats_search_responses),
         )
         .route(
+            "/api/lifestats/todos",
+            axum::routing::get(api::lifestats_todos),
+        )
+        .route(
             "/api/lifestats/context",
             axum::routing::get(api::lifestats_context),
         )

@@ -60,7 +60,7 @@ use std::path::Path;
 /// use aspy::pipeline::cortex_query::{CortexQuery, SearchMode};
 ///
 /// # fn main() -> anyhow::Result<()> {
-/// let query = CortexQuery::new("./data/lifestats.db")?;
+/// let query = CortexQuery::new("./data/cortex.db")?;
 ///
 /// // Search thinking blocks
 /// let results = query.search_thinking("solarized theme", 10, SearchMode::Phrase)?;

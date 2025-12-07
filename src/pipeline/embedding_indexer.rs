@@ -58,7 +58,7 @@ pub struct IndexerConfig {
 impl Default for IndexerConfig {
     fn default() -> Self {
         Self {
-            db_path: PathBuf::from("./data/lifestats.db"),
+            db_path: PathBuf::from("./data/cortex.db"),
             embedding_config: EmbeddingConfig::default(),
             poll_interval: Duration::from_secs(30),
             batch_size: 32,

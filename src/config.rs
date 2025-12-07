@@ -279,7 +279,7 @@ impl Default for CortexConfig {
     fn default() -> Self {
         Self {
             enabled: false, // Opt-in feature
-            db_path: PathBuf::from("./data/lifestats.db"),
+            db_path: PathBuf::from("./data/cortex.db"),
             store_thinking: true,
             store_tool_io: true,
             max_thinking_size: 100_000, // ~100KB per thinking block

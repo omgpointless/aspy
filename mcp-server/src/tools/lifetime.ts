@@ -70,7 +70,7 @@ function registerLifetime(server: McpServer): void {
       }
 
       const result = await fetchApi<LifetimeStats>(
-        `/api/lifestats/stats/user/${userId}`
+        `/api/cortex/stats/user/${userId}`
       );
 
       if (!result.ok) {
@@ -139,7 +139,7 @@ function registerEmbeddings(server: McpServer): void {
       },
     },
     async () => {
-      const result = await fetchApi<EmbeddingStatusResponse>("/api/lifestats/embeddings/status");
+      const result = await fetchApi<EmbeddingStatusResponse>("/api/cortex/embeddings/status");
 
       if (!result.ok) {
         return errorContent(result.error.error);

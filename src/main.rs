@@ -434,7 +434,7 @@ async fn main() -> Result<()> {
         })
     } else {
         // Initialize event processing pipeline and query interface
-        let (pipeline, lifestats_query, embedding_indexer) = if config.cortex.enabled {
+        let (pipeline, cortex_query, embedding_indexer) = if config.cortex.enabled {
             use pipeline::{
                 cortex::CortexProcessor,
                 cortex_query::CortexQuery,
@@ -614,7 +614,7 @@ async fn main() -> Result<()> {
             context: context_state.clone(),
             streaming_thinking: proxy_streaming_thinking,
             pipeline,
-            lifestats_query,
+            cortex_query,
             embedding_indexer: indexer_handle,
         };
         tokio::spawn(async move {

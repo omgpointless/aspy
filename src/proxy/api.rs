@@ -875,7 +875,7 @@ pub struct SessionReconnectResponse {
 /// POST /api/session/reconnect - Reconnect to existing session by transcript_path
 ///
 /// Called by UserPromptSubmit hook on every user message. Checks if this
-/// transcript_path was seen before (in lifestats DB) and reconnects the
+/// transcript_path was seen before (in cortex DB) and reconnects the
 /// current user to that session, preserving continuity across proxy restarts.
 pub async fn session_reconnect(
     State(state): State<crate::proxy::ProxyState>,
@@ -888,11 +888,11 @@ pub async fn session_reconnect(
         "UserPromptSubmit hook triggered"
     );
 
-    // Need lifestats_query to check DB
+    // Need cortex_query to check DB
     let query = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::Internal("Lifestats query not available".to_string()))?;
+        .ok_or_else(|| ApiError::Internal("Cortex query not available".to_string()))?;
 
     // Check if we've seen this transcript before
     let existing = query
@@ -1566,55 +1566,55 @@ fn truncate_around_match(text: &str, keyword: &str, max_len: usize) -> String {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Lifestats Endpoints
+// Cortex Endpoints
 // ═════════════════════════════════════════════════════════════════════════════
 
 use crate::pipeline::cortex_query::{
     ContextMatch, LifetimeStats, PromptMatch, ResponseMatch, SearchMode, ThinkingMatch, TodoMatch,
 };
 
-/// Response for lifestats health endpoint
+/// Response for cortex health endpoint
 #[derive(Debug, Serialize)]
-pub struct LifestatsHealthResponse {
+pub struct CortexHealthResponse {
     pub status: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query_available: Option<bool>,
 }
 
-/// GET /api/lifestats/health - Get lifestats processor status
+/// GET /api/cortex/health - Get cortex processor status
 ///
-/// Returns status of the lifestats storage and query system
-pub async fn lifestats_health(State(state): State<super::ProxyState>) -> impl IntoResponse {
+/// Returns status of the cortex storage and query system
+pub async fn cortex_health(State(state): State<super::ProxyState>) -> impl IntoResponse {
     let has_pipeline = state.pipeline.is_some();
-    let has_query = state.lifestats_query.is_some();
+    let has_query = state.cortex_query.is_some();
 
     if has_pipeline && has_query {
-        Json(LifestatsHealthResponse {
+        Json(CortexHealthResponse {
             status: "healthy".to_string(),
-            message: "Lifestats storage and query interface operational".to_string(),
+            message: "Cortex storage and query interface operational".to_string(),
             query_available: Some(true),
         })
     } else if has_pipeline {
-        Json(LifestatsHealthResponse {
+        Json(CortexHealthResponse {
             status: "degraded".to_string(),
             message: "Storage operational but query interface unavailable".to_string(),
             query_available: Some(false),
         })
     } else {
-        Json(LifestatsHealthResponse {
+        Json(CortexHealthResponse {
             status: "disabled".to_string(),
-            message: "Lifestats not configured".to_string(),
+            message: "Cortex not configured".to_string(),
             query_available: None,
         })
     }
 }
 
-/// POST /api/lifestats/cleanup - Trigger manual retention cleanup
+/// POST /api/cortex/cleanup - Trigger manual retention cleanup
 ///
 /// Deletes old events based on retention policy. Returns number of records deleted.
 /// Note: Automatic cleanup runs every 24 hours in the background.
-pub async fn lifestats_cleanup(
+pub async fn cortex_cleanup(
     State(_state): State<super::ProxyState>,
 ) -> Result<impl IntoResponse, StatusCode> {
     // Phase 2 TODO: Implement manual cleanup trigger
@@ -1627,9 +1627,9 @@ pub async fn lifestats_cleanup(
     })))
 }
 
-/// Query parameters for lifestats search endpoints
+/// Query parameters for cortex search endpoints
 #[derive(Debug, Deserialize)]
-pub struct LifestatsSearchQuery {
+pub struct CortexSearchQuery {
     /// Search query string
     #[serde(rename = "q")]
     pub query: String,
@@ -1681,20 +1681,20 @@ pub struct TodoSearchResponse {
     pub results: Vec<TodoMatch>,
 }
 
-/// GET /api/lifestats/search/thinking - Search thinking blocks
+/// GET /api/cortex/search/thinking - Search thinking blocks
 ///
 /// Query params:
 ///   - q: Search query (required)
 ///   - limit: Max results (default: 10, max: 100)
 ///   - mode: phrase|natural|raw (default: phrase)
-pub async fn lifestats_search_thinking(
+pub async fn cortex_search_thinking(
     State(state): State<super::ProxyState>,
-    Query(params): Query<LifestatsSearchQuery>,
+    Query(params): Query<CortexSearchQuery>,
 ) -> Result<Json<ThinkingSearchResponse>, ApiError> {
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let limit = params.limit.min(100);
     let results = query_interface
@@ -1708,20 +1708,20 @@ pub async fn lifestats_search_thinking(
     }))
 }
 
-/// GET /api/lifestats/search/prompts - Search user prompts
+/// GET /api/cortex/search/prompts - Search user prompts
 ///
 /// Query params:
 ///   - q: Search query (required)
 ///   - limit: Max results (default: 10, max: 100)
 ///   - mode: phrase|natural|raw (default: phrase)
-pub async fn lifestats_search_prompts(
+pub async fn cortex_search_prompts(
     State(state): State<super::ProxyState>,
-    Query(params): Query<LifestatsSearchQuery>,
+    Query(params): Query<CortexSearchQuery>,
 ) -> Result<Json<PromptSearchResponse>, ApiError> {
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let limit = params.limit.min(100);
     let results = query_interface
@@ -1735,20 +1735,20 @@ pub async fn lifestats_search_prompts(
     }))
 }
 
-/// GET /api/lifestats/search/responses - Search assistant responses
+/// GET /api/cortex/search/responses - Search assistant responses
 ///
 /// Query params:
 ///   - q: Search query (required)
 ///   - limit: Max results (default: 10, max: 100)
 ///   - mode: phrase|natural|raw (default: phrase)
-pub async fn lifestats_search_responses(
+pub async fn cortex_search_responses(
     State(state): State<super::ProxyState>,
-    Query(params): Query<LifestatsSearchQuery>,
+    Query(params): Query<CortexSearchQuery>,
 ) -> Result<Json<ResponseSearchResponse>, ApiError> {
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let limit = params.limit.min(100);
     let results = query_interface
@@ -1778,21 +1778,21 @@ pub struct TodoHistoryQuery {
     pub mode: SearchMode,
 }
 
-/// GET /api/lifestats/todos - Search or list todo history
+/// GET /api/cortex/todos - Search or list todo history
 ///
 /// Query params:
 ///   - q: Optional search query (searches todo content)
 ///   - limit: Max results (default: 10, max: 100)
 ///   - days: Optional days to look back
 ///   - mode: phrase|natural|raw (default: phrase)
-pub async fn lifestats_todos(
+pub async fn cortex_todos(
     State(state): State<super::ProxyState>,
     Query(params): Query<TodoHistoryQuery>,
 ) -> Result<Json<TodoSearchResponse>, ApiError> {
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let limit = params.limit.min(100);
 
@@ -1817,7 +1817,7 @@ pub async fn lifestats_todos(
 
 /// Query parameters for context recovery endpoint
 #[derive(Debug, Deserialize)]
-pub struct LifestatsContextQuery {
+pub struct CortexContextQuery {
     /// Topic to search for
     pub topic: String,
     /// Maximum results (default: 10, max: 50)
@@ -1832,7 +1832,7 @@ fn default_context_limit() -> usize {
     10
 }
 
-/// GET /api/lifestats/context - Combined context recovery
+/// GET /api/cortex/context - Combined context recovery
 ///
 /// Searches across thinking blocks, user prompts, and assistant responses,
 /// then returns combined results sorted by relevance.
@@ -1841,14 +1841,14 @@ fn default_context_limit() -> usize {
 ///   - topic: Topic to search for (required)
 ///   - limit: Max results (default: 10, max: 50)
 ///   - mode: phrase|natural|raw (default: phrase)
-pub async fn lifestats_context(
+pub async fn cortex_context(
     State(state): State<super::ProxyState>,
-    Query(params): Query<LifestatsContextQuery>,
+    Query(params): Query<CortexContextQuery>,
 ) -> Result<Json<ContextSearchResponse>, ApiError> {
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let limit = params.limit.min(50);
     let results = query_interface
@@ -1862,16 +1862,16 @@ pub async fn lifestats_context(
     }))
 }
 
-/// GET /api/lifestats/stats - Get lifetime statistics
+/// GET /api/cortex/stats - Get lifetime statistics
 ///
 /// Returns aggregated statistics across all sessions: tokens, costs, tool usage, etc.
-pub async fn lifestats_stats(
+pub async fn cortex_stats(
     State(state): State<super::ProxyState>,
 ) -> Result<Json<LifetimeStats>, ApiError> {
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let stats = query_interface
         .get_lifetime_stats()
@@ -1881,24 +1881,24 @@ pub async fn lifestats_stats(
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// User-Scoped Lifestats Endpoints (Cross-Session Context Recovery)
+// User-Scoped Cortex Endpoints (Cross-Session Context Recovery)
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// GET /api/lifestats/search/user/:user_id/thinking - Search thinking blocks for a specific user
+/// GET /api/cortex/search/user/:user_id/thinking - Search thinking blocks for a specific user
 ///
 /// Query params:
 ///   - q: Search query (required)
 ///   - limit: Max results (default: 10, max: 100)
 ///   - mode: phrase|natural|raw (default: phrase)
-pub async fn lifestats_search_user_thinking(
+pub async fn cortex_search_user_thinking(
     State(state): State<super::ProxyState>,
     Path(user_id): Path<String>,
-    Query(params): Query<LifestatsSearchQuery>,
+    Query(params): Query<CortexSearchQuery>,
 ) -> Result<Json<ThinkingSearchResponse>, ApiError> {
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let limit = params.limit.min(100);
     let results = query_interface
@@ -1912,21 +1912,21 @@ pub async fn lifestats_search_user_thinking(
     }))
 }
 
-/// GET /api/lifestats/search/user/:user_id/prompts - Search user prompts for a specific user
+/// GET /api/cortex/search/user/:user_id/prompts - Search user prompts for a specific user
 ///
 /// Query params:
 ///   - q: Search query (required)
 ///   - limit: Max results (default: 10, max: 100)
 ///   - mode: phrase|natural|raw (default: phrase)
-pub async fn lifestats_search_user_prompts(
+pub async fn cortex_search_user_prompts(
     State(state): State<super::ProxyState>,
     Path(user_id): Path<String>,
-    Query(params): Query<LifestatsSearchQuery>,
+    Query(params): Query<CortexSearchQuery>,
 ) -> Result<Json<PromptSearchResponse>, ApiError> {
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let limit = params.limit.min(100);
     let results = query_interface
@@ -1940,21 +1940,21 @@ pub async fn lifestats_search_user_prompts(
     }))
 }
 
-/// GET /api/lifestats/search/user/:user_id/responses - Search assistant responses for a specific user
+/// GET /api/cortex/search/user/:user_id/responses - Search assistant responses for a specific user
 ///
 /// Query params:
 ///   - q: Search query (required)
 ///   - limit: Max results (default: 10, max: 100)
 ///   - mode: phrase|natural|raw (default: phrase)
-pub async fn lifestats_search_user_responses(
+pub async fn cortex_search_user_responses(
     State(state): State<super::ProxyState>,
     Path(user_id): Path<String>,
-    Query(params): Query<LifestatsSearchQuery>,
+    Query(params): Query<CortexSearchQuery>,
 ) -> Result<Json<ResponseSearchResponse>, ApiError> {
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let limit = params.limit.min(100);
     let results = query_interface
@@ -1968,7 +1968,7 @@ pub async fn lifestats_search_user_responses(
     }))
 }
 
-/// GET /api/lifestats/context/user/:user_id - Combined context recovery for a specific user
+/// GET /api/cortex/context/user/:user_id - Combined context recovery for a specific user
 ///
 /// Searches across thinking blocks, user prompts, and assistant responses for a specific user,
 /// then returns combined results sorted by relevance.
@@ -1977,15 +1977,15 @@ pub async fn lifestats_search_user_responses(
 ///   - topic: Topic to search for (required)
 ///   - limit: Max results (default: 10, max: 50)
 ///   - mode: phrase|natural|raw (default: phrase)
-pub async fn lifestats_context_user(
+pub async fn cortex_context_user(
     State(state): State<super::ProxyState>,
     Path(user_id): Path<String>,
-    Query(params): Query<LifestatsContextQuery>,
+    Query(params): Query<CortexContextQuery>,
 ) -> Result<Json<ContextSearchResponse>, ApiError> {
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let limit = params.limit.min(50);
     let results = query_interface
@@ -1999,17 +1999,17 @@ pub async fn lifestats_context_user(
     }))
 }
 
-/// GET /api/lifestats/stats/user/:user_id - Get lifetime statistics for a specific user
+/// GET /api/cortex/stats/user/:user_id - Get lifetime statistics for a specific user
 ///
 /// Returns aggregated statistics across all sessions belonging to the specified user.
-pub async fn lifestats_stats_user(
+pub async fn cortex_stats_user(
     State(state): State<super::ProxyState>,
     Path(user_id): Path<String>,
 ) -> Result<Json<LifetimeStats>, ApiError> {
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let stats = query_interface
         .get_user_lifetime_stats(&user_id)
@@ -2044,11 +2044,11 @@ pub struct LiveIndexerStatusResponse {
     pub index_progress_pct: f64,
 }
 
-/// GET /api/lifestats/embeddings/status - Get embedding indexer status
+/// GET /api/cortex/embeddings/status - Get embedding indexer status
 ///
 /// Returns status of the embedding indexer: provider, model, progress.
 /// Uses live indexer handle if available, falls back to database.
-pub async fn lifestats_embedding_status(
+pub async fn cortex_embedding_status(
     State(state): State<super::ProxyState>,
 ) -> Result<Json<LiveIndexerStatusResponse>, ApiError> {
     // Try to get live status from running indexer
@@ -2068,9 +2068,9 @@ pub async fn lifestats_embedding_status(
 
     // Fall back to database stats
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let stats = query_interface
         .embedding_stats()
@@ -2095,11 +2095,11 @@ pub struct ReindexResponse {
     pub message: String,
 }
 
-/// POST /api/lifestats/embeddings/reindex - Trigger a full re-index
+/// POST /api/cortex/embeddings/reindex - Trigger a full re-index
 ///
 /// Signals the running embedding indexer to clear and re-process all content.
 /// Requires the indexer to be running.
-pub async fn lifestats_embedding_reindex(
+pub async fn cortex_embedding_reindex(
     State(state): State<super::ProxyState>,
 ) -> Result<Json<ReindexResponse>, ApiError> {
     if let Some(ref handle) = state.embedding_indexer {
@@ -2115,10 +2115,10 @@ pub async fn lifestats_embedding_reindex(
     }
 }
 
-/// POST /api/lifestats/embeddings/poll - Trigger a poll for new content
+/// POST /api/cortex/embeddings/poll - Trigger a poll for new content
 ///
 /// Signals the running embedding indexer to check for un-embedded content.
-pub async fn lifestats_embedding_poll(
+pub async fn cortex_embedding_poll(
     State(state): State<super::ProxyState>,
 ) -> Result<Json<ReindexResponse>, ApiError> {
     if let Some(ref handle) = state.embedding_indexer {
@@ -2148,7 +2148,7 @@ pub struct HybridContextQuery {
     pub mode: SearchMode,
 }
 
-/// GET /api/lifestats/context/hybrid/user/:user_id - Hybrid context recovery
+/// GET /api/cortex/context/hybrid/user/:user_id - Hybrid context recovery
 ///
 /// Combines FTS5 keyword search with semantic vector search using
 /// Reciprocal Rank Fusion (RRF). Falls back to FTS-only if embeddings
@@ -2158,7 +2158,7 @@ pub struct HybridContextQuery {
 ///   - topic: Topic to search for (required)
 ///   - limit: Max results (default: 10, max: 50)
 ///   - mode: phrase|natural|raw (default: phrase)
-pub async fn lifestats_context_hybrid_user(
+pub async fn cortex_context_hybrid_user(
     State(state): State<super::ProxyState>,
     Path(user_id): Path<String>,
     Query(params): Query<HybridContextQuery>,
@@ -2167,9 +2167,9 @@ pub async fn lifestats_context_hybrid_user(
     use crate::pipeline::embeddings::{create_provider, AuthMethod, EmbeddingConfig, ProviderType};
 
     let query_interface = state
-        .lifestats_query
+        .cortex_query
         .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Lifestats query interface not available".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("Cortex query interface not available".to_string()))?;
 
     let limit = params.limit.min(50);
 
@@ -2552,8 +2552,8 @@ pub async fn get_session_history(
         }
     }
 
-    // Then, query lifestats DB for historical sessions (if available)
-    if let Some(ref query_interface) = state.lifestats_query {
+    // Then, query cortex DB for historical sessions (if available)
+    if let Some(ref query_interface) = state.cortex_query {
         if let Ok(db_sessions) = query_interface.get_user_sessions(&user_id, 100, 0) {
             // Merge DB sessions, avoiding duplicates
             let existing_ids: std::collections::HashSet<_> =

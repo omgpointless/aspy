@@ -78,7 +78,7 @@ function registerRecall(server: McpServer): void {
 
       // Always use hybrid endpoint - it auto-falls back to FTS if no embeddings
       const result = await fetchApi<HybridContextResponse>(
-        `/api/lifestats/context/hybrid/user/${userId}?${params}`
+        `/api/cortex/context/hybrid/user/${userId}?${params}`
       );
 
       if (!result.ok) {
@@ -159,7 +159,7 @@ function registerRecallThinking(server: McpServer): void {
       params.set("mode", "phrase");
 
       const result = await fetchApi<ThinkingSearchResponse>(
-        `/api/lifestats/search/user/${userId}/thinking?${params}`
+        `/api/cortex/search/user/${userId}/thinking?${params}`
       );
 
       if (!result.ok) {
@@ -235,7 +235,7 @@ function registerRecallPrompts(server: McpServer): void {
       params.set("mode", "phrase");
 
       const result = await fetchApi<PromptSearchResponse>(
-        `/api/lifestats/search/user/${userId}/prompts?${params}`
+        `/api/cortex/search/user/${userId}/prompts?${params}`
       );
 
       if (!result.ok) {
@@ -311,7 +311,7 @@ function registerRecallResponses(server: McpServer): void {
       params.set("mode", "phrase");
 
       const result = await fetchApi<ResponseSearchResponse>(
-        `/api/lifestats/search/user/${userId}/responses?${params}`
+        `/api/cortex/search/user/${userId}/responses?${params}`
       );
 
       if (!result.ok) {
@@ -395,7 +395,7 @@ function registerTodosHistory(server: McpServer): void {
       params.set("limit", String(limit));
 
       const result = await fetchApi<TodoSearchResponse>(
-        `/api/lifestats/todos?${params}`
+        `/api/cortex/todos?${params}`
       );
 
       if (!result.ok) {

@@ -119,10 +119,10 @@ pub struct ProxyState {
     pub log_dir: std::path::PathBuf,
     /// Client and provider configuration for multi-user routing
     clients: ClientsConfig,
-    /// Event processing pipeline (optional, for lifestats storage and other processors)
+    /// Event processing pipeline (optional, for cortex storage and other processors)
     pipeline: Option<Arc<EventPipeline>>,
-    /// Query interface for lifestats database (optional, requires lifestats enabled)
-    pub lifestats_query: Option<Arc<crate::pipeline::cortex_query::CortexQuery>>,
+    /// Query interface for cortex database (optional, requires cortex enabled)
+    pub cortex_query: Option<Arc<crate::pipeline::cortex_query::CortexQuery>>,
     /// Translation pipeline for OpenAI ↔ Anthropic format conversion
     translation: Arc<TranslationPipeline>,
     /// Transformation pipeline for request modification (system-reminder editing, etc.)
@@ -166,8 +166,8 @@ pub struct SharedState {
     pub streaming_thinking: StreamingThinking,
     /// Event processing pipeline (optional)
     pub pipeline: Option<Arc<EventPipeline>>,
-    /// Query interface for lifestats database (optional, requires lifestats enabled)
-    pub lifestats_query: Option<Arc<crate::pipeline::cortex_query::CortexQuery>>,
+    /// Query interface for cortex database (optional, requires cortex enabled)
+    pub cortex_query: Option<Arc<crate::pipeline::cortex_query::CortexQuery>>,
     /// Handle to the embedding indexer (optional, requires embeddings enabled)
     pub embedding_indexer: Option<crate::pipeline::embedding_indexer::IndexerHandle>,
 }
@@ -272,7 +272,7 @@ pub async fn start_proxy(
         log_dir: config.log_dir.clone(),
         clients: config.clients.clone(),
         pipeline: shared.pipeline,
-        lifestats_query: shared.lifestats_query,
+        cortex_query: shared.cortex_query,
         embedding_indexer: shared.embedding_indexer,
         translation,
         transformation,
@@ -318,76 +318,67 @@ pub async fn start_proxy(
         )
         // Log search endpoint
         .route("/api/search", axum::routing::post(api::search_logs))
-        // Lifestats endpoints
+        // cortex endpoints
+        .route("/api/cortex/health", axum::routing::get(api::cortex_health))
         .route(
-            "/api/lifestats/health",
-            axum::routing::get(api::lifestats_health),
+            "/api/cortex/cleanup",
+            axum::routing::post(api::cortex_cleanup),
         )
         .route(
-            "/api/lifestats/cleanup",
-            axum::routing::post(api::lifestats_cleanup),
+            "/api/cortex/search/thinking",
+            axum::routing::get(api::cortex_search_thinking),
         )
         .route(
-            "/api/lifestats/search/thinking",
-            axum::routing::get(api::lifestats_search_thinking),
+            "/api/cortex/search/prompts",
+            axum::routing::get(api::cortex_search_prompts),
         )
         .route(
-            "/api/lifestats/search/prompts",
-            axum::routing::get(api::lifestats_search_prompts),
+            "/api/cortex/search/responses",
+            axum::routing::get(api::cortex_search_responses),
+        )
+        .route("/api/cortex/todos", axum::routing::get(api::cortex_todos))
+        .route(
+            "/api/cortex/context",
+            axum::routing::get(api::cortex_context),
+        )
+        .route("/api/cortex/stats", axum::routing::get(api::cortex_stats))
+        // User-scoped cortex endpoints
+        .route(
+            "/api/cortex/search/user/:user_id/thinking",
+            axum::routing::get(api::cortex_search_user_thinking),
         )
         .route(
-            "/api/lifestats/search/responses",
-            axum::routing::get(api::lifestats_search_responses),
+            "/api/cortex/search/user/:user_id/prompts",
+            axum::routing::get(api::cortex_search_user_prompts),
         )
         .route(
-            "/api/lifestats/todos",
-            axum::routing::get(api::lifestats_todos),
+            "/api/cortex/search/user/:user_id/responses",
+            axum::routing::get(api::cortex_search_user_responses),
         )
         .route(
-            "/api/lifestats/context",
-            axum::routing::get(api::lifestats_context),
+            "/api/cortex/context/user/:user_id",
+            axum::routing::get(api::cortex_context_user),
         )
         .route(
-            "/api/lifestats/stats",
-            axum::routing::get(api::lifestats_stats),
-        )
-        // User-scoped lifestats endpoints
-        .route(
-            "/api/lifestats/search/user/:user_id/thinking",
-            axum::routing::get(api::lifestats_search_user_thinking),
-        )
-        .route(
-            "/api/lifestats/search/user/:user_id/prompts",
-            axum::routing::get(api::lifestats_search_user_prompts),
-        )
-        .route(
-            "/api/lifestats/search/user/:user_id/responses",
-            axum::routing::get(api::lifestats_search_user_responses),
-        )
-        .route(
-            "/api/lifestats/context/user/:user_id",
-            axum::routing::get(api::lifestats_context_user),
-        )
-        .route(
-            "/api/lifestats/stats/user/:user_id",
-            axum::routing::get(api::lifestats_stats_user),
+            "/api/cortex/stats/user/:user_id",
+            axum::routing::get(api::cortex_stats_user),
         )
         // Semantic search / hybrid endpoints
         .route(
-            "/api/lifestats/embeddings/status",
-            axum::routing::get(api::lifestats_embedding_status),
+            "/api/cortex/embeddings/status",
+            axum::routing::get(api::cortex_embedding_status),
         )
         .route(
-            "/api/lifestats/embeddings/reindex",
-            axum::routing::post(api::lifestats_embedding_reindex),
+            "/api/cortex/embeddings/reindex",
+            axum::routing::post(api::cortex_embedding_reindex),
         )
         .route(
-            "/api/lifestats/embeddings/poll",
-            axum::routing::post(api::lifestats_embedding_poll),
+            "/api/cortex/embeddings/poll",
+            axum::routing::post(api::cortex_embedding_poll),
         )
         .route(
-            "/api/lifestats/context/hybrid/user/:user_id",
-            axum::routing::get(api::lifestats_context_hybrid_user),
+            "/api/cortex/context/hybrid/user/:user_id",
+            axum::routing::get(api::cortex_context_hybrid_user),
         )
         // Proxy handler (catch-all)
         .route("/*path", any(proxy_handler))
@@ -504,7 +495,7 @@ impl ProxyState {
             false,
         );
 
-        // Process through pipeline (for lifestats storage)
+        // Process through pipeline (for cortex storage)
         let final_event = if let Some(pipeline) = &self.pipeline {
             match pipeline.process(&event, &ctx) {
                 Some(processed) => processed.into_owned(),
@@ -1483,7 +1474,7 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
         // Stream complete - now parse and emit events
         let duration = start.elapsed();
 
-        // Helper to send events through pipeline (includes session recording, lifestats, etc.)
+        // Helper to send events through pipeline (includes session recording, cortex, etc.)
         let send_event = |event: ProxyEvent| {
             let state_ref = state.clone();
             let uid = user_id_clone.clone();

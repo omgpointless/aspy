@@ -593,6 +593,258 @@ server.registerTool(
   }
 );
 
+// Tool: aspy_whoami - Current user identity and session
+server.registerTool(
+  "aspy_whoami",
+  {
+    title: "Who Am I",
+    description:
+      "Get your current user identity and active session info. Shows your API key hash, current session ID, session status, and when it started. Useful for debugging multi-user scenarios.",
+    inputSchema: {},
+    outputSchema: {
+      user_id: z.string(),
+      session_id: z.string().nullable(),
+      claude_session_id: z.string().nullable(),
+      session_started: z.string().nullable(),
+      session_source: z.string().nullable(),
+      session_status: z.string().nullable(),
+      transcript_path: z.string().nullable(),
+    },
+  },
+  async () => {
+    const userId = getUserId();
+
+    interface WhoamiResponse {
+      [key: string]: unknown;
+      user_id: string;
+      session_id?: string;
+      claude_session_id?: string;
+      session_started?: string;
+      session_source?: string;
+      session_status?: string;
+      transcript_path?: string;
+    }
+
+    // Build headers with authentication for user identification
+    const headers: Record<string, string> = {};
+    const authToken =
+      process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
+    if (authToken) {
+      if (process.env.ANTHROPIC_API_KEY) {
+        headers["x-api-key"] = authToken;
+      } else {
+        headers["Authorization"] = `Bearer ${authToken}`;
+      }
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/api/whoami`, { headers });
+
+      if (!response.ok) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error: HTTP ${response.status}: ${response.statusText}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const data = (await response.json()) as WhoamiResponse;
+
+      const summaryParts = [`🔑 **You are:** ${data.user_id}`];
+
+      if (data.session_id) {
+        summaryParts.push(`📋 **Session:** ${data.session_id}`);
+        summaryParts.push(`   Status: ${data.session_status || "unknown"}`);
+        summaryParts.push(`   Source: ${data.session_source || "unknown"}`);
+        if (data.session_started) {
+          const started = new Date(data.session_started);
+          summaryParts.push(`   Started: ${started.toLocaleString()}`);
+        }
+      } else {
+        summaryParts.push("📋 **Session:** None active");
+        if (userId) {
+          summaryParts.push(
+            `\n💡 Your user ID is ${userId.slice(0, 8)}... - session will be created on first API request.`
+          );
+        }
+      }
+
+      return {
+        content: [
+          { type: "text" as const, text: summaryParts.join("\n") },
+          { type: "text" as const, text: JSON.stringify(data, null, 2) },
+        ],
+        structuredContent: data,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      return {
+        content: [
+          { type: "text" as const, text: `Error: Failed to connect to Aspy: ${message}` },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Tool: aspy_session_history - List past sessions
+server.registerTool(
+  "aspy_session_history",
+  {
+    title: "Session History",
+    description:
+      "Get a list of your past Claude Code sessions. Shows when sessions started/ended, their source, and statistics. Useful for finding previous work sessions or recovering context from past sessions.",
+    inputSchema: {
+      limit: z
+        .number()
+        .min(1)
+        .max(100)
+        .default(10)
+        .describe("Maximum sessions to return (default: 10)"),
+      offset: z
+        .number()
+        .min(0)
+        .default(0)
+        .describe("Skip first N sessions (for pagination)"),
+    },
+    outputSchema: {
+      user_id: z.string(),
+      count: z.number(),
+      has_more: z.boolean(),
+      sessions: z.array(
+        z.object({
+          session_id: z.string(),
+          started: z.string(),
+          ended: z.string().nullable(),
+          source: z.string(),
+          end_reason: z.string().nullable(),
+          stats: z.object({
+            requests: z.number(),
+            tool_calls: z.number(),
+            cost_usd: z.number(),
+          }),
+        })
+      ),
+    },
+  },
+  async ({ limit = 10, offset = 0 }) => {
+    interface SessionHistoryItem {
+      session_id: string;
+      user_id: string;
+      claude_session_id?: string;
+      started: string;
+      ended?: string;
+      source: string;
+      end_reason?: string;
+      transcript_path?: string;
+      stats: {
+        requests: number;
+        tool_calls: number;
+        input_tokens: number;
+        output_tokens: number;
+        cost_usd: number;
+      };
+    }
+
+    interface SessionHistoryResponse {
+      [key: string]: unknown;
+      user_id: string;
+      count: number;
+      has_more: boolean;
+      sessions: SessionHistoryItem[];
+    }
+
+    // Build headers with authentication
+    const headers: Record<string, string> = {};
+    const authToken =
+      process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
+    if (authToken) {
+      if (process.env.ANTHROPIC_API_KEY) {
+        headers["x-api-key"] = authToken;
+      } else {
+        headers["Authorization"] = `Bearer ${authToken}`;
+      }
+    }
+
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/session-history?${params}`,
+        { headers }
+      );
+
+      if (!response.ok) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error: HTTP ${response.status}: ${response.statusText}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const data = (await response.json()) as SessionHistoryResponse;
+
+      const summaryParts = [
+        `📜 **Session History** (${data.count} session${data.count !== 1 ? "s" : ""})`,
+      ];
+
+      if (data.count === 0) {
+        summaryParts.push("\nNo sessions found.");
+      } else {
+        summaryParts.push("");
+        for (const s of data.sessions) {
+          const date = s.started.split("T")[0];
+          const time = s.started.split("T")[1]?.slice(0, 5) || "";
+          const status = s.ended ? "✓" : "▶";
+          const endInfo = s.ended
+            ? ` (ended: ${s.end_reason || "unknown"})`
+            : " (active)";
+
+          summaryParts.push(
+            `${status} **[${date} ${time}]** ${s.session_id.slice(0, 12)}...${endInfo}`
+          );
+          summaryParts.push(
+            `   ${s.stats.tool_calls} tools, $${s.stats.cost_usd.toFixed(3)}`
+          );
+        }
+
+        if (data.has_more) {
+          summaryParts.push(
+            `\n_More sessions available. Use offset=${offset + limit} to see next page._`
+          );
+        }
+      }
+
+      return {
+        content: [
+          { type: "text" as const, text: summaryParts.join("\n") },
+          { type: "text" as const, text: JSON.stringify(data, null, 2) },
+        ],
+        structuredContent: data,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      return {
+        content: [
+          { type: "text" as const, text: `Error: Failed to connect to Aspy: ${message}` },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
 // Tool: aspy_context_breakdown - Detailed context content analysis
 server.registerTool(
   "aspy_context_breakdown",

@@ -289,6 +289,12 @@ pub async fn start_proxy(
             "/api/context/snapshot",
             axum::routing::get(api::get_context_snapshot),
         )
+        // Whoami and session history endpoints
+        .route("/api/whoami", axum::routing::get(api::get_whoami))
+        .route(
+            "/api/session-history",
+            axum::routing::get(api::get_session_history),
+        )
         // Session management endpoints
         .route("/api/sessions", axum::routing::get(api::get_sessions))
         .route(

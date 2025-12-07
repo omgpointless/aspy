@@ -938,6 +938,81 @@ impl LifestatsQuery {
         })
     }
 
+    /// Get session history for a specific user
+    ///
+    /// Returns a list of sessions from the database for the specified user,
+    /// ordered by start time (most recent first).
+    ///
+    /// # Arguments
+    /// * `user_id` - The user identifier (api_key_hash)
+    /// * `limit` - Maximum number of sessions to return
+    /// * `offset` - Number of sessions to skip (for pagination)
+    ///
+    /// # Returns
+    /// Vector of session history items matching the criteria.
+    pub fn get_user_sessions(
+        &self,
+        user_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> anyhow::Result<Vec<crate::proxy::api::SessionHistoryItem>> {
+        let conn = self.conn()?;
+
+        // Query sessions for this user
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT
+                s.id,
+                s.user_id,
+                s.started_at,
+                s.ended_at,
+                s.source,
+                COALESCE(s.total_tokens, 0),
+                COALESCE(s.total_cost_usd, 0),
+                COALESCE(s.tool_calls, 0),
+                COALESCE(s.thinking_blocks, 0),
+                (SELECT COUNT(*) FROM api_usage a WHERE a.session_id = s.id) as request_count
+            FROM sessions s
+            WHERE s.user_id = ?1
+            ORDER BY s.started_at DESC
+            LIMIT ?2 OFFSET ?3
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![user_id, limit as i64, offset as i64], |row| {
+            let session_id: String = row.get(0)?;
+            let user_id: String = row.get(1)?;
+            let started_at: String = row.get(2)?;
+            let ended_at: Option<String> = row.get(3)?;
+            let source: Option<String> = row.get(4)?;
+            let total_tokens: i64 = row.get(5)?;
+            let total_cost_usd: f64 = row.get(6)?;
+            let tool_calls: i64 = row.get(7)?;
+            let request_count: i64 = row.get(9)?;
+
+            Ok(crate::proxy::api::SessionHistoryItem {
+                session_id,
+                user_id,
+                claude_session_id: None, // Not stored in DB
+                started: started_at,
+                ended: ended_at,
+                source: source.unwrap_or_else(|| "unknown".to_string()),
+                end_reason: None,      // Not stored in DB currently
+                transcript_path: None, // Not stored in DB currently
+                stats: crate::proxy::api::SessionStatsSummary {
+                    requests: request_count as usize,
+                    tool_calls: tool_calls as usize,
+                    input_tokens: (total_tokens / 2) as u64, // Approximate split
+                    output_tokens: (total_tokens / 2) as u64,
+                    cost_usd: total_cost_usd,
+                },
+            })
+        })?;
+
+        let sessions: Vec<_> = rows.filter_map(|r| r.ok()).collect();
+        Ok(sessions)
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     // Global Queries (All Sessions)
     // ═════════════════════════════════════════════════════════════════════════

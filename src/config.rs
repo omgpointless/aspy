@@ -1668,7 +1668,7 @@ impl Config {
                 "cortex",
                 FeatureCategory::Storage,
                 self.cortex.enabled,
-                "Cortex Memory (SQLite)",
+                "Cortex memory (SQLite)",
             ),
             // ─────────────────────────────────────────────────────────────────
             // Pipeline
@@ -1791,7 +1791,7 @@ impl Config {
                 "otel",
                 FeatureCategory::Pipeline,
                 true,
-                "Azure telemetry",
+                "Open telemetry",
             )
             .with_detail(format!("service: {}", self.otel.service_name))
         } else {
@@ -1800,7 +1800,7 @@ impl Config {
                 "otel",
                 FeatureCategory::Pipeline,
                 false,
-                "Azure telemetry",
+                "Open telemetry",
             )
         };
         features.push(otel_def);

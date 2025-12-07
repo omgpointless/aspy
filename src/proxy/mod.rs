@@ -934,48 +934,83 @@ async fn proxy_handler(
                 // Check for context recovery scenario
                 // After parse_request, we have a snapshot stored - use it to estimate tokens
                 // Compare estimate-to-estimate to avoid false positives from systematic error
-                let user_key = user_id.as_deref().unwrap_or("unknown");
-                if let Some(snapshot) = state.parser.get_context_snapshot(user_key).await {
-                    let estimated = snapshot.estimate_tokens();
-                    // Check recovery in a separate scope to avoid holding lock across await
-                    // check_recovery returns Some(previous_estimate) if recovery detected
-                    let recovery_info = {
-                        if let Ok(mut ctx) = state.context_state.lock() {
-                            if let Some(previous_estimate) = ctx.check_recovery(estimated) {
-                                let percent_recovered = if previous_estimate > 0 {
-                                    ((previous_estimate - estimated) as f32
-                                        / previous_estimate as f32)
-                                        * 100.0
-                                } else {
-                                    0.0
-                                };
-                                Some((previous_estimate, percent_recovered))
-                            } else {
-                                None
-                            }
+                //
+                // IMPORTANT: Skip haiku models - they're used for Task tool subagents and have
+                // small, independent contexts. Including them would:
+                // 1. Trigger false recovery events (haiku context << main model context)
+                // 2. Pollute previous_estimated_tokens with small haiku values
+                // 3. Cause the next main model request to look like "recovery"
+                let request_model = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+                    .ok()
+                    .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from));
+
+                let is_haiku = request_model
+                    .as_ref()
+                    .map(|m| m.contains("haiku"))
+                    .unwrap_or(false);
+
+                if is_haiku {
+                    tracing::debug!(
+                        "Skipping recovery detection for haiku model (Task tool subagent)"
+                    );
+                } else {
+                    let user_key = user_id.as_deref().unwrap_or("unknown");
+                    if let Some(snapshot) = state.parser.get_context_snapshot(user_key).await {
+                        let estimated = snapshot.estimate_tokens();
+
+                        // Sanity check: don't trust estimates below a minimum threshold.
+                        // A zero or near-zero estimate likely indicates a parsing issue,
+                        // not actual context recovery. Real recovery still has hundreds
+                        // of tokens (the compacted summary, system prompt, etc.)
+                        const MIN_TRUSTED_ESTIMATE: u32 = 100;
+                        if estimated < MIN_TRUSTED_ESTIMATE {
+                            tracing::debug!(
+                                "Skipping recovery detection: estimated {} tokens below minimum threshold {}",
+                                estimated,
+                                MIN_TRUSTED_ESTIMATE
+                            );
                         } else {
-                            None
+                            // Check recovery in a separate scope to avoid holding lock across await
+                            // check_recovery returns Some(previous_estimate) if recovery detected
+                            let recovery_info = {
+                                if let Ok(mut ctx) = state.context_state.lock() {
+                                    if let Some(previous_estimate) = ctx.check_recovery(estimated) {
+                                        let percent_recovered = if previous_estimate > 0 {
+                                            ((previous_estimate - estimated) as f32
+                                                / previous_estimate as f32)
+                                                * 100.0
+                                        } else {
+                                            0.0
+                                        };
+                                        Some((previous_estimate, percent_recovered))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            };
+
+                            // Emit recovery event outside of lock scope
+                            if let Some((previous_estimate, percent_recovered)) = recovery_info {
+                                tracing::info!(
+                                    "Context recovery detected for {}: estimated {} < previous estimate {} ({:.1}% drop)",
+                                    user_key,
+                                    estimated,
+                                    previous_estimate,
+                                    percent_recovered
+                                );
+
+                                // Emit ContextRecovery event for TUI display
+                                let recovery_event = crate::events::ProxyEvent::ContextRecovery {
+                                    timestamp: chrono::Utc::now(),
+                                    tokens_before: previous_estimate,
+                                    tokens_after: estimated,
+                                    percent_recovered,
+                                };
+                                state.send_event(recovery_event, user_id.as_deref()).await;
+                            }
                         }
-                    };
-
-                    // Emit recovery event outside of lock scope
-                    if let Some((previous_estimate, percent_recovered)) = recovery_info {
-                        tracing::info!(
-                            "Context recovery detected for {}: estimated {} < previous estimate {} ({:.1}% drop)",
-                            user_key,
-                            estimated,
-                            previous_estimate,
-                            percent_recovered
-                        );
-
-                        // Emit ContextRecovery event for TUI display
-                        let recovery_event = crate::events::ProxyEvent::ContextRecovery {
-                            timestamp: chrono::Utc::now(),
-                            tokens_before: previous_estimate,
-                            tokens_after: estimated,
-                            percent_recovered,
-                        };
-                        state.send_event(recovery_event, user_id.as_deref()).await;
                     }
                 }
             }

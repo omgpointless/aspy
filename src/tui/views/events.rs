@@ -427,6 +427,22 @@ pub(crate) fn format_event_line(tracked: &TrackedEvent) -> String {
                 percent_recovered
             )
         }
+        ProxyEvent::TodoSnapshot {
+            timestamp,
+            pending_count,
+            in_progress_count,
+            completed_count,
+            ..
+        } => {
+            format!(
+                "[{}] {}📋 Todo: {} pending, {} in progress, {} done",
+                timestamp.format("%H:%M:%S"),
+                user_prefix,
+                pending_count,
+                in_progress_count,
+                completed_count
+            )
+        }
     }
 }
 
@@ -928,6 +944,64 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
                 *tokens_after as f64 / 1000.0,
                 tokens_freed,
                 percent_recovered
+            ))
+        }
+        ProxyEvent::TodoSnapshot {
+            timestamp,
+            todos_json,
+            pending_count,
+            in_progress_count,
+            completed_count,
+        } => {
+            // Parse todos for display
+            let todos_display = if let Ok(todos) =
+                serde_json::from_str::<Vec<serde_json::Value>>(todos_json)
+            {
+                todos
+                    .iter()
+                    .map(|t| {
+                        let content = t
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        let status = t
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        let icon = match status {
+                            "pending" => "⬜",
+                            "in_progress" => "🔄",
+                            "completed" => "✅",
+                            _ => "❓",
+                        };
+                        format!("{} {}", icon, content)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                "Failed to parse todos".to_string()
+            };
+
+            RenderableContent::Markdown(format!(
+                "{}## 📋 Todo Snapshot\n\n\
+                **Timestamp:** {}\n\n\
+                ---\n\n\
+                ### Status Counts\n\n\
+                - **Pending:** {}  \n\
+                - **In Progress:** {}  \n\
+                - **Completed:** {}\n\n\
+                ---\n\n\
+                ### Todo List\n\n\
+                {}\n\n\
+                ---\n\n\
+                *This snapshot was captured when Claude called the TodoWrite tool.\n\
+                Stored in cortex for cross-session recall.*",
+                tracking_header,
+                timestamp.to_rfc3339(),
+                pending_count,
+                in_progress_count,
+                completed_count,
+                todos_display
             ))
         }
     }

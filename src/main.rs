@@ -74,6 +74,9 @@ pub struct ContextState {
     // === Recovery detection (prevents stale high-water warnings) ===
     /// Estimated tokens from current request body (set before response arrives)
     pub estimated_tokens: Option<u32>,
+    /// Previous request's estimated tokens (for apples-to-apples comparison).
+    /// Comparing estimate-to-estimate avoids false positives from systematic estimation error.
+    pub previous_estimated_tokens: Option<u32>,
     /// True when request estimate is significantly lower than previous context.
     /// Indicates CC likely crunched tool_results - suppresses stale warnings.
     pub recovery_pending: bool,
@@ -86,6 +89,7 @@ impl ContextState {
             limit,
             last_warned_threshold: None,
             estimated_tokens: None,
+            previous_estimated_tokens: None,
             recovery_pending: false,
         }
     }
@@ -155,32 +159,52 @@ impl ContextState {
     /// Check for context recovery scenario and set recovery_pending flag
     ///
     /// Called at request time with estimated tokens from the request body.
-    /// If estimated is significantly lower than current_tokens (from previous call),
-    /// it indicates CC likely crunched tool_results and context is recovering.
+    /// Compares estimate-to-estimate (not estimate-to-actual) to avoid false positives
+    /// from systematic estimation errors. Both estimates use the same heuristic,
+    /// so errors cancel out when detecting relative drops.
     ///
     /// # Arguments
     /// * `estimated` - Estimated input tokens from current request body
     ///
     /// # Returns
-    /// `true` if recovery was detected, `false` otherwise
-    pub fn check_recovery(&mut self, estimated: u32) -> bool {
+    /// `Some(previous_estimate)` if recovery was detected, `None` otherwise.
+    /// The returned previous estimate can be used for event emission.
+    pub fn check_recovery(&mut self, estimated: u32) -> Option<u32> {
         self.estimated_tokens = Some(estimated);
 
-        // If estimated is 30%+ less than previous context, mark as recovering
-        // This means CC likely crunched tool_results before sending
-        let previous = self.current_tokens as u32;
-        if previous > 0 && estimated < (previous as f64 * 0.7) as u32 {
-            self.recovery_pending = true;
+        // Capture previous estimate before we update it
+        let prev_estimate = self.previous_estimated_tokens;
+
+        // Compare estimate-to-estimate to avoid false positives
+        // If we compared estimate to actual (current_tokens), systematic underestimation
+        // of ~30% would trigger false recovery on every request
+        let recovery_detected = if let Some(prev) = prev_estimate {
+            // 30%+ drop in estimated tokens suggests CC crunched tool_results
+            prev > 0 && estimated < (prev as f64 * 0.7) as u32
+        } else {
+            // First request has no baseline - can't detect recovery
+            false
+        };
+
+        if recovery_detected {
             tracing::debug!(
-                "Context recovery detected: estimated {} << previous {} (threshold: {})",
+                "Context recovery detected: estimated {} << previous estimate {} (threshold: {})",
                 estimated,
-                previous,
-                (previous as f64 * 0.7) as u32
+                prev_estimate.unwrap_or(0),
+                (prev_estimate.unwrap_or(0) as f64 * 0.7) as u32
             );
-            true
+            self.recovery_pending = true;
         } else {
             self.recovery_pending = false;
-            false
+        }
+
+        // Store this estimate for next comparison (must happen after check)
+        self.previous_estimated_tokens = Some(estimated);
+
+        if recovery_detected {
+            prev_estimate
+        } else {
+            None
         }
     }
 

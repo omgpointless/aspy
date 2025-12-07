@@ -415,12 +415,18 @@ impl Session {
     }
 
     /// Record an event in this session
-    pub fn record_event(&mut self, event: ProxyEvent) {
+    ///
+    /// Returns an optional synthesized event to emit (e.g., TodoSnapshot when
+    /// we intercept a TodoWrite tool call).
+    pub fn record_event(&mut self, event: ProxyEvent) -> Option<ProxyEvent> {
         self.last_activity = Instant::now();
         self.status = SessionStatus::Active;
 
         // Update stats based on event type
         self.stats.update(&event);
+
+        // Track synthesized events to return
+        let mut synthesized_event = None;
 
         // Update context state and intercept special tool calls
         match &event {
@@ -454,6 +460,31 @@ impl Session {
                         "TodoWrite intercepted: {} todos",
                         todos.len()
                     );
+
+                    // Count by status for denormalized storage
+                    let mut pending_count = 0u32;
+                    let mut in_progress_count = 0u32;
+                    let mut completed_count = 0u32;
+                    for todo in &todos {
+                        match todo.status {
+                            TodoStatus::Pending => pending_count += 1,
+                            TodoStatus::InProgress => in_progress_count += 1,
+                            TodoStatus::Completed => completed_count += 1,
+                        }
+                    }
+
+                    // Serialize to JSON for storage
+                    let todos_json = serde_json::to_string(&todos).unwrap_or_default();
+
+                    // Create TodoSnapshot event for cortex storage
+                    synthesized_event = Some(ProxyEvent::TodoSnapshot {
+                        timestamp: Utc::now(),
+                        todos_json,
+                        pending_count,
+                        in_progress_count,
+                        completed_count,
+                    });
+
                     self.todos = todos;
                     self.todos_updated = Some(Utc::now());
                 }
@@ -466,6 +497,8 @@ impl Session {
             self.events.pop_front();
         }
         self.events.push_back(event);
+
+        synthesized_event
     }
 
     /// Check if session should be marked idle
@@ -691,14 +724,15 @@ impl SessionManager {
     /// Record an event for a user
     ///
     /// If no session exists, creates an implicit one (FirstSeen).
-    pub fn record_event(&mut self, user_id: &UserId, event: ProxyEvent) {
+    /// Returns an optional synthesized event to emit (e.g., TodoSnapshot).
+    pub fn record_event(&mut self, user_id: &UserId, event: ProxyEvent) -> Option<ProxyEvent> {
         // Ensure user has a session
         let key = self.active_by_user.get(user_id).cloned();
 
         match key {
             Some(key) => {
                 if let Some(session) = self.sessions.get_mut(&key) {
-                    session.record_event(event);
+                    return session.record_event(event);
                 }
             }
             None => {
@@ -707,11 +741,12 @@ impl SessionManager {
                 // Record the event in the newly created session
                 if let Some(key) = self.active_by_user.get(user_id) {
                     if let Some(session) = self.sessions.get_mut(key) {
-                        session.record_event(event);
+                        return session.record_event(event);
                     }
                 }
             }
         }
+        None
     }
 
     /// Get session by key

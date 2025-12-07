@@ -42,6 +42,7 @@ impl EventProcessor for LoggingProcessor {
             ProxyEvent::ResponseAugmented { .. } => "ResponseAugmented",
             ProxyEvent::PreCompactHook { .. } => "PreCompactHook",
             ProxyEvent::ContextRecovery { .. } => "ContextRecovery",
+            ProxyEvent::TodoSnapshot { .. } => "TodoSnapshot",
         };
 
         // Log event type with context

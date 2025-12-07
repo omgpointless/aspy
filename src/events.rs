@@ -170,6 +170,20 @@ pub enum ProxyEvent {
         /// Percentage of context recovered
         percent_recovered: f32,
     },
+
+    /// Todo list snapshot from TodoWrite tool call
+    ///
+    /// Captured when Claude calls TodoWrite to update its task list.
+    /// Stored in cortex for cross-session recall and context recovery.
+    TodoSnapshot {
+        timestamp: DateTime<Utc>,
+        /// The todo list as JSON string (serialized Vec<TodoItem>)
+        todos_json: String,
+        /// Count of todos by status for quick queries
+        pending_count: u32,
+        in_progress_count: u32,
+        completed_count: u32,
+    },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -249,7 +263,8 @@ impl TrackedEvent {
             | ProxyEvent::RequestTransformed { timestamp, .. }
             | ProxyEvent::ResponseAugmented { timestamp, .. }
             | ProxyEvent::PreCompactHook { timestamp, .. }
-            | ProxyEvent::ContextRecovery { timestamp, .. } => *timestamp,
+            | ProxyEvent::ContextRecovery { timestamp, .. }
+            | ProxyEvent::TodoSnapshot { timestamp, .. } => *timestamp,
         }
     }
 }

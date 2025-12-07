@@ -451,7 +451,7 @@ impl ProxyState {
         let tracked = TrackedEvent::new(
             final_event.clone(),
             user_id.map(|s| s.to_string()),
-            session_id,
+            session_id.clone(),
         );
 
         // Send tracked event to TUI and storage channels
@@ -459,11 +459,65 @@ impl ProxyState {
         let _ = self.event_tx_storage.send(tracked).await;
 
         // Also record raw event to user's session (SessionManager tracks its own events)
+        // May return synthesized events (e.g., TodoSnapshot) to emit
         if let Some(uid) = user_id {
-            if let Ok(mut sessions) = self.sessions.lock() {
-                sessions.record_event(&sessions::UserId::new(uid), final_event);
+            let synthesized = if let Ok(mut sessions) = self.sessions.lock() {
+                sessions.record_event(&sessions::UserId::new(uid), final_event)
+            } else {
+                None
+            };
+
+            // Emit any synthesized events (goes to storage only, not back to sessions)
+            if let Some(synth_event) = synthesized {
+                self.emit_synthesized_event(synth_event, user_id, session_id)
+                    .await;
             }
         }
+    }
+
+    /// Emit a synthesized event (e.g., TodoSnapshot)
+    ///
+    /// Unlike `emit_event`, this does NOT record back to sessions (to avoid recursion).
+    /// Used for derived/computed events that should only go to storage and TUI.
+    async fn emit_synthesized_event(
+        &self,
+        event: ProxyEvent,
+        user_id: Option<&str>,
+        session_id: Option<String>,
+    ) {
+        // Get transcript path from session if available
+        let transcript_path: Option<String> = user_id.and_then(|uid| {
+            self.sessions.lock().ok().and_then(|s| {
+                s.get_user_session(&sessions::UserId::new(uid))
+                    .and_then(|sess| sess.transcript_path.clone())
+            })
+        });
+
+        let ctx = ProcessContext::new(
+            session_id.as_deref(),
+            user_id,
+            transcript_path.as_deref(),
+            false,
+        );
+
+        // Process through pipeline (for lifestats storage)
+        let final_event = if let Some(pipeline) = &self.pipeline {
+            match pipeline.process(&event, &ctx) {
+                Some(processed) => processed.into_owned(),
+                None => return, // Event was filtered out
+            }
+        } else {
+            event
+        };
+
+        // Wrap in TrackedEvent
+        let tracked = TrackedEvent::new(final_event, user_id.map(|s| s.to_string()), session_id);
+
+        // Send to TUI and storage (NOT to sessions - that would recurse)
+        let _ = self.event_tx_tui.send(tracked.clone()).await;
+        let _ = self.event_tx_storage.send(tracked).await;
+
+        tracing::debug!("Emitted synthesized TodoSnapshot event");
     }
 }
 
@@ -875,22 +929,23 @@ async fn proxy_handler(
 
                 // Check for context recovery scenario
                 // After parse_request, we have a snapshot stored - use it to estimate tokens
-                // and compare against previous context to detect CC crunching tool_results
+                // Compare estimate-to-estimate to avoid false positives from systematic error
                 let user_key = user_id.as_deref().unwrap_or("unknown");
                 if let Some(snapshot) = state.parser.get_context_snapshot(user_key).await {
                     let estimated = snapshot.estimate_tokens();
                     // Check recovery in a separate scope to avoid holding lock across await
+                    // check_recovery returns Some(previous_estimate) if recovery detected
                     let recovery_info = {
                         if let Ok(mut ctx) = state.context_state.lock() {
-                            let previous_tokens = ctx.current_tokens as u32;
-                            if ctx.check_recovery(estimated) {
-                                let percent_recovered = if previous_tokens > 0 {
-                                    ((previous_tokens - estimated) as f32 / previous_tokens as f32)
+                            if let Some(previous_estimate) = ctx.check_recovery(estimated) {
+                                let percent_recovered = if previous_estimate > 0 {
+                                    ((previous_estimate - estimated) as f32
+                                        / previous_estimate as f32)
                                         * 100.0
                                 } else {
                                     0.0
                                 };
-                                Some((previous_tokens, percent_recovered))
+                                Some((previous_estimate, percent_recovered))
                             } else {
                                 None
                             }
@@ -900,19 +955,19 @@ async fn proxy_handler(
                     };
 
                     // Emit recovery event outside of lock scope
-                    if let Some((previous_tokens, percent_recovered)) = recovery_info {
+                    if let Some((previous_estimate, percent_recovered)) = recovery_info {
                         tracing::info!(
-                            "Context recovery detected for {}: estimated {} < previous {} ({:.1}% drop)",
+                            "Context recovery detected for {}: estimated {} < previous estimate {} ({:.1}% drop)",
                             user_key,
                             estimated,
-                            previous_tokens,
+                            previous_estimate,
                             percent_recovered
                         );
 
                         // Emit ContextRecovery event for TUI display
                         let recovery_event = crate::events::ProxyEvent::ContextRecovery {
                             timestamp: chrono::Utc::now(),
-                            tokens_before: previous_tokens,
+                            tokens_before: previous_estimate,
                             tokens_after: estimated,
                             percent_recovered,
                         };

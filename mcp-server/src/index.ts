@@ -724,9 +724,9 @@ server.registerTool(
         z.object({
           session_id: z.string(),
           started: z.string(),
-          ended: z.string().nullable(),
+          ended: z.string().nullish(),
           source: z.string(),
-          end_reason: z.string().nullable(),
+          end_reason: z.string().nullish(),
           stats: z.object({
             requests: z.number(),
             tool_calls: z.number(),

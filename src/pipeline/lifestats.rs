@@ -200,6 +200,24 @@ impl LifestatsProcessor {
         self.metrics.snapshot()
     }
 
+    /// Extract searchable text from todos JSON for FTS indexing
+    ///
+    /// Concatenates all todo `content` fields into a single searchable string.
+    /// Example: "Fix auth bug. Run tests. Deploy to staging."
+    fn extract_todo_content_for_fts(todos_json: &str) -> String {
+        // Parse JSON and extract content fields
+        if let Ok(todos) = serde_json::from_str::<Vec<serde_json::Value>>(todos_json) {
+            todos
+                .iter()
+                .filter_map(|t| t.get("content").and_then(|v| v.as_str()))
+                .collect::<Vec<_>>()
+                .join(". ")
+        } else {
+            // Fallback: use raw JSON as searchable text
+            todos_json.to_string()
+        }
+    }
+
     /// Dedicated writer thread - runs SQLite operations
     fn writer_thread(
         rx: mpsc::Receiver<WriterCommand>,
@@ -391,6 +409,9 @@ impl LifestatsProcessor {
         }
         if current_version < 5 {
             Self::migrate_v4_to_v5(conn)?;
+        }
+        if current_version < 6 {
+            Self::migrate_v5_to_v6(conn)?;
         }
 
         Ok(())
@@ -712,6 +733,74 @@ impl LifestatsProcessor {
         Ok(())
     }
 
+    /// v5 → v6: Add todos table for tracking Claude's task lists
+    ///
+    /// Stores snapshots of TodoWrite tool calls for cross-session recall.
+    /// Each TodoWrite call creates a new row (append-only), enabling:
+    /// - "What was I working on yesterday?"
+    /// - Session discovery via todo keywords
+    /// - Progress tracking across sessions
+    fn migrate_v5_to_v6(conn: &Connection) -> anyhow::Result<()> {
+        // Check if table already exists (idempotent)
+        let has_table: bool = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='todos'",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if !has_table {
+            conn.execute_batch(
+                r#"
+                -- Todo snapshots (append-only for history)
+                -- Each TodoWrite call = new row, captures state at that moment
+                CREATE TABLE IF NOT EXISTS todos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+
+                    -- The todo list as JSON array (preserves exact Claude state)
+                    -- Format: [{"content": "...", "status": "...", "activeForm": "..."}]
+                    todos_json TEXT NOT NULL,
+
+                    -- Denormalized counts for efficient dashboard queries
+                    pending_count INTEGER NOT NULL DEFAULT 0,
+                    in_progress_count INTEGER NOT NULL DEFAULT 0,
+                    completed_count INTEGER NOT NULL DEFAULT 0,
+
+                    FOREIGN KEY (session_id) REFERENCES sessions(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_todos_session ON todos(session_id);
+                CREATE INDEX IF NOT EXISTS idx_todos_timestamp ON todos(timestamp DESC);
+
+                -- Full-text search on todo content (concatenated from todos_json)
+                CREATE VIRTUAL TABLE IF NOT EXISTS todos_fts USING fts5(
+                    content,
+                    content=todos,
+                    content_rowid=id,
+                    tokenize='porter unicode61'
+                );
+
+                -- Embedding table for semantic search
+                CREATE TABLE IF NOT EXISTS todos_embeddings (
+                    content_id INTEGER PRIMARY KEY,
+                    embedding BLOB NOT NULL,
+                    embedded_at TEXT NOT NULL,
+                    FOREIGN KEY (content_id) REFERENCES todos(id) ON DELETE CASCADE
+                );
+                "#,
+            )?;
+        }
+
+        conn.execute(
+            "UPDATE metadata SET value = '6' WHERE key = 'schema_version'",
+            [],
+        )?;
+
+        tracing::info!("Migrated lifestats database from v5 to v6 (added todos table)");
+        Ok(())
+    }
+
     /// Retention cleanup - deletes old data and syncs FTS indexes
     ///
     /// # FTS External Content Sync Contract
@@ -784,6 +873,18 @@ impl LifestatsProcessor {
             responses_fts_deleted
         );
 
+        // 3b. Delete from todos_fts FIRST
+        let todos_fts_deleted: i64 = conn.execute(
+            r#"
+            DELETE FROM todos_fts
+            WHERE rowid IN (
+                SELECT id FROM todos WHERE timestamp < ?1
+            )
+            "#,
+            params![cutoff_str],
+        )? as i64;
+        tracing::debug!("Deleted {} entries from todos_fts", todos_fts_deleted);
+
         // 4. Delete from embedding tables BEFORE base tables
         //    (FK cascade is disabled, so we delete explicitly)
         conn.execute(
@@ -813,6 +914,15 @@ impl LifestatsProcessor {
             "#,
             params![cutoff_str],
         )?;
+        conn.execute(
+            r#"
+            DELETE FROM todos_embeddings
+            WHERE content_id IN (
+                SELECT id FROM todos WHERE timestamp < ?1
+            )
+            "#,
+            params![cutoff_str],
+        )?;
 
         // 5. Now delete from base tables (order matters for FK relationships)
         deleted += conn.execute(
@@ -827,6 +937,11 @@ impl LifestatsProcessor {
 
         deleted += conn.execute(
             "DELETE FROM assistant_responses WHERE timestamp < ?1",
+            params![cutoff_str],
+        )? as u64;
+
+        deleted += conn.execute(
+            "DELETE FROM todos WHERE timestamp < ?1",
             params![cutoff_str],
         )? as u64;
 
@@ -1025,6 +1140,36 @@ impl LifestatsProcessor {
                 conn.execute(
                     "INSERT INTO responses_fts(rowid, content) VALUES (?1, ?2)",
                     params![rowid, content],
+                )?;
+            }
+
+            ProxyEvent::TodoSnapshot {
+                timestamp,
+                todos_json,
+                pending_count,
+                in_progress_count,
+                completed_count,
+            } => {
+                conn.execute(
+                    "INSERT INTO todos (session_id, timestamp, todos_json, pending_count, in_progress_count, completed_count)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        session_id,
+                        timestamp.to_rfc3339(),
+                        todos_json,
+                        pending_count,
+                        in_progress_count,
+                        completed_count
+                    ],
+                )?;
+
+                // Update FTS index with concatenated todo content for search
+                // Extract content from todos_json for searchable text
+                let rowid = conn.last_insert_rowid();
+                let fts_content = Self::extract_todo_content_for_fts(todos_json);
+                conn.execute(
+                    "INSERT INTO todos_fts(rowid, content) VALUES (?1, ?2)",
+                    params![rowid, fts_content],
                 )?;
             }
 

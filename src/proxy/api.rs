@@ -98,6 +98,7 @@ fn event_type_name(event: &ProxyEvent) -> &'static str {
         ProxyEvent::ResponseAugmented { .. } => "ResponseAugmented",
         ProxyEvent::PreCompactHook { .. } => "PreCompactHook",
         ProxyEvent::ContextRecovery { .. } => "ContextRecovery",
+        ProxyEvent::TodoSnapshot { .. } => "TodoSnapshot",
     }
 }
 

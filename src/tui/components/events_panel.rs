@@ -498,6 +498,9 @@ fn event_color_style(event: &ProxyEvent, theme: &Theme) -> Style {
         ProxyEvent::ContextRecovery { .. } => Style::default()
             .fg(theme.context_compact)
             .add_modifier(Modifier::BOLD),
+        ProxyEvent::TodoSnapshot { .. } => Style::default()
+            .fg(theme.tool_call)
+            .add_modifier(Modifier::DIM),
     }
 }
 

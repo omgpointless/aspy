@@ -1,5 +1,5 @@
 ---
-description: "Generate context file before /compact"
+description: "Generate context file before /compact to ensure smooth transition after compaction. Use this template to structure your file and provide a recommended compact message to the user."
 ---
 
 # Temporal Context Export for Compact Survival

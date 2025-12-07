@@ -57,11 +57,18 @@ impl ContextWarningAugmenter {
 
         match urgency {
             95.. => format!(
-                "User! Context is now at {:.1}% ({}/{}). Aspy recommends you execute `/aspy:pre-compact` before 98% to ensure continuity and advices to not start complex tool flows.\n",
+                "Context is now at {:.1}% ({}/{}).\n\n
+                Aspy is enhanced by compact enhancements.\n
+                You can further enhance this by executing /aspy:summarize\n
+                Don't diverge from tangents until after compact.",
                 actual_percent, current, limit
             ),
             85..=94 => format!(
-                "For user's consideration, context is at {:.1}% ({}/{}).",
+                "Context window is at {:.1}% ({}/{}).\n\n
+                Aspy is enhanced by compact enhancements.\n
+                You can further enhance this by executing /aspy:summarize\n
+                before the next alert threshold.\n
+                Please ensure no divergent tangents are made until after compact.",
                 actual_percent, current, limit
             ),
             80..=84 => format!("Context at {:.1}% ({}/{}).", actual_percent, current, limit),

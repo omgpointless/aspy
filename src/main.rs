@@ -546,7 +546,7 @@ async fn main() -> Result<()> {
                                         Err(e) => {
                                             registry.fail("embeddings", e.to_string());
                                             tracing::error!(
-                                                "Failed to start embedding indexer: {}",
+                                                "⚠ Failed to start embedding indexer: {}",
                                                 e
                                             );
                                             None
@@ -554,7 +554,7 @@ async fn main() -> Result<()> {
                                     }
                                 } else {
                                     registry
-                                        .fail("embeddings", "Provider not ready (check API key)");
+                                        .fail("embeddings", "⚠ Provider not ready (check API key)");
                                     tracing::debug!(
                                         "Embedding provider not ready (provider: {})",
                                         config.embeddings.provider
@@ -573,19 +573,19 @@ async fn main() -> Result<()> {
                         }
                         Err(e) => {
                             registry.fail("cortex", e.to_string());
-                            tracing::error!("Failed to initialize cortex query interface: {}", e);
+                            tracing::error!("⚠ Failed to initialize cortex query interface: {}", e);
                             (Some(std::sync::Arc::new(pipeline)), None, None)
                         }
                     }
                 }
                 Err(e) => {
                     registry.fail("cortex", e.to_string());
-                    tracing::error!("Failed to initialize cortex processor: {}", e);
+                    tracing::error!("⚠ Failed to initialize cortex processor: {}", e);
                     (None, None, None)
                 }
             }
         } else {
-            tracing::debug!("cortex processor disabled in config");
+            tracing::warn!("⚠ cortex processor disabled in config");
             (None, None, None)
         };
 

@@ -4,24 +4,34 @@ description: "Generate context file before /compact to ensure smooth transition 
 
 # Temporal Context Export for Compact Survival
 
-Gather recent relevant tangents and context to ensure a smooth transition through `/compact` without losing continuity or the user's current direction.
+Generate a compact survival document using real session data from Aspy.
 
-## Instructions
+## Phase 1: Gather Session Data
 
-1. **Analyze the recent conversation** for:
-   - Active work threads (what's being built/fixed right now)
-   - Recent decisions and their rationale
-   - Tangents that inform current direction (even if not directly code)
-   - User preferences/patterns expressed this session
-   - Any "we should..." or "next we'll..." statements
+**FIRST**, spawn the `summarize` agent (Haiku) to collect current session data:
 
-2. **Generate a context file** at:
-   ```
-   .claude/temporal-context/YYYY-MM-DD-HH-MM-<slug>.md
-   ```
-   Where `<slug>` is a 2-4 word kebab-case summary (e.g., `theme-light-mode-fixes`)
+```
+Agent: summarize
+```
 
-3. **Use this structure**:
+This agent will return structured data including:
+- Current todo state (pending/in-progress/completed tasks)
+- Key thinking blocks from this session
+- Recent tool activity (files being modified)
+- Session metrics (tokens, costs, duration)
+
+**Wait for the agent to return before proceeding to Phase 2.**
+
+## Phase 2: Generate Context File
+
+Using the data from Phase 1 **combined with your own conversation context**, generate a context file at:
+```
+.claude/temporal-context/YYYY-MM-DD-HH-MM-<slug>.md
+```
+
+Where `<slug>` is a 2-4 word kebab-case summary (e.g., `plugin-summarize-agent`)
+
+### Template Structure
 
 ```markdown
 # Temporal Context: <Topic>
@@ -34,14 +44,14 @@ Gather recent relevant tangents and context to ensure a smooth transition throug
 ## Active Work Thread
 
 What is actively being worked on RIGHT NOW. Be specific:
-- Current task/feature
+- Current task/feature (from todo state)
 - Where we left off (file:line if applicable)
 - Immediate next step
 
 ## Recent Decisions
 
 Key decisions made this session that inform ongoing work:
-- Decision → Rationale (brief)
+- Decision → Rationale (extract from thinking blocks)
 
 ## User Direction & Intent
 
@@ -50,20 +60,15 @@ What the user is trying to achieve (may be broader than current task):
 - Implicit preferences observed
 - "Vibe" of the session (exploratory? focused? debugging?)
 
-## Tangents That Matter
-
-Context from side discussions that's relevant:
-- Topic → Why it matters for continuation
-
 ## Files in Play
 
-Files actively being modified or referenced:
+Files actively being modified or referenced (from tool activity):
 - `path` - what's happening there
 
 ## Do NOT Forget
 
 Critical items that must survive compact:
-- Unfinished work
+- Unfinished work (from pending todos)
 - Promised follow-ups
 - User-stated priorities
 
@@ -72,11 +77,15 @@ Critical items that must survive compact:
 ## Resume Prompt
 
 [One paragraph: exactly what a post-compact Claude needs to know to continue seamlessly]
+
+## Recovery Keywords
+
+[3-5 searchable terms for `aspy_recall` post-compact: feature names, file paths, concepts]
 ```
 
-## After Generating the File
+## Phase 3: Provide Compact Recommendation
 
-Reply with a recommended `/compact` message in this format:
+Reply with a recommended `/compact` message:
 
 ```
 Ready for compact. Recommended message:
@@ -86,8 +95,19 @@ Ready for compact. Recommended message:
 
 ## Style Guidelines
 
+- **Ground in Aspy data** - Use todos, thinking blocks, and tool activity as the factual backbone
+- **Augment with conversation context** - Fill gaps the data misses: user intent, promises, session vibe
+- The thinking blocks contain Claude's reasoning; interpret them to extract decisions
 - Prioritize RECENT context over session history
 - Be terse—this survives compact, not archives
 - Capture intent, not just actions
-- Include emotional/directional context ("user wants polish, not features")
-- Reference the generated file path explicitly in your compact recommendation
+- Include recovery keywords for post-compact `aspy_recall` searches
+
+## What Goes Where
+
+| Source | Best For |
+|--------|----------|
+| `aspy_todos` | Active Work Thread, Do NOT Forget |
+| `aspy_events(Thinking)` | Recent Decisions, reasoning behind choices |
+| `aspy_events(ToolCall)` | Files in Play |
+| Conversation analysis | User Direction & Intent, Tangents That Matter, session vibe |

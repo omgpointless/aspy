@@ -599,7 +599,7 @@ server.registerTool(
   {
     title: "Who Am I",
     description:
-      "Get your current user identity and active session info. Shows your API key hash, current session ID, session status, and when it started. Useful for debugging multi-user scenarios.",
+      "Get your current user identity and active session info. Shows your user ID (client_id or API key hash), current session ID, session status, and when it started. Useful for debugging multi-user scenarios.",
     inputSchema: {},
     outputSchema: {
       user_id: z.string(),
@@ -613,6 +613,17 @@ server.registerTool(
   },
   async () => {
     const userId = getUserId();
+    if (!userId) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Error: Cannot determine user identity. Ensure ASPY_CLIENT_ID or ANTHROPIC_API_KEY is set.",
+          },
+        ],
+        isError: true,
+      };
+    }
 
     interface WhoamiResponse {
       [key: string]: unknown;
@@ -625,20 +636,12 @@ server.registerTool(
       transcript_path?: string;
     }
 
-    // Build headers with authentication for user identification
-    const headers: Record<string, string> = {};
-    const authToken =
-      process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
-    if (authToken) {
-      if (process.env.ANTHROPIC_API_KEY) {
-        headers["x-api-key"] = authToken;
-      } else {
-        headers["Authorization"] = `Bearer ${authToken}`;
-      }
-    }
+    // Pass user identity via query param (supports ASPY_CLIENT_ID and api_key_hash)
+    const params = new URLSearchParams();
+    params.set("user", userId);
 
     try {
-      const response = await fetch(`${API_BASE}/api/whoami`, { headers });
+      const response = await fetch(`${API_BASE}/api/whoami?${params}`);
 
       if (!response.ok) {
         return {
@@ -654,7 +657,10 @@ server.registerTool(
 
       const data = (await response.json()) as WhoamiResponse;
 
-      const summaryParts = [`🔑 **You are:** ${data.user_id}`];
+      // Determine identity type for display
+      const isClientId = process.env.ASPY_CLIENT_ID ? true : false;
+      const idLabel = isClientId ? "client_id" : "api_key_hash";
+      const summaryParts = [`🔑 **You are:** ${data.user_id} (${idLabel})`];
 
       if (data.session_id) {
         summaryParts.push(`📋 **Session:** ${data.session_id}`);
@@ -666,11 +672,9 @@ server.registerTool(
         }
       } else {
         summaryParts.push("📋 **Session:** None active");
-        if (userId) {
-          summaryParts.push(
-            `\n💡 Your user ID is ${userId.slice(0, 8)}... - session will be created on first API request.`
-          );
-        }
+        summaryParts.push(
+          `\n💡 Session will be created on first API request through Aspy.`
+        );
       }
 
       return {
@@ -733,6 +737,19 @@ server.registerTool(
     },
   },
   async ({ limit = 10, offset = 0 }) => {
+    const userId = getUserId();
+    if (!userId) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Error: Cannot determine user identity. Ensure ASPY_CLIENT_ID or ANTHROPIC_API_KEY is set.",
+          },
+        ],
+        isError: true,
+      };
+    }
+
     interface SessionHistoryItem {
       session_id: string;
       user_id: string;
@@ -759,26 +776,15 @@ server.registerTool(
       sessions: SessionHistoryItem[];
     }
 
-    // Build headers with authentication
-    const headers: Record<string, string> = {};
-    const authToken =
-      process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
-    if (authToken) {
-      if (process.env.ANTHROPIC_API_KEY) {
-        headers["x-api-key"] = authToken;
-      } else {
-        headers["Authorization"] = `Bearer ${authToken}`;
-      }
-    }
-
+    // Pass user identity via query param (supports ASPY_CLIENT_ID and api_key_hash)
     const params = new URLSearchParams();
+    params.set("user", userId);
     params.set("limit", String(limit));
     params.set("offset", String(offset));
 
     try {
       const response = await fetch(
-        `${API_BASE}/api/session-history?${params}`,
-        { headers }
+        `${API_BASE}/api/session-history?${params}`
       );
 
       if (!response.ok) {

@@ -2225,7 +2225,7 @@ fn extract_user_id_from_headers(headers: &HeaderMap) -> Option<String> {
 /// Response for GET /api/whoami
 #[derive(Debug, Serialize)]
 pub struct WhoamiResponse {
-    /// User ID (first 16 chars of SHA-256 hash of API key)
+    /// User ID (first 16 chars of SHA-256 hash of API key, or client_id if using URL routing)
     pub user_id: String,
     /// Current session key (if any)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2247,20 +2247,38 @@ pub struct WhoamiResponse {
     pub transcript_path: Option<String>,
 }
 
+/// Query parameters for GET /api/whoami
+#[derive(Debug, Deserialize)]
+pub struct WhoamiQuery {
+    /// User identifier (client_id like "foundry" or api_key_hash)
+    /// If provided, overrides header-based identification
+    pub user: Option<String>,
+}
+
 /// GET /api/whoami - Returns the current user's identity and session info
 ///
-/// Extracts user ID from request headers (API key or OAuth token) and returns
-/// information about the user's current session.
+/// Identifies user via (in priority order):
+/// 1. `?user=` query param (supports ASPY_CLIENT_ID / URL path routing)
+/// 2. x-api-key header (hashed)
+/// 3. Authorization: Bearer header (hashed)
+///
+/// Query params:
+///   - user: User identifier (client_id or api_key_hash)
 pub async fn get_whoami(
     State(state): State<crate::proxy::ProxyState>,
     headers: HeaderMap,
+    Query(params): Query<WhoamiQuery>,
 ) -> Result<Json<WhoamiResponse>, ApiError> {
-    let user_id = extract_user_id_from_headers(&headers).ok_or_else(|| {
-        ApiError::BadRequest(
-            "Cannot determine user identity. Ensure x-api-key or Authorization header is set."
-                .to_string(),
-        )
-    })?;
+    // Priority: query param > header extraction
+    let user_id = params
+        .user
+        .or_else(|| extract_user_id_from_headers(&headers))
+        .ok_or_else(|| {
+            ApiError::BadRequest(
+                "Cannot determine user identity. Provide ?user= param or x-api-key/Authorization header."
+                    .to_string(),
+            )
+        })?;
 
     let sessions = state
         .sessions
@@ -2303,6 +2321,9 @@ pub async fn get_whoami(
 /// Query parameters for GET /api/session-history
 #[derive(Debug, Deserialize)]
 pub struct SessionHistoryQuery {
+    /// User identifier (client_id like "foundry" or api_key_hash)
+    /// If provided, overrides header-based identification
+    pub user: Option<String>,
     /// Maximum sessions to return (default: 20, max: 100)
     #[serde(default = "default_history_limit")]
     pub limit: usize,
@@ -2364,7 +2385,13 @@ pub struct SessionHistoryResponse {
 /// Returns a list of sessions the user has participated in, including
 /// both in-memory history and persisted sessions from the database.
 ///
+/// Identifies user via (in priority order):
+/// 1. `?user=` query param (supports ASPY_CLIENT_ID / URL path routing)
+/// 2. x-api-key header (hashed)
+/// 3. Authorization: Bearer header (hashed)
+///
 /// Query params:
+///   - user: User identifier (client_id or api_key_hash)
 ///   - limit: Max sessions to return (default: 20, max: 100)
 ///   - offset: Skip first N sessions (default: 0)
 ///   - after: Only sessions after this timestamp (ISO 8601)
@@ -2374,12 +2401,17 @@ pub async fn get_session_history(
     headers: HeaderMap,
     Query(params): Query<SessionHistoryQuery>,
 ) -> Result<Json<SessionHistoryResponse>, ApiError> {
-    let user_id = extract_user_id_from_headers(&headers).ok_or_else(|| {
-        ApiError::BadRequest(
-            "Cannot determine user identity. Ensure x-api-key or Authorization header is set."
-                .to_string(),
-        )
-    })?;
+    // Priority: query param > header extraction
+    let user_id = params
+        .user
+        .clone()
+        .or_else(|| extract_user_id_from_headers(&headers))
+        .ok_or_else(|| {
+            ApiError::BadRequest(
+                "Cannot determine user identity. Provide ?user= param or x-api-key/Authorization header."
+                    .to_string(),
+            )
+        })?;
 
     let limit = params.limit.min(100);
 

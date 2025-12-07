@@ -114,4 +114,37 @@ impl CortexQuery {
 
         Ok(result)
     }
+
+    /// Get the last context tokens for a session
+    ///
+    /// Used when reconnecting to a session to estimate the context window state.
+    /// Returns the sum of input + cache_creation + cache_read tokens from the
+    /// most recent non-haiku API call for this session.
+    ///
+    /// # Arguments
+    /// * `session_id` - The session identifier
+    ///
+    /// # Returns
+    /// `Some(tokens)` if found, `None` if no API usage data exists
+    pub fn get_session_last_context(&self, session_id: &str) -> anyhow::Result<Option<u64>> {
+        let conn = self.pool.get()?;
+
+        // Get the most recent non-haiku API usage for context estimation
+        // Context = input_tokens + cache_creation_tokens + cache_read_tokens
+        let result: Option<u64> = conn
+            .query_row(
+                r#"
+                SELECT (input_tokens + cache_creation_tokens + cache_read_tokens) as context_tokens
+                FROM api_usage
+                WHERE session_id = ?1 AND model NOT LIKE '%haiku%'
+                ORDER BY timestamp DESC
+                LIMIT 1
+                "#,
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        Ok(result)
+    }
 }

@@ -1657,8 +1657,8 @@ impl Config {
             // Storage
             // ─────────────────────────────────────────────────────────────────
             FeatureDefinition::optional(
-                "jsonl-logging",
-                "jsonl-logging",
+                "jsonl",
+                "jsonl",
                 FeatureCategory::Storage,
                 self.features.json_logging,
                 "JSONL logging",

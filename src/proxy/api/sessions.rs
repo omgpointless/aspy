@@ -211,6 +211,11 @@ pub async fn session_reconnect(
             }));
         }
 
+        // Query for the last context tokens to estimate context window on resume
+        let estimated_context = query
+            .get_session_last_context(&session_id)
+            .map_err(|e| ApiError::Internal(format!("Context query failed: {}", e)))?;
+
         // Reconnect: update in-memory session to use this session_id
         let mut sessions = state
             .sessions
@@ -218,8 +223,12 @@ pub async fn session_reconnect(
             .map_err(|e| ApiError::Internal(format!("Failed to lock sessions: {}", e)))?;
 
         let user_id = UserId::new(&request.user_id);
-        let reconnected =
-            sessions.reconnect_to_session(&user_id, &session_id, request.transcript_path.clone());
+        let reconnected = sessions.reconnect_to_session(
+            &user_id,
+            &session_id,
+            request.transcript_path.clone(),
+            estimated_context,
+        );
 
         if reconnected {
             tracing::info!(
@@ -227,6 +236,7 @@ pub async fn session_reconnect(
                 cc_session_id = ?request.session_id,
                 user_id = %request.user_id,
                 transcript_path = %request.transcript_path,
+                estimated_context = ?estimated_context,
                 "Session reconnected via transcript_path"
             );
 

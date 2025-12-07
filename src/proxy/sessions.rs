@@ -674,12 +674,17 @@ impl SessionManager {
     /// working on this transcript_path. Replaces the current implicit session
     /// with the historical session_id to preserve continuity.
     ///
+    /// If `estimated_context` is provided, the session's context state is initialized
+    /// to that value instead of starting at 0. This is used when reconnecting to
+    /// a session loaded from the database to avoid the context window appearing empty.
+    ///
     /// Returns true if reconnection succeeded.
     pub fn reconnect_to_session(
         &mut self,
         user_id: &UserId,
         session_id: &str,
         transcript_path: String,
+        estimated_context: Option<u64>,
     ) -> bool {
         // Check if user already has a session
         if let Some(current_key) = self.active_by_user.get(user_id).cloned() {
@@ -714,6 +719,17 @@ impl SessionManager {
             self.context_limit,
         );
         session.transcript_path = Some(transcript_path);
+
+        // If we have an estimated context from DB, set it so the context window
+        // doesn't appear empty on resume
+        if let Some(tokens) = estimated_context {
+            session.context.current_tokens = tokens;
+            tracing::debug!(
+                session_id = %session_id,
+                estimated_tokens = tokens,
+                "Initialized context from DB estimate"
+            );
+        }
 
         self.sessions.insert(key.clone(), session);
         self.active_by_user.insert(user_id.clone(), key);

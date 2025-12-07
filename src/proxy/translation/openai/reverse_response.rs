@@ -287,8 +287,10 @@ impl OpenAiToAnthropicResponse {
 #[derive(Debug, Deserialize)]
 struct OpenAiChatCompletion {
     id: String,
+    /// Some providers (e.g., ZAI/GLM) omit this field
+    #[serde(default)]
     #[allow(dead_code)]
-    object: String,
+    object: Option<String>,
     #[allow(dead_code)]
     created: u64,
     model: String,
@@ -342,10 +344,13 @@ struct OpenAiUsage {
 #[derive(Debug, Deserialize)]
 struct OpenAiStreamChunk {
     id: String,
+    /// Some providers (e.g., ZAI/GLM) omit this field
+    #[serde(default)]
     #[allow(dead_code)]
-    object: String,
+    object: Option<String>,
+    #[serde(default)]
     #[allow(dead_code)]
-    created: u64,
+    created: Option<u64>,
     model: String,
     choices: Vec<OpenAiStreamChoice>,
     #[serde(default)]

@@ -585,6 +585,7 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
             ttfb,
             duration,
             body,
+            raw_body: _,
         } => {
             let body_content = if let Some(json_body) = body {
                 format!(

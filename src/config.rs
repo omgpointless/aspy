@@ -252,6 +252,33 @@ pub struct Transformers {
     pub compact_enhancer: Option<crate::proxy::transformation::CompactEnhancerConfig>,
 }
 
+/// Count tokens endpoint handling configuration
+///
+/// Claude Code aggressively calls `/v1/messages/count_tokens` at startup,
+/// which can overwhelm rate-limited backends or backends that don't support
+/// this endpoint (like OpenAI-compatible APIs).
+///
+/// This config enables request deduplication and rate limiting.
+#[derive(Debug, Clone)]
+pub struct CountTokens {
+    /// Enable count_tokens request caching and rate limiting
+    pub enabled: bool,
+    /// Cache TTL in seconds (how long to reuse responses)
+    pub cache_ttl_seconds: u64,
+    /// Maximum requests per second to forward to backend
+    pub rate_limit_per_second: f64,
+}
+
+impl Default for CountTokens {
+    fn default() -> Self {
+        Self {
+            enabled: true, // On by default - prevents startup spam
+            cache_ttl_seconds: 10,
+            rate_limit_per_second: 2.0,
+        }
+    }
+}
+
 /// Cortex storage configuration
 #[derive(Debug, Clone)]
 pub struct CortexConfig {
@@ -366,6 +393,18 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub api_format: ApiFormat,
 
+    /// Custom API path for this provider (e.g., "/chat/completions" without /v1 prefix)
+    ///
+    /// When set, this path is appended to base_url instead of the default paths:
+    /// - Anthropic default: `/v1/messages`
+    /// - OpenAI default: `/v1/chat/completions`
+    ///
+    /// Use this for providers with non-standard paths like:
+    /// - z.ai: base_url="https://api.z.ai/api/coding/paas/v4", api_path="/chat/completions"
+    /// - OpenRouter: base_url="https://openrouter.ai/api/v1", api_path="/chat/completions"
+    #[serde(default)]
+    pub api_path: Option<String>,
+
     /// Authentication configuration for this provider
     /// If not specified, uses passthrough (client's auth headers forwarded)
     #[serde(default)]
@@ -377,6 +416,23 @@ impl ProviderConfig {
     #[allow(dead_code)] // Reserved for TUI display
     pub fn display_name(&self) -> &str {
         self.name.as_deref().unwrap_or(&self.base_url)
+    }
+
+    /// Get the effective API path for this provider
+    ///
+    /// If `api_path` is set, returns that. Otherwise returns the default
+    /// path for the provider's api_format:
+    /// - Anthropic: `/v1/messages`
+    /// - OpenAI: `/v1/chat/completions`
+    pub fn effective_api_path(&self) -> &str {
+        if let Some(ref path) = self.api_path {
+            path.as_str()
+        } else {
+            match self.api_format {
+                ApiFormat::Anthropic => "/v1/messages",
+                ApiFormat::Openai => "/v1/chat/completions",
+            }
+        }
     }
 }
 
@@ -559,6 +615,15 @@ impl ClientsConfig {
         self.get_client_provider(client_id).map(|p| &p.api_format)
     }
 
+    /// Get the effective API path for a client's provider
+    ///
+    /// Returns the provider's custom api_path if set, otherwise the default
+    /// path for the provider's api_format. Returns None if client not found.
+    pub fn get_client_api_path(&self, client_id: &str) -> Option<&str> {
+        self.get_client_provider(client_id)
+            .map(|p| p.effective_api_path())
+    }
+
     /// Get the effective authentication config for a client
     ///
     /// Resolution order:
@@ -630,6 +695,9 @@ pub struct Config {
 
     /// Request transformation settings
     pub transformers: Transformers,
+
+    /// Count tokens endpoint handling (dedup + rate limit)
+    pub count_tokens: CountTokens,
 
     /// OpenTelemetry export configuration
     pub otel: OtelConfig,
@@ -711,6 +779,14 @@ struct FileTransformers {
     compact_enhancer: Option<crate::proxy::transformation::CompactEnhancerConfig>,
 }
 
+/// Count tokens config as loaded from file
+#[derive(Debug, Deserialize, Default)]
+struct FileCountTokens {
+    enabled: Option<bool>,
+    cache_ttl_seconds: Option<u64>,
+    rate_limit_per_second: Option<f64>,
+}
+
 /// OpenTelemetry config as loaded from file
 #[derive(Debug, Deserialize, Default)]
 struct FileOtelConfig {
@@ -751,6 +827,9 @@ struct FileConfig {
 
     /// Optional [transformers] section
     transformers: Option<FileTransformers>,
+
+    /// Optional [count_tokens] section
+    count_tokens: Option<FileCountTokens>,
 
     /// Optional [otel] section (OpenTelemetry export)
     otel: Option<FileOtelConfig>,
@@ -888,12 +967,19 @@ impl Config {
 #
 # # Provider with OpenAI-compatible API (e.g., OpenRouter)
 # [providers.openrouter]
-# base_url = "https://openrouter.ai/api"
+# base_url = "https://openrouter.ai/api/v1"
 # api_format = "openai"  # Translate Anthropic <-> OpenAI format
+# api_path = "/chat/completions"  # Optional: custom path (default: /v1/chat/completions)
 # [providers.openrouter.auth]
 # method = "bearer"
 # key_env = "OPENROUTER_API_KEY"
 # strip_incoming = true
+#
+# # Provider with non-standard path (e.g., z.ai)
+# [providers.zai]
+# base_url = "https://api.z.ai/api/coding/paas/v4"
+# api_format = "openai"
+# api_path = "/chat/completions"  # Path appended to base_url (no /v1 prefix)
 "#
             .to_string();
         }
@@ -917,6 +1003,11 @@ impl Config {
                     "api_format = \"{}\"\n",
                     provider.api_format.as_str()
                 ));
+            }
+
+            // Serialize custom api_path if set
+            if let Some(api_path) = &provider.api_path {
+                output.push_str(&format!("api_path = \"{}\"\n", api_path));
             }
 
             // Serialize auth config if present
@@ -1543,6 +1634,21 @@ service_version = "{otel_service_version}"
             compact_enhancer: file_transformers.compact_enhancer,
         };
 
+        // Count tokens settings: file config only
+        let file_count_tokens = file.count_tokens.unwrap_or_default();
+        let count_tokens_defaults = CountTokens::default();
+        let count_tokens = CountTokens {
+            enabled: file_count_tokens
+                .enabled
+                .unwrap_or(count_tokens_defaults.enabled),
+            cache_ttl_seconds: file_count_tokens
+                .cache_ttl_seconds
+                .unwrap_or(count_tokens_defaults.cache_ttl_seconds),
+            rate_limit_per_second: file_count_tokens
+                .rate_limit_per_second
+                .unwrap_or(count_tokens_defaults.rate_limit_per_second),
+        };
+
         // OpenTelemetry settings: file config + env var for connection string
         // Connection string precedence: APPLICATIONINSIGHTS_CONNECTION_STRING env var > config file
         let file_otel = file.otel.unwrap_or_default();
@@ -1591,6 +1697,7 @@ service_version = "{otel_service_version}"
             embeddings,
             translation,
             transformers,
+            count_tokens,
             otel,
             clients,
         }
@@ -1616,6 +1723,7 @@ impl Default for Config {
             embeddings: EmbeddingsConfig::default(),
             translation: Translation::default(),
             transformers: Transformers::default(),
+            count_tokens: CountTokens::default(),
             otel: OtelConfig::default(),
             clients: ClientsConfig::default(),
         }
@@ -2289,5 +2397,130 @@ mod tests {
         assert_eq!(features.storage, Some(false));
         assert_eq!(features.thinking_panel, Some(false));
         assert_eq!(features.stats, Some(false));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Provider api_path tests
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_provider_effective_api_path_default_anthropic() {
+        let provider = ProviderConfig {
+            base_url: "https://api.anthropic.com".to_string(),
+            name: None,
+            api_format: ApiFormat::Anthropic,
+            api_path: None,
+            auth: None,
+        };
+        assert_eq!(provider.effective_api_path(), "/v1/messages");
+    }
+
+    #[test]
+    fn test_provider_effective_api_path_default_openai() {
+        let provider = ProviderConfig {
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            name: None,
+            api_format: ApiFormat::Openai,
+            api_path: None,
+            auth: None,
+        };
+        assert_eq!(provider.effective_api_path(), "/v1/chat/completions");
+    }
+
+    #[test]
+    fn test_provider_effective_api_path_custom_overrides_default() {
+        // z.ai example: custom path without /v1 prefix
+        let provider = ProviderConfig {
+            base_url: "https://api.z.ai/api/coding/paas/v4".to_string(),
+            name: None,
+            api_format: ApiFormat::Openai,
+            api_path: Some("/chat/completions".to_string()),
+            auth: None,
+        };
+        assert_eq!(provider.effective_api_path(), "/chat/completions");
+    }
+
+    #[test]
+    fn test_provider_effective_api_path_custom_with_anthropic_format() {
+        // Custom Anthropic-compatible endpoint
+        let provider = ProviderConfig {
+            base_url: "https://custom.example.com/api/v2".to_string(),
+            name: None,
+            api_format: ApiFormat::Anthropic,
+            api_path: Some("/messages".to_string()),
+            auth: None,
+        };
+        assert_eq!(provider.effective_api_path(), "/messages");
+    }
+
+    #[test]
+    fn test_clients_config_get_client_api_path() {
+        let mut clients = HashMap::new();
+        clients.insert(
+            "zai".to_string(),
+            ClientConfig {
+                name: "Z.AI".to_string(),
+                provider: "zai".to_string(),
+                tags: vec![],
+                auth: None,
+            },
+        );
+
+        let mut providers = HashMap::new();
+        providers.insert(
+            "zai".to_string(),
+            ProviderConfig {
+                base_url: "https://api.z.ai/api/coding/paas/v4".to_string(),
+                name: None,
+                api_format: ApiFormat::Openai,
+                api_path: Some("/chat/completions".to_string()),
+                auth: None,
+            },
+        );
+
+        let config = ClientsConfig { clients, providers };
+
+        // Client with custom api_path
+        assert_eq!(config.get_client_api_path("zai"), Some("/chat/completions"));
+
+        // Unknown client returns None
+        assert_eq!(config.get_client_api_path("unknown"), None);
+    }
+
+    #[test]
+    fn test_provider_api_path_serialization() {
+        let mut config = Config::default();
+
+        // Add a provider with custom api_path
+        config.clients.providers.insert(
+            "zai".to_string(),
+            ProviderConfig {
+                base_url: "https://api.z.ai/api/coding/paas/v4".to_string(),
+                name: None,
+                api_format: ApiFormat::Openai,
+                api_path: Some("/chat/completions".to_string()),
+                auth: None,
+            },
+        );
+
+        let toml_str = config.to_toml();
+
+        // Verify api_path is serialized
+        assert!(
+            toml_str.contains("api_path = \"/chat/completions\""),
+            "api_path should be serialized.\nTOML:\n{}",
+            toml_str
+        );
+
+        // Verify round-trip
+        let parsed: Result<FileConfig, _> = toml::from_str(&toml_str);
+        assert!(parsed.is_ok(), "Config should round-trip");
+        let file_config = parsed.unwrap();
+
+        let provider = file_config
+            .providers
+            .get("zai")
+            .expect("zai provider should exist");
+        assert_eq!(provider.api_path, Some("/chat/completions".to_string()));
     }
 }

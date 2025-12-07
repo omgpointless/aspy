@@ -9,6 +9,7 @@
 #   ./claude.sh dev-2 anthropic    # Explicit: client + provider type
 #   ./claude.sh openrouter         # OpenRouter provider via /openrouter route
 #   ./claude.sh local              # Local Ollama via /local route
+#   ./claude.sh zai                # Zai provider via /zai route
 #   ./claude.sh --resume           # Resume most recent session
 #   ./claude.sh dev-1 --resume     # Resume most recent with client
 #   ./claude.sh dev-1 -r abc123    # Resume specific session
@@ -18,6 +19,7 @@
 #   anthropic  - Uses ANTHROPIC_BASE_URL (default, for direct Anthropic API)
 #   openrouter - Uses ANTHROPIC_BASE_URL, unsets ANTHROPIC_FOUNDRY_RESOURCE
 #   ollama     - Uses ANTHROPIC_BASE_URL for local Ollama server
+#   zai        - Uses ANTHROPIC_BASE_URL for Zai provider
 #
 # Resume Options:
 #   --resume, -r              Resume most recent session
@@ -30,6 +32,7 @@
 #   ./claude.sh dev-2 anthropic    # → ANTHROPIC_BASE_URL=http://localhost:8080/dev-2
 #   ./claude.sh openrouter         # → ANTHROPIC_BASE_URL=http://localhost:8080/openrouter
 #   ./claude.sh local              # → ANTHROPIC_BASE_URL=http://localhost:8080/local (Ollama)
+#   ./claude.sh zai                # → ANTHROPIC_BASE_URL=http://localhost:8080/zai
 #   ./claude.sh --resume           # Resume most recent session (bare proxy)
 #   ./claude.sh dev-1 --resume     # Resume most recent session via dev-1
 #   ./claude.sh dev-1 -r abc123    # Resume session abc123 via dev-1
@@ -54,13 +57,13 @@ while [[ $# -gt 0 ]]; do
         --resume|-r)
             RESUME_FLAG="--resume"
             # Check if next arg is a session ID (not another flag or provider)
-            if [[ -n "${2:-}" && ! "$2" =~ ^- && ! "$2" =~ ^(foundry|anthropic|openrouter|ollama)$ ]]; then
+            if [[ -n "${2:-}" && ! "$2" =~ ^- && ! "$2" =~ ^(foundry|anthropic|openrouter|ollama|zai)$ ]]; then
                 RESUME_SESSION="$2"
                 shift
             fi
             shift
             ;;
-        foundry|anthropic|openrouter|ollama)
+        foundry|anthropic|openrouter|ollama|zai)
             # Explicit provider type
             if [[ -z "$CLIENT_ID" ]]; then
                 CLIENT_ID="$1"
@@ -93,6 +96,9 @@ if [[ -z "$PROVIDER_TYPE" ]]; then
             ;;
         openrouter*)
             PROVIDER_TYPE="openrouter"
+            ;;
+        zai*)
+            PROVIDER_TYPE="zai"
             ;;
         local*|ollama*)
             PROVIDER_TYPE="ollama"
@@ -146,6 +152,13 @@ case "$PROVIDER_TYPE" in
         ;;
     ollama)
         # Local Ollama: use base URL, ensure foundry resource is unset
+        ANTHROPIC_BASE_URL="${PROXY_URL}" \
+        ANTHROPIC_FOUNDRY_RESOURCE= \
+        ASPY_CLIENT_ID="${CLIENT_ID}" \
+        claude "${CLAUDE_ARGS[@]}"
+        ;;
+    zai)
+        # Zai: use base URL, ensure foundry resource is unset
         ANTHROPIC_BASE_URL="${PROXY_URL}" \
         ANTHROPIC_FOUNDRY_RESOURCE= \
         ASPY_CLIENT_ID="${CLIENT_ID}" \

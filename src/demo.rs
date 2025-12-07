@@ -148,6 +148,7 @@ fn generate_demo_sequence() -> Vec<(ProxyEvent, u64)> {
                     "text": "{\"isNewTopic\": true, \"title\": \"Code Review Task\"}"
                 }]
             })),
+            raw_body: None,
         },
         300,
     ));
@@ -544,6 +545,7 @@ fn generate_demo_sequence() -> Vec<(ProxyEvent, u64)> {
                     "text": "{\"isNewTopic\": false, \"title\": \"Implementation Complete\"}"
                 }]
             })),
+            raw_body: None,
         },
         200,
     ));

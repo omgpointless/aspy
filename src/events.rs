@@ -53,7 +53,11 @@ pub enum ProxyEvent {
         ttfb: Duration,
         /// Total duration - full request-to-response-complete time
         duration: Duration,
-        body: Option<serde_json::Value>, // Parsed response body (or assembled from SSE)
+        /// Parsed response body (translated to client format, or assembled from SSE)
+        body: Option<serde_json::Value>,
+        /// Raw response body from backend (before translation, if translation occurred)
+        /// Only populated when translation is active - useful for debugging
+        raw_body: Option<serde_json::Value>,
     },
 
     /// An error occurred during proxying or parsing

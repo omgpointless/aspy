@@ -10,6 +10,7 @@
 
 pub mod api;
 pub mod augmentation;
+pub mod count_tokens;
 pub mod sessions;
 pub mod sse;
 pub mod transformation;
@@ -43,7 +44,7 @@ use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use translation::{ApiFormat, TranslationPipeline};
+use translation::TranslationPipeline;
 
 /// Maximum request body size (50MB) - prevents DoS via huge uploads
 const MAX_REQUEST_BODY_SIZE: usize = 50 * 1024 * 1024;
@@ -129,6 +130,8 @@ pub struct ProxyState {
     transformation: Arc<transformation::TransformationPipeline>,
     /// Transformers config (for enabled flag and future per-transformer settings)
     transformers_config: crate::config::Transformers,
+    /// Count tokens request cache and rate limiter
+    count_tokens_cache: Arc<count_tokens::CountTokensCache>,
     /// Handle to the embedding indexer (optional, requires embeddings enabled)
     pub embedding_indexer: Option<crate::pipeline::embedding_indexer::IndexerHandle>,
 }
@@ -186,6 +189,8 @@ struct ResponseContext {
     user_id: Option<String>,
     /// Translation context for response translation (if format differs)
     translation_ctx: translation::TranslationContext,
+    /// Original request body for count_tokens caching (if applicable)
+    count_tokens_request_body: Option<Bytes>,
 }
 
 /// Start the proxy server
@@ -277,6 +282,13 @@ pub async fn start_proxy(
         translation,
         transformation,
         transformers_config: config.transformers.clone(),
+        count_tokens_cache: count_tokens::CountTokensCache::new_shared(
+            count_tokens::CountTokensConfig {
+                enabled: config.count_tokens.enabled,
+                cache_ttl_seconds: config.count_tokens.cache_ttl_seconds,
+                rate_limit_per_second: config.count_tokens.rate_limit_per_second,
+            },
+        ),
     };
 
     // Build the router - API endpoints + proxy handler
@@ -645,6 +657,48 @@ async fn proxy_handler(
         routing.api_path.contains("/messages") || routing.api_path.contains("/chat/completions");
 
     // ─────────────────────────────────────────────────────────────────────────
+    // COUNT TOKENS DEDUPLICATION AND RATE LIMITING
+    // ─────────────────────────────────────────────────────────────────────────
+    // Claude Code spams count_tokens at startup. This prevents overwhelming
+    // rate-limited backends or backends that don't support this endpoint.
+    if count_tokens::is_count_tokens_path(&routing.api_path) {
+        match state
+            .count_tokens_cache
+            .check(user_id.as_deref(), &body_bytes)
+        {
+            count_tokens::CacheResult::Hit { body, status } => {
+                tracing::debug!("count_tokens cache hit, returning cached response");
+                return Response::builder()
+                    .status(status)
+                    .header("content-type", "application/json")
+                    .header("x-aspy-cache", "hit")
+                    .body(Body::from(body))
+                    .map_err(|e| ProxyError::ResponseBuild(e.to_string()));
+            }
+            count_tokens::CacheResult::RateLimited { body, status } => {
+                tracing::debug!("count_tokens rate limited, returning fallback response");
+                return Response::builder()
+                    .status(status)
+                    .header("content-type", "application/json")
+                    .header("x-aspy-cache", "rate-limited")
+                    .body(Body::from(body))
+                    .map_err(|e| ProxyError::ResponseBuild(e.to_string()));
+            }
+            count_tokens::CacheResult::Miss => {
+                // Proceed with normal handling, but we'll cache the response
+                tracing::trace!("count_tokens cache miss, forwarding to backend");
+            }
+        }
+    }
+
+    // Track count_tokens request body for caching the response later
+    let count_tokens_request_body = if count_tokens::is_count_tokens_path(&routing.api_path) {
+        Some(Bytes::copy_from_slice(&body_bytes))
+    } else {
+        None
+    };
+
+    // ─────────────────────────────────────────────────────────────────────────
     // REQUEST TRANSFORMATION (runs BEFORE translation, on known Anthropic format)
     // ─────────────────────────────────────────────────────────────────────────
     // SystemReminderEditor and future transformers expect Anthropic message format.
@@ -823,9 +877,38 @@ async fn proxy_handler(
         .translate_request_for_target(&routing.api_path, &headers, &body_bytes, target_format)
         .map_err(|e| ProxyError::BodyRead(format!("Translation failed: {}", e)))?;
 
-    // Use translated path for endpoint detection (may have changed from /chat/completions to /messages)
-    let effective_api_path = if translation_ctx.needs_response_translation() {
-        // Log translated body model for debugging
+    // Get provider's custom api_path if configured (overrides default /v1/messages or /v1/chat/completions)
+    let provider_api_path = routing
+        .client_id
+        .as_ref()
+        .and_then(|cid| state.clients.get_client_api_path(cid));
+
+    // Determine effective API path for forwarding
+    // Priority: provider's custom api_path > translated path > original routing path
+    let effective_api_path = if let Some(custom_path) = provider_api_path {
+        // Provider has custom api_path configured - use it
+        if translation_ctx.needs_response_translation() {
+            // Log translation with custom path
+            if let Ok(translated_json) =
+                serde_json::from_slice::<serde_json::Value>(&translated_body)
+            {
+                let model = translated_json
+                    .get("model")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown");
+                tracing::info!(
+                    "Translation: {} -> {} | model: {} | path: {} -> {} (custom)",
+                    translation_ctx.client_format,
+                    translation_ctx.backend_format,
+                    model,
+                    routing.api_path,
+                    custom_path
+                );
+            }
+        }
+        custom_path.to_string()
+    } else if translation_ctx.needs_response_translation() {
+        // No custom path, but translation happened - use translated path (default /v1/...)
         if let Ok(translated_json) = serde_json::from_slice::<serde_json::Value>(&translated_body) {
             let model = translated_json
                 .get("model")
@@ -842,6 +925,7 @@ async fn proxy_handler(
         }
         translated_path.clone()
     } else {
+        // No translation, no custom path - use original routing path
         routing.api_path.clone()
     };
 
@@ -1198,6 +1282,7 @@ async fn proxy_handler(
         state,
         user_id,
         translation_ctx,
+        count_tokens_request_body,
     };
 
     // Decide: streaming (SSE) or buffered (JSON) response handling
@@ -1223,6 +1308,7 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
         state,
         user_id,
         translation_ctx,
+        count_tokens_request_body: _, // Not used for streaming (count_tokens is always buffered)
     } = ctx;
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1259,7 +1345,8 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
 
     // Spawn task to stream response while accumulating
     tokio::spawn(async move {
-        let mut accumulated = Vec::new();
+        let mut accumulated = Vec::new(); // What gets sent to client (translated if needed)
+        let mut raw_accumulated = Vec::new(); // Raw response for parsing events (always Anthropic format)
         let mut byte_stream = response.bytes_stream();
         let mut total_bytes = 0usize;
         // Buffer for incomplete SSE lines across chunks
@@ -1272,9 +1359,12 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
         let mut response_model = String::new();
 
         // Get translator reference if translation is needed (OpenAI ↔ Anthropic)
+        // For ZAI flow: backend_format=OpenAI, client_format=Anthropic → OpenAI→Anthropic translator
         let translator = if needs_translation {
-            translation_pipeline
-                .get_response_translator(ApiFormat::Anthropic, translation_ctx.client_format)
+            translation_pipeline.get_response_translator(
+                translation_ctx.backend_format,
+                translation_ctx.client_format,
+            )
         } else {
             None
         };
@@ -1284,7 +1374,7 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
             match chunk_result {
                 Ok(chunk) => {
                     total_bytes += chunk.len();
-                    accumulated.extend_from_slice(&chunk);
+                    raw_accumulated.extend_from_slice(&chunk); // Always store raw for parsing
 
                     // CRITICAL: Register tool_use IDs immediately as we see them
                     // This fixes the race condition where the next request arrives
@@ -1425,6 +1515,7 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
                     };
 
                     if let Some(bytes_to_send) = chunk_to_send {
+                        accumulated.extend_from_slice(&bytes_to_send); // Store what we actually send
                         if tx.send(Ok(bytes_to_send)).await.is_err() {
                             // Client disconnected, but continue accumulating for logging
                             tracing::debug!("Client disconnected during streaming");
@@ -1491,6 +1582,14 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
             None
         };
 
+        // Parse raw body for debugging (only when translation occurred)
+        let raw_body = if needs_translation && is_messages_endpoint {
+            let body_str = std::str::from_utf8(&raw_accumulated).unwrap_or("");
+            sse::assemble_to_json(body_str)
+        } else {
+            None
+        };
+
         // Emit response event
         send_event(ProxyEvent::Response {
             request_id: request_id_clone.clone(),
@@ -1500,13 +1599,21 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
             ttfb,
             duration,
             body: parsed_body,
+            raw_body,
         })
         .await;
 
         // Parse for tool calls, thinking blocks, usage, etc.
+        // Use translated format when translation is active (accumulated = Anthropic format)
+        // Use raw format when no translation (raw_accumulated = backend's native format)
+        let parse_buffer = if needs_translation {
+            &accumulated
+        } else {
+            &raw_accumulated
+        };
         if is_messages_endpoint {
             if let Ok(events) = parser
-                .parse_response(&accumulated, user_id_clone.as_deref())
+                .parse_response(parse_buffer, user_id_clone.as_deref())
                 .await
             {
                 for event in events {
@@ -1592,6 +1699,7 @@ async fn handle_buffered_response(ctx: ResponseContext) -> Result<Response<Body>
         state,
         user_id,
         translation_ctx,
+        count_tokens_request_body,
     } = ctx;
     // Read full response body
     let response_body = response
@@ -1599,54 +1707,25 @@ async fn handle_buffered_response(ctx: ResponseContext) -> Result<Response<Body>
         .await
         .map_err(|e| ProxyError::BodyRead(e.to_string()))?;
 
+    // Cache successful count_tokens responses for deduplication
+    if let Some(ref request_body) = count_tokens_request_body {
+        if status.is_success() {
+            state.count_tokens_cache.store(
+                user_id.as_deref(),
+                request_body,
+                response_body.clone(),
+                status.as_u16(),
+            );
+            tracing::debug!(
+                "Cached count_tokens response ({} bytes)",
+                response_body.len()
+            );
+        }
+    }
+
     let duration = start.elapsed();
 
-    // Try to parse response body for display
-    let parsed_response_body = if is_messages_endpoint && status.is_success() {
-        match serde_json::from_slice::<serde_json::Value>(&response_body) {
-            Ok(json) => Some(json),
-            Err(e) => {
-                let body_preview =
-                    String::from_utf8_lossy(&response_body[..response_body.len().min(200)]);
-                tracing::warn!(
-                    "Failed to parse response JSON: {} | Preview: {}",
-                    e,
-                    body_preview
-                );
-                let body_str = std::str::from_utf8(&response_body).unwrap_or("");
-                if body_str.contains("event:") {
-                    sse::assemble_to_json(body_str)
-                } else {
-                    None
-                }
-            }
-        }
-    } else {
-        tracing::error!(
-            "Skipping response body parse: is_messages_endpoint={}, status={}",
-            is_messages_endpoint,
-            status
-        );
-        None
-    };
-
-    // Emit response event
-    state
-        .send_event(
-            ProxyEvent::Response {
-                request_id: request_id.clone(),
-                timestamp: Utc::now(),
-                status: status.as_u16(),
-                body_size: response_body.len(),
-                ttfb,
-                duration,
-                body: parsed_response_body,
-            },
-            user_id.as_deref(),
-        )
-        .await;
-
-    // Apply response translation FIRST (so parser sees Anthropic format)
+    // Apply response translation FIRST (so parser and display see Anthropic format)
     let final_response_body = if translation_ctx.needs_response_translation() && status.is_success()
     {
         // Get response translator (backend_format → client_format)
@@ -1667,17 +1746,74 @@ async fn handle_buffered_response(ctx: ResponseContext) -> Result<Response<Body>
                 }
                 Err(e) => {
                     tracing::warn!("Response translation failed, returning original: {}", e);
-                    response_body
+                    response_body.clone()
                 }
             }
         } else {
-            response_body
+            response_body.clone()
         }
     } else {
-        response_body
+        response_body.clone()
     };
 
-    // Parse response for tool calls, assistant content, usage (uses translated body for correct format)
+    // Try to parse translated response body for display
+    let parsed_response_body = if is_messages_endpoint && status.is_success() {
+        match serde_json::from_slice::<serde_json::Value>(&final_response_body) {
+            Ok(json) => Some(json),
+            Err(e) => {
+                let body_preview = String::from_utf8_lossy(
+                    &final_response_body[..final_response_body.len().min(200)],
+                );
+                tracing::warn!(
+                    "Failed to parse response JSON: {} | Preview: {}",
+                    e,
+                    body_preview
+                );
+                let body_str = std::str::from_utf8(&final_response_body).unwrap_or("");
+                if body_str.contains("event:") {
+                    sse::assemble_to_json(body_str)
+                } else {
+                    None
+                }
+            }
+        }
+    } else {
+        tracing::error!(
+            "Skipping response body parse: is_messages_endpoint={}, status={}",
+            is_messages_endpoint,
+            status
+        );
+        None
+    };
+
+    // Parse raw body for debugging (only when translation occurred)
+    let raw_body = if translation_ctx.needs_response_translation()
+        && is_messages_endpoint
+        && status.is_success()
+    {
+        serde_json::from_slice::<serde_json::Value>(&response_body).ok()
+    } else {
+        None
+    };
+
+    // Emit response event (with translated body for display)
+    state
+        .send_event(
+            ProxyEvent::Response {
+                request_id: request_id.clone(),
+                timestamp: Utc::now(),
+                status: status.as_u16(),
+                body_size: response_body.len(), // Original size for accurate stats
+                ttfb,
+                duration,
+                body: parsed_response_body,
+                raw_body,
+            },
+            user_id.as_deref(),
+        )
+        .await;
+
+    // Parse response for tool calls, assistant content, usage (uses translated body)
     if is_messages_endpoint && status.is_success() {
         if let Ok(events) = state
             .parser
@@ -1926,6 +2062,7 @@ mod tests {
                 base_url: "https://api.anthropic.com".to_string(),
                 name: Some("Anthropic Direct".to_string()),
                 api_format: crate::config::ApiFormat::Anthropic,
+                api_path: None,
                 auth: None,
             },
         );
@@ -1935,6 +2072,7 @@ mod tests {
                 base_url: "https://foundry.example.com".to_string(),
                 name: Some("Foundry".to_string()),
                 api_format: crate::config::ApiFormat::Anthropic,
+                api_path: None,
                 auth: None,
             },
         );

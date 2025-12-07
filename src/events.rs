@@ -155,6 +155,21 @@ pub enum ProxyEvent {
         /// "manual" (user ran /compact) or "auto" (context window full)
         trigger: String,
     },
+
+    /// Context recovery detected (Claude Code crunched tool_results)
+    ///
+    /// Fired when we detect a significant drop in context size between requests,
+    /// indicating Claude Code trimmed tool_result content to free up space.
+    /// This is different from /compact - it's automatic context management.
+    ContextRecovery {
+        timestamp: DateTime<Utc>,
+        /// Estimated tokens before recovery
+        tokens_before: u32,
+        /// Estimated tokens after recovery
+        tokens_after: u32,
+        /// Percentage of context recovered
+        percent_recovered: f32,
+    },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -233,7 +248,8 @@ impl TrackedEvent {
             | ProxyEvent::AssistantResponse { timestamp, .. }
             | ProxyEvent::RequestTransformed { timestamp, .. }
             | ProxyEvent::ResponseAugmented { timestamp, .. }
-            | ProxyEvent::PreCompactHook { timestamp, .. } => *timestamp,
+            | ProxyEvent::PreCompactHook { timestamp, .. }
+            | ProxyEvent::ContextRecovery { timestamp, .. } => *timestamp,
         }
     }
 }

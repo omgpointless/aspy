@@ -866,6 +866,53 @@ async fn proxy_handler(
                 for event in events {
                     state.send_event(event, user_id.as_deref()).await;
                 }
+
+                // Check for context recovery scenario
+                // After parse_request, we have a snapshot stored - use it to estimate tokens
+                // and compare against previous context to detect CC crunching tool_results
+                let user_key = user_id.as_deref().unwrap_or("unknown");
+                if let Some(snapshot) = state.parser.get_context_snapshot(user_key).await {
+                    let estimated = snapshot.estimate_tokens();
+                    // Check recovery in a separate scope to avoid holding lock across await
+                    let recovery_info = {
+                        if let Ok(mut ctx) = state.context_state.lock() {
+                            let previous_tokens = ctx.current_tokens as u32;
+                            if ctx.check_recovery(estimated) {
+                                let percent_recovered = if previous_tokens > 0 {
+                                    ((previous_tokens - estimated) as f32 / previous_tokens as f32)
+                                        * 100.0
+                                } else {
+                                    0.0
+                                };
+                                Some((previous_tokens, percent_recovered))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+
+                    // Emit recovery event outside of lock scope
+                    if let Some((previous_tokens, percent_recovered)) = recovery_info {
+                        tracing::info!(
+                            "Context recovery detected for {}: estimated {} < previous {} ({:.1}% drop)",
+                            user_key,
+                            estimated,
+                            previous_tokens,
+                            percent_recovered
+                        );
+
+                        // Emit ContextRecovery event for TUI display
+                        let recovery_event = crate::events::ProxyEvent::ContextRecovery {
+                            timestamp: chrono::Utc::now(),
+                            tokens_before: previous_tokens,
+                            tokens_after: estimated,
+                            percent_recovered,
+                        };
+                        state.send_event(recovery_event, user_id.as_deref()).await;
+                    }
+                }
             }
             Err(e) => {
                 tracing::warn!(
@@ -1383,6 +1430,8 @@ async fn handle_streaming_response(ctx: ResponseContext) -> Result<Response<Body
                     {
                         if !model.to_lowercase().contains("haiku") {
                             if let Ok(mut ctx) = context_state.lock() {
+                                // Clear recovery state before updating (captures recovery info if pending)
+                                let _recovery_info = ctx.clear_recovery();
                                 ctx.update(
                                     *input_tokens as u64,
                                     *cache_creation_tokens as u64,
@@ -1556,6 +1605,8 @@ async fn handle_buffered_response(ctx: ResponseContext) -> Result<Response<Body>
                 {
                     if !model.to_lowercase().contains("haiku") {
                         if let Ok(mut ctx) = state.context_state.lock() {
+                            // Clear recovery state before updating (captures recovery info if pending)
+                            let _recovery_info = ctx.clear_recovery();
                             ctx.update(
                                 *input_tokens as u64,
                                 *cache_creation_tokens as u64,

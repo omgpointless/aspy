@@ -993,16 +993,7 @@ impl Config {
                             }
                             // Output when condition using dotted keys (valid TOML for array elements)
                             if let Some(cond) = when {
-                                if let Some(ref tn) = cond.turn_number {
-                                    output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
-                                }
-                                if let Some(ref tr) = cond.has_tool_results {
-                                    output
-                                        .push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
-                                }
-                                if let Some(ref ci) = cond.client_id {
-                                    output.push_str(&format!("when.client_id = \"{}\"\n", ci));
-                                }
+                                cond.write_toml(&mut output);
                             }
                         }
                         RuleConfig::Remove { tag, pattern, when } => {
@@ -1010,16 +1001,7 @@ impl Config {
                             output.push_str(&format!("tag = \"{}\"\n", tag));
                             output.push_str(&format!("pattern = \"{}\"\n", pattern));
                             if let Some(cond) = when {
-                                if let Some(ref tn) = cond.turn_number {
-                                    output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
-                                }
-                                if let Some(ref tr) = cond.has_tool_results {
-                                    output
-                                        .push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
-                                }
-                                if let Some(ref ci) = cond.client_id {
-                                    output.push_str(&format!("when.client_id = \"{}\"\n", ci));
-                                }
+                                cond.write_toml(&mut output);
                             }
                         }
                         RuleConfig::Replace {
@@ -1033,16 +1015,7 @@ impl Config {
                             output.push_str(&format!("pattern = \"{}\"\n", pattern));
                             output.push_str(&format!("replacement = \"{}\"\n", replacement));
                             if let Some(cond) = when {
-                                if let Some(ref tn) = cond.turn_number {
-                                    output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
-                                }
-                                if let Some(ref tr) = cond.has_tool_results {
-                                    output
-                                        .push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
-                                }
-                                if let Some(ref ci) = cond.client_id {
-                                    output.push_str(&format!("when.client_id = \"{}\"\n", ci));
-                                }
+                                cond.write_toml(&mut output);
                             }
                         }
                     }

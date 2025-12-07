@@ -137,6 +137,16 @@ impl Augmenter for ContextWarningAugmenter {
     fn generate(&self, ctx: &AugmentationContext) -> Option<AugmentedContent> {
         // Lock context state and check if we should warn at our thresholds
         let mut state = ctx.context_state.lock().ok()?;
+
+        // Skip warning if context is recovering (CC crunched tool_results)
+        // The high context value is stale - actual context will be lower post-crunch
+        if state.is_recovering() {
+            tracing::debug!(
+                "context-warning: skipping warning due to recovery_pending (stale high-water mark)"
+            );
+            return None;
+        }
+
         let threshold = state.should_warn_at(&self.thresholds)?;
 
         // Calculate values for message

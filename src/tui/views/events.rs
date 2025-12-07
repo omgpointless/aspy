@@ -412,6 +412,21 @@ pub(crate) fn format_event_line(tracked: &TrackedEvent) -> String {
                 trigger
             )
         }
+        ProxyEvent::ContextRecovery {
+            timestamp,
+            tokens_before,
+            tokens_after,
+            percent_recovered,
+        } => {
+            format!(
+                "[{}] {}♻ Context Recovery: {}K → {}K ({:.0}% freed)",
+                timestamp.format("%H:%M:%S"),
+                user_prefix,
+                tokens_before / 1000,
+                tokens_after / 1000,
+                percent_recovered
+            )
+        }
     }
 }
 
@@ -884,5 +899,36 @@ pub(crate) fn format_event_detail(tracked: &TrackedEvent) -> RenderableContent {
             timestamp.to_rfc3339(),
             trigger
         )),
+        ProxyEvent::ContextRecovery {
+            timestamp,
+            tokens_before,
+            tokens_after,
+            percent_recovered,
+        } => {
+            let tokens_freed = tokens_before.saturating_sub(*tokens_after);
+            RenderableContent::Markdown(format!(
+                "{}## ♻ Context Recovery Detected\n\n\
+                **Timestamp:** {}\n\n\
+                ---\n\n\
+                ### Token Analysis\n\n\
+                **Before:** ~{} tokens ({:.1}K)  \n\
+                **After:** ~{} tokens ({:.1}K)  \n\
+                **Freed:** ~{} tokens ({:.1}%)\n\n\
+                ---\n\n\
+                Claude Code automatically trimmed `tool_result` content to free up \
+                context space. This is different from `/compact` - it's automatic \
+                context management that preserves conversation structure while \
+                reducing token usage.\n\n\
+                *Context warnings are suppressed during recovery to avoid stale alerts.*",
+                tracking_header,
+                timestamp.to_rfc3339(),
+                tokens_before,
+                *tokens_before as f64 / 1000.0,
+                tokens_after,
+                *tokens_after as f64 / 1000.0,
+                tokens_freed,
+                percent_recovered
+            ))
+        }
     }
 }

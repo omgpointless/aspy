@@ -495,6 +495,9 @@ fn event_color_style(event: &ProxyEvent, theme: &Theme) -> Style {
         ProxyEvent::PreCompactHook { .. } => Style::default()
             .fg(theme.context_compact)
             .add_modifier(Modifier::BOLD),
+        ProxyEvent::ContextRecovery { .. } => Style::default()
+            .fg(theme.context_compact)
+            .add_modifier(Modifier::BOLD),
     }
 }
 

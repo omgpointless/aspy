@@ -334,6 +334,15 @@ impl ContextSnapshot {
             + self.text_chars
             + self.system_chars
     }
+
+    /// Estimate token count from this snapshot
+    ///
+    /// Uses a simple heuristic: ~4 characters per token for typical content.
+    /// This is a rough estimate for recovery detection, not exact counting.
+    /// Accuracy: ±10-15% which is sufficient for detecting 30%+ drops.
+    pub fn estimate_tokens(&self) -> u32 {
+        (self.total_chars() / 4) as u32
+    }
 }
 
 /// Diff between two context snapshots (signed values)

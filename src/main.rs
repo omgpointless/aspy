@@ -70,6 +70,13 @@ pub struct ContextState {
     pub limit: u64,
     /// Last threshold percentage we warned at (80, 85, 90, 95) to avoid spam
     pub last_warned_threshold: Option<u8>,
+
+    // === Recovery detection (prevents stale high-water warnings) ===
+    /// Estimated tokens from current request body (set before response arrives)
+    pub estimated_tokens: Option<u32>,
+    /// True when request estimate is significantly lower than previous context.
+    /// Indicates CC likely crunched tool_results - suppresses stale warnings.
+    pub recovery_pending: bool,
 }
 
 impl ContextState {
@@ -78,6 +85,8 @@ impl ContextState {
             current_tokens: 0,
             limit,
             last_warned_threshold: None,
+            estimated_tokens: None,
+            recovery_pending: false,
         }
     }
 
@@ -142,6 +151,70 @@ impl ContextState {
     pub fn reset_warnings(&mut self) {
         self.last_warned_threshold = None;
     }
+
+    /// Check for context recovery scenario and set recovery_pending flag
+    ///
+    /// Called at request time with estimated tokens from the request body.
+    /// If estimated is significantly lower than current_tokens (from previous call),
+    /// it indicates CC likely crunched tool_results and context is recovering.
+    ///
+    /// # Arguments
+    /// * `estimated` - Estimated input tokens from current request body
+    ///
+    /// # Returns
+    /// `true` if recovery was detected, `false` otherwise
+    pub fn check_recovery(&mut self, estimated: u32) -> bool {
+        self.estimated_tokens = Some(estimated);
+
+        // If estimated is 30%+ less than previous context, mark as recovering
+        // This means CC likely crunched tool_results before sending
+        let previous = self.current_tokens as u32;
+        if previous > 0 && estimated < (previous as f64 * 0.7) as u32 {
+            self.recovery_pending = true;
+            tracing::debug!(
+                "Context recovery detected: estimated {} << previous {} (threshold: {})",
+                estimated,
+                previous,
+                (previous as f64 * 0.7) as u32
+            );
+            true
+        } else {
+            self.recovery_pending = false;
+            false
+        }
+    }
+
+    /// Clear recovery state (called when ApiUsage arrives)
+    ///
+    /// Returns the recovery info if recovery was pending (for event emission).
+    pub fn clear_recovery(&mut self) -> Option<RecoveryInfo> {
+        if self.recovery_pending {
+            let info = RecoveryInfo {
+                estimated: self.estimated_tokens.unwrap_or(0),
+                previous: self.current_tokens as u32,
+            };
+            self.recovery_pending = false;
+            self.estimated_tokens = None;
+            Some(info)
+        } else {
+            self.estimated_tokens = None;
+            None
+        }
+    }
+
+    /// Check if recovery is pending (for augmenter to skip warnings)
+    pub fn is_recovering(&self) -> bool {
+        self.recovery_pending
+    }
+}
+
+/// Info about a context recovery event
+#[derive(Debug, Clone, Copy)]
+pub struct RecoveryInfo {
+    /// Estimated tokens from request body
+    pub estimated: u32,
+    /// Previous context tokens (from last ApiUsage)
+    pub previous: u32,
 }
 
 /// Shared context state wrapped for thread-safe access

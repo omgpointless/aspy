@@ -97,6 +97,22 @@ impl WhenCondition {
         // Pipe-separated = OR
         condition.split('|').any(|c| c.trim() == client)
     }
+
+    /// Write this condition as TOML dotted keys to the output string.
+    ///
+    /// Used by config serialization to generate valid TOML for array elements.
+    /// Each field becomes a dotted key (e.g., `when.turn_number = "..."`)
+    pub fn write_toml(&self, output: &mut String) {
+        if let Some(ref tn) = self.turn_number {
+            output.push_str(&format!("when.turn_number = \"{}\"\n", tn));
+        }
+        if let Some(ref tr) = self.has_tool_results {
+            output.push_str(&format!("when.has_tool_results = \"{}\"\n", tr));
+        }
+        if let Some(ref ci) = self.client_id {
+            output.push_str(&format!("when.client_id = \"{}\"\n", ci));
+        }
+    }
 }
 
 /// Parse numeric conditions like "=1", ">5", "<10", "every:3"

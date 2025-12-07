@@ -565,7 +565,7 @@ fn handle_embeddings_status() {
     print_embeddings_status_db(&config);
 }
 
-/// Response from /api/lifestats/embeddings/status
+/// Response from /api/cortex/embeddings/status
 #[derive(serde::Deserialize)]
 struct LiveIndexerStatus {
     enabled: bool,
@@ -580,10 +580,7 @@ struct LiveIndexerStatus {
 
 /// Try to get live status from running proxy API
 fn try_api_embeddings_status(config: &Config) -> Option<LiveIndexerStatus> {
-    let url = format!(
-        "http://{}/api/lifestats/embeddings/status",
-        config.bind_addr
-    );
+    let url = format!("http://{}/api/cortex/embeddings/status", config.bind_addr);
 
     // Use blocking client with short timeout
     let client = reqwest::blocking::Client::builder()
@@ -651,7 +648,7 @@ fn print_embeddings_status_db(config: &Config) {
         println!("  Database: Not found");
         println!("  Path: {}", db_path.display());
         println!();
-        println!("  The lifestats database does not exist yet.");
+        println!("  The cortex database does not exist yet.");
         println!("  Run aspy normally to start collecting data.");
         return;
     }
@@ -769,10 +766,7 @@ fn handle_embeddings_reindex() {
 
 /// Try to trigger reindex via running proxy API
 fn try_api_trigger_reindex(config: &Config) -> bool {
-    let url = format!(
-        "http://{}/api/lifestats/embeddings/reindex",
-        config.bind_addr
-    );
+    let url = format!("http://{}/api/cortex/embeddings/reindex", config.bind_addr);
 
     // Use blocking client with short timeout
     let client = match reqwest::blocking::Client::builder()

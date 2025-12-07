@@ -37,7 +37,7 @@ pub enum FeatureCategory {
     Core,
     /// Interface features (tui)
     Interface,
-    /// Storage features (jsonl, lifestats)
+    /// Storage features (jsonl, cortex)
     Storage,
     /// Pipeline features (embeddings, augmentations)
     Pipeline,

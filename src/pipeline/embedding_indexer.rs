@@ -104,11 +104,11 @@ impl IndexerMetrics {
 pub struct MetricsSnapshot {
     pub documents_embedded: u64,
     pub documents_pending: u64,
-    #[allow(dead_code)] // Reserved for /api/lifestats/embeddings/metrics endpoint
+    #[allow(dead_code)] // Reserved for /api/cortex/embeddings/metrics endpoint
     pub embedding_errors: u64,
-    #[allow(dead_code)] // Reserved for /api/lifestats/embeddings/metrics endpoint
+    #[allow(dead_code)] // Reserved for /api/cortex/embeddings/metrics endpoint
     pub batches_processed: u64,
-    #[allow(dead_code)] // Reserved for /api/lifestats/embeddings/metrics endpoint
+    #[allow(dead_code)] // Reserved for /api/cortex/embeddings/metrics endpoint
     pub is_processing: bool,
 }
 

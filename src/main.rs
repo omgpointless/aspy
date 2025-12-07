@@ -445,8 +445,8 @@ async fn main() -> Result<()> {
 
             let mut pipeline = EventPipeline::new();
 
-            // Create lifestats config from main config
-            let lifestats_config = pipeline::cortex::CortexConfig {
+            // Create cortex config from main config
+            let cortex_config = pipeline::cortex::CortexConfig {
                 db_path: config.cortex.db_path.clone(),
                 store_thinking: config.cortex.store_thinking,
                 store_tool_io: config.cortex.store_tool_io,
@@ -457,7 +457,7 @@ async fn main() -> Result<()> {
                 flush_interval: std::time::Duration::from_secs(config.cortex.flush_interval_secs),
             };
 
-            match CortexProcessor::new(lifestats_config) {
+            match CortexProcessor::new(cortex_config) {
                 Ok(processor) => {
                     pipeline.register(processor);
 
@@ -482,9 +482,9 @@ async fn main() -> Result<()> {
                     // Initialize query interface (read-only connection pool)
                     match CortexQuery::new(&config.cortex.db_path) {
                         Ok(query) => {
-                            registry.activate("lifestats");
+                            registry.activate("cortex");
                             tracing::info!(
-                                "Lifestats initialized (SQLite: {})",
+                                "cortex initialized (SQLite: {})",
                                 config.cortex.db_path.display()
                             );
 
@@ -572,23 +572,20 @@ async fn main() -> Result<()> {
                             )
                         }
                         Err(e) => {
-                            registry.fail("lifestats", e.to_string());
-                            tracing::error!(
-                                "Failed to initialize lifestats query interface: {}",
-                                e
-                            );
+                            registry.fail("cortex", e.to_string());
+                            tracing::error!("Failed to initialize cortex query interface: {}", e);
                             (Some(std::sync::Arc::new(pipeline)), None, None)
                         }
                     }
                 }
                 Err(e) => {
-                    registry.fail("lifestats", e.to_string());
-                    tracing::error!("Failed to initialize lifestats processor: {}", e);
+                    registry.fail("cortex", e.to_string());
+                    tracing::error!("Failed to initialize cortex processor: {}", e);
                     (None, None, None)
                 }
             }
         } else {
-            tracing::debug!("Lifestats processor disabled in config");
+            tracing::debug!("cortex processor disabled in config");
             (None, None, None)
         };
 

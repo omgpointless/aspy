@@ -97,7 +97,7 @@ pub struct CortexMetrics {
 }
 
 impl CortexMetrics {
-    #[allow(dead_code)] // Phase 2: Used by /api/lifestats/health endpoint
+    #[allow(dead_code)] // Phase 2: Used by /api/cortex/health endpoint
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
             events_stored: self.events_stored.load(Ordering::Relaxed),
@@ -196,7 +196,7 @@ impl CortexProcessor {
     }
 
     /// Get current metrics snapshot
-    #[allow(dead_code)] // Phase 2: Used by /api/lifestats/health endpoint
+    #[allow(dead_code)] // Phase 2: Used by /api/cortex/health endpoint
     pub fn metrics(&self) -> MetricsSnapshot {
         self.metrics.snapshot()
     }
@@ -1221,7 +1221,7 @@ impl CortexProcessor {
             }
 
             _ => {
-                // Other events not stored in lifestats
+                // Other events not stored in cortex
             }
         }
 

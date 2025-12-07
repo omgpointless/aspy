@@ -252,10 +252,10 @@ pub struct Transformers {
     pub compact_enhancer: Option<crate::proxy::transformation::CompactEnhancerConfig>,
 }
 
-/// Lifetime statistics storage configuration
+/// Cortex storage configuration
 #[derive(Debug, Clone)]
-pub struct LifestatsConfig {
-    /// Whether lifestats storage is enabled
+pub struct CortexConfig {
+    /// Whether cortex storage is enabled
     pub enabled: bool,
     /// Path to SQLite database file
     pub db_path: PathBuf,
@@ -275,7 +275,7 @@ pub struct LifestatsConfig {
     pub flush_interval_secs: u64,
 }
 
-impl Default for LifestatsConfig {
+impl Default for CortexConfig {
     fn default() -> Self {
         Self {
             enabled: false, // Opt-in feature
@@ -620,7 +620,7 @@ pub struct Config {
     pub logging: LoggingConfig,
 
     /// Lifetime statistics storage configuration
-    pub cortex: LifestatsConfig,
+    pub cortex: CortexConfig,
 
     /// Embeddings configuration for semantic search
     pub embeddings: EmbeddingsConfig,
@@ -664,7 +664,7 @@ struct FileLogging {
 }
 
 #[derive(Debug, Deserialize, Default)]
-struct FileLifestatsConfig {
+struct FileCortexConfig {
     enabled: Option<bool>,
     db_path: Option<String>,
     store_thinking: Option<bool>,
@@ -740,8 +740,8 @@ struct FileConfig {
     /// Optional [logging] section
     logging: Option<FileLogging>,
 
-    /// Optional [lifestats] section
-    lifestats: Option<FileLifestatsConfig>,
+    /// Optional [cortex] section
+    cortex: Option<FileCortexConfig>,
 
     /// Optional [embeddings] section
     embeddings: Option<FileEmbeddingsConfig>,
@@ -1142,16 +1142,16 @@ file_rotation = "{log_file_rotation}"  # hourly, daily, never
 file_prefix = "{log_file_prefix}"
 
 # Lifetime statistics storage (SQLite-backed context recovery)
-[lifestats]
-enabled = {lifestats_enabled}
-db_path = "{lifestats_db_path}"
-store_thinking = {lifestats_store_thinking}
-store_tool_io = {lifestats_store_tool_io}
-max_thinking_size = {lifestats_max_thinking_size}
-retention_days = {lifestats_retention_days}
-channel_buffer = {lifestats_channel_buffer}
-batch_size = {lifestats_batch_size}
-flush_interval_secs = {lifestats_flush_interval_secs}
+[cortex]
+enabled = {cortex_enabled}
+db_path = "{cortex_db_path}"
+store_thinking = {cortex_store_thinking}
+store_tool_io = {cortex_store_tool_io}
+max_thinking_size = {cortex_max_thinking_size}
+retention_days = {cortex_retention_days}
+channel_buffer = {cortex_channel_buffer}
+batch_size = {cortex_batch_size}
+flush_interval_secs = {cortex_flush_interval_secs}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEMANTIC SEARCH EMBEDDINGS (Optional)
@@ -1281,15 +1281,15 @@ service_version = "{otel_service_version}"
             log_file_dir = self.logging.file_dir.display(),
             log_file_rotation = self.logging.file_rotation.as_str(),
             log_file_prefix = self.logging.file_prefix,
-            lifestats_enabled = self.cortex.enabled,
-            lifestats_db_path = self.cortex.db_path.display(),
-            lifestats_store_thinking = self.cortex.store_thinking,
-            lifestats_store_tool_io = self.cortex.store_tool_io,
-            lifestats_max_thinking_size = self.cortex.max_thinking_size,
-            lifestats_retention_days = self.cortex.retention_days,
-            lifestats_channel_buffer = self.cortex.channel_buffer,
-            lifestats_batch_size = self.cortex.batch_size,
-            lifestats_flush_interval_secs = self.cortex.flush_interval_secs,
+            cortex_enabled = self.cortex.enabled,
+            cortex_db_path = self.cortex.db_path.display(),
+            cortex_store_thinking = self.cortex.store_thinking,
+            cortex_store_tool_io = self.cortex.store_tool_io,
+            cortex_max_thinking_size = self.cortex.max_thinking_size,
+            cortex_retention_days = self.cortex.retention_days,
+            cortex_channel_buffer = self.cortex.channel_buffer,
+            cortex_batch_size = self.cortex.batch_size,
+            cortex_flush_interval_secs = self.cortex.flush_interval_secs,
             translation_enabled = self.translation.enabled,
             translation_auto_detect = self.translation.auto_detect,
             translation_model_mapping = if self.translation.model_mapping.is_empty() {
@@ -1459,32 +1459,30 @@ service_version = "{otel_service_version}"
             file_prefix: file_logging.file_prefix.unwrap_or(log_defaults.file_prefix),
         };
 
-        // Lifestats settings: file config only
-        let file_lifestats = file.lifestats.unwrap_or_default();
-        let defaults = LifestatsConfig::default();
-        let lifestats = LifestatsConfig {
-            enabled: file_lifestats.enabled.unwrap_or(defaults.enabled),
-            db_path: file_lifestats
+        // cortex settings: file config only
+        let file_cortex = file.cortex.unwrap_or_default();
+        let defaults = CortexConfig::default();
+        let cortex = CortexConfig {
+            enabled: file_cortex.enabled.unwrap_or(defaults.enabled),
+            db_path: file_cortex
                 .db_path
                 .map(PathBuf::from)
                 .unwrap_or(defaults.db_path),
-            store_thinking: file_lifestats
+            store_thinking: file_cortex
                 .store_thinking
                 .unwrap_or(defaults.store_thinking),
-            store_tool_io: file_lifestats
-                .store_tool_io
-                .unwrap_or(defaults.store_tool_io),
-            max_thinking_size: file_lifestats
+            store_tool_io: file_cortex.store_tool_io.unwrap_or(defaults.store_tool_io),
+            max_thinking_size: file_cortex
                 .max_thinking_size
                 .unwrap_or(defaults.max_thinking_size),
-            retention_days: file_lifestats
+            retention_days: file_cortex
                 .retention_days
                 .unwrap_or(defaults.retention_days),
-            channel_buffer: file_lifestats
+            channel_buffer: file_cortex
                 .channel_buffer
                 .unwrap_or(defaults.channel_buffer),
-            batch_size: file_lifestats.batch_size.unwrap_or(defaults.batch_size),
-            flush_interval_secs: file_lifestats
+            batch_size: file_cortex.batch_size.unwrap_or(defaults.batch_size),
+            flush_interval_secs: file_cortex
                 .flush_interval_secs
                 .unwrap_or(defaults.flush_interval_secs),
         };
@@ -1589,7 +1587,7 @@ service_version = "{otel_service_version}"
             features,
             augmentation,
             logging,
-            cortex: lifestats,
+            cortex,
             embeddings,
             translation,
             transformers,
@@ -1614,7 +1612,7 @@ impl Default for Config {
             features: Features::default(),
             augmentation: Augmentation::default(),
             logging: LoggingConfig::default(),
-            cortex: LifestatsConfig::default(),
+            cortex: CortexConfig::default(),
             embeddings: EmbeddingsConfig::default(),
             translation: Translation::default(),
             transformers: Transformers::default(),

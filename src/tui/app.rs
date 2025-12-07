@@ -568,7 +568,7 @@ impl App {
                 cache_read_tokens,
                 ..
             } => {
-                // Accumulate token usage
+                // Accumulate token usage (always, regardless of warmup protection)
                 self.stats.total_input_tokens += *input_tokens as u64;
                 self.stats.total_output_tokens += *output_tokens as u64;
                 self.stats.total_cache_creation_tokens += *cache_creation_tokens as u64;
@@ -578,12 +578,31 @@ impl App {
                 // Haiku is used for quick side-tasks and doesn't reflect actual context usage
                 let is_haiku = model.contains("haiku");
                 if !is_haiku {
-                    // Update global context (fallback for single-session)
-                    self.context_state.update_from_api_usage(
-                        *input_tokens,
-                        *cache_creation_tokens,
-                        *cache_read_tokens,
-                    );
+                    let new_tokens = *input_tokens as u64
+                        + *cache_creation_tokens as u64
+                        + *cache_read_tokens as u64;
+
+                    // Warmup protection: if we have a DB estimate and the new value is
+                    // suspiciously low (< 50% of current), skip the update.
+                    // This prevents warmup calls (which have minimal context) from
+                    // overwriting restored context estimates on session resume.
+                    let should_skip_global = self.context_state.is_db_estimate
+                        && new_tokens < self.context_state.current_tokens / 2;
+
+                    if should_skip_global {
+                        tracing::debug!(
+                            current_tokens = self.context_state.current_tokens,
+                            new_tokens = new_tokens,
+                            "Skipping ApiUsage context update (warmup protection)"
+                        );
+                    } else {
+                        // Update global context (fallback for single-session)
+                        self.context_state.update_from_api_usage(
+                            *input_tokens,
+                            *cache_creation_tokens,
+                            *cache_read_tokens,
+                        );
+                    }
 
                     // Update per-user context for multi-session tracking
                     if let Some(ref user_id) = tracked_event.user_id {
@@ -591,11 +610,24 @@ impl App {
                             .per_user_context
                             .entry(user_id.clone())
                             .or_insert_with(|| ContextState::with_limit(self.config.context_limit));
-                        user_ctx.update_from_api_usage(
-                            *input_tokens,
-                            *cache_creation_tokens,
-                            *cache_read_tokens,
-                        );
+
+                        let should_skip_user =
+                            user_ctx.is_db_estimate && new_tokens < user_ctx.current_tokens / 2;
+
+                        if should_skip_user {
+                            tracing::debug!(
+                                user_id = %user_id,
+                                current_tokens = user_ctx.current_tokens,
+                                new_tokens = new_tokens,
+                                "Skipping per-user ApiUsage context update (warmup protection)"
+                            );
+                        } else {
+                            user_ctx.update_from_api_usage(
+                                *input_tokens,
+                                *cache_creation_tokens,
+                                *cache_read_tokens,
+                            );
+                        }
                     }
                 }
 
@@ -642,15 +674,20 @@ impl App {
             ProxyEvent::ContextEstimate {
                 estimated_tokens, ..
             } => {
-                // Initialize per-user context from DB estimate on session resume
+                // Initialize context from DB estimate on session resume
                 // This allows the context bar to show a value immediately instead of
                 // "waiting for API call"
+
+                // Always update global context as fallback (especially for "unknown" users)
+                self.context_state.set_from_db_estimate(*estimated_tokens);
+
+                // Also update per-user context for multi-session tracking
                 if let Some(ref user_id) = tracked_event.user_id {
                     let user_ctx = self
                         .per_user_context
                         .entry(user_id.clone())
                         .or_insert_with(|| ContextState::with_limit(self.config.context_limit));
-                    user_ctx.current_tokens = *estimated_tokens;
+                    user_ctx.set_from_db_estimate(*estimated_tokens);
                     tracing::debug!(
                         user_id = %user_id,
                         estimated_tokens = %estimated_tokens,

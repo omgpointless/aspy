@@ -68,50 +68,53 @@ pub async fn session_start(
     };
 
     // If transcript_path is provided, check if we have historical context data
-    let estimated_context = if let Some(ref transcript_path) = request.transcript_path {
-        if let Some(query) = state.cortex_query.as_ref() {
-            // First find the session_id for this transcript
-            match query.find_session_by_transcript(transcript_path) {
-                Ok(Some((session_id, _user_id))) => {
-                    // Then get the last context tokens for that session
-                    match query.get_session_last_context(&session_id) {
-                        Ok(context) => {
-                            if context.is_some() {
-                                tracing::debug!(
-                                    transcript_path = %transcript_path,
-                                    session_id = %session_id,
-                                    estimated_context = ?context,
-                                    "Found historical context for transcript"
-                                );
+    // Also capture the historical user_id for the event (request.user_id might be "unknown" at startup)
+    let (estimated_context, historical_user_id) =
+        if let Some(ref transcript_path) = request.transcript_path {
+            if let Some(query) = state.cortex_query.as_ref() {
+                // First find the session_id for this transcript
+                match query.find_session_by_transcript(transcript_path) {
+                    Ok(Some((session_id, stored_user_id))) => {
+                        // Then get the last context tokens for that session
+                        match query.get_session_last_context(&session_id) {
+                            Ok(context) => {
+                                if context.is_some() {
+                                    tracing::debug!(
+                                        transcript_path = %transcript_path,
+                                        session_id = %session_id,
+                                        stored_user_id = %stored_user_id,
+                                        estimated_context = ?context,
+                                        "Found historical context for transcript"
+                                    );
+                                }
+                                (context, Some(stored_user_id))
                             }
-                            context
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                transcript_path = %transcript_path,
-                                error = %e,
-                                "Failed to query context estimate"
-                            );
-                            None
+                            Err(e) => {
+                                tracing::warn!(
+                                    transcript_path = %transcript_path,
+                                    error = %e,
+                                    "Failed to query context estimate"
+                                );
+                                (None, None)
+                            }
                         }
                     }
+                    Ok(None) => (None, None), // New transcript, no history
+                    Err(e) => {
+                        tracing::warn!(
+                            transcript_path = %transcript_path,
+                            error = %e,
+                            "Failed to find session by transcript"
+                        );
+                        (None, None)
+                    }
                 }
-                Ok(None) => None, // New transcript, no history
-                Err(e) => {
-                    tracing::warn!(
-                        transcript_path = %transcript_path,
-                        error = %e,
-                        "Failed to find session by transcript"
-                    );
-                    None
-                }
+            } else {
+                (None, None) // No cortex query available
             }
         } else {
-            None // No cortex query available
-        }
-    } else {
-        None // No transcript_path provided
-    };
+            (None, None) // No transcript_path provided
+        };
 
     tracing::debug!(
         session_id = %request.session_id,
@@ -143,12 +146,15 @@ pub async fn session_start(
     // If we have an estimated context from historical data, emit an event
     // so the TUI can update its per-user context state immediately
     if let Some(tokens) = estimated_context {
+        // Use historical user_id if available (request.user_id might be "unknown" at startup)
+        let event_user_id = historical_user_id.unwrap_or_else(|| request.user_id.clone());
+
         let event = ProxyEvent::ContextEstimate {
             timestamp: Utc::now(),
             estimated_tokens: tokens,
         };
         let tracked = TrackedEvent {
-            user_id: Some(request.user_id.clone()),
+            user_id: Some(event_user_id),
             session_id: Some(request.session_id.clone()),
             tracked_at: Utc::now(),
             event,

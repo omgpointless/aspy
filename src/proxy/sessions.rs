@@ -274,6 +274,10 @@ pub struct ContextState {
 
     /// Context limit from config (copied per-session for convenience)
     pub limit: u64,
+
+    /// True when current_tokens is from DB estimate (session resume), not live ApiUsage.
+    /// Used to prevent warmup ApiUsage from overwriting the estimated context.
+    pub is_db_estimate: bool,
 }
 
 impl ContextState {
@@ -283,6 +287,7 @@ impl ContextState {
             current_tokens: 0,
             last_cached: 0,
             limit,
+            is_db_estimate: false,
         }
     }
 
@@ -310,12 +315,21 @@ impl ContextState {
         self.current_tokens =
             input_tokens as u64 + cache_creation_tokens as u64 + cache_read_tokens as u64;
         self.last_cached = cache_read_tokens as u64;
+        self.is_db_estimate = false; // Clear flag - we now have real data
     }
 
     /// Update after context compaction
     pub fn update_from_compact(&mut self, new_context: u64) {
         self.current_tokens = new_context;
         self.last_cached = 0;
+        self.is_db_estimate = false; // Clear flag - compact provides real data
+    }
+
+    /// Set context from DB estimate on session resume.
+    /// Sets is_db_estimate flag to protect against warmup overwrites.
+    pub fn set_from_db_estimate(&mut self, tokens: u64) {
+        self.current_tokens = tokens;
+        self.is_db_estimate = true;
     }
 }
 
@@ -639,8 +653,17 @@ impl SessionManager {
             session.context.current_tokens = tokens;
             tracing::debug!(
                 session_key = %key,
+                user = %user_id.short(),
                 estimated_tokens = tokens,
-                "Initialized context from DB estimate on session start"
+                transcript_path = ?session.transcript_path,
+                context_limit = self.context_limit,
+                "Initialized context from DB estimate on session start: \
+                session_key={} user={} estimated_tokens={} transcript_path={:?} context_limit={}",
+                key,
+                user_id.short(),
+                tokens,
+                session.transcript_path,
+                self.context_limit
             );
         }
 
@@ -743,8 +766,17 @@ impl SessionManager {
             session.context.current_tokens = tokens;
             tracing::debug!(
                 session_id = %session_id,
+                user = %user_id.short(),
                 estimated_tokens = tokens,
-                "Initialized context from DB estimate"
+                transcript_path = ?session.transcript_path,
+                context_limit = self.context_limit,
+                "Initialized context from DB estimate on reconnect: \
+                session_id={} user={} estimated_tokens={} transcript_path={:?} context_limit={}",
+                session_id,
+                user_id.short(),
+                tokens,
+                session.transcript_path,
+                self.context_limit
             );
         }
 

@@ -143,6 +143,111 @@ Press `F3` for Settings, navigate to theme, press `Enter` to apply. Changes pers
 
 See [Themes documentation](themes.md) for creating custom themes.
 
+## OpenTelemetry Export
+
+Export telemetry data to OpenTelemetry-compatible backends like Azure Application Insights, enabling enterprise observability and monitoring.
+
+### What Gets Exported
+
+| Event | Span Type | Attributes |
+|-------|-----------|------------|
+| `Request` | `api.request` | request.id, http.method, http.url, body.size, session.id |
+| `Response` | `api.response` | request.id, http.status_code, ttfb_ms, duration_ms |
+| `ToolCall` | `tool.<name>` | tool.id, tool.name, input.size |
+| `ToolResult` | `tool.<name>.result` | tool.id, duration_ms, success |
+| `ApiUsage` | `api.usage` | model, tokens.input, tokens.output, tokens.cache_* |
+| `Error` | `api.error` | error.message, error.context |
+| `ContextCompact` | `context.compact` | context.previous, context.new, context.reduction |
+| `RequestTransformed` | `transform.request` | transformer, tokens.before, tokens.after |
+| `ResponseAugmented` | `augment.response` | augmenter, tokens.injected |
+
+### Configuration
+
+```toml
+[otel]
+enabled = true
+connection_string = "InstrumentationKey=xxx;IngestionEndpoint=https://..."
+service_name = "aspy"          # Default
+service_version = "0.2.0"      # Defaults to crate version
+```
+
+Or via environment variable:
+```bash
+export ASPY_OTEL_CONNECTION_STRING="InstrumentationKey=xxx;..."
+```
+
+### Azure Application Insights
+
+The OTel exporter is optimized for Azure Application Insights:
+
+1. Create an Application Insights resource in Azure
+2. Copy the connection string from the resource overview
+3. Configure Aspy with the connection string
+4. View traces, metrics, and logs in the Azure portal
+
+See the [OpenTelemetry Guide](otel-guide.md) for setup details and Azure Workbook examples.
+
+---
+
+## Todo History
+
+Track Claude's task lists across sessions. When Claude uses the TodoWrite tool, Aspy captures a snapshot of the todo list with FTS indexing.
+
+### How It Works
+
+1. Claude calls `TodoWrite` to update its task list
+2. Aspy captures a `TodoSnapshot` event with:
+   - The full todo list (as JSON)
+   - Count by status (pending, in_progress, completed)
+   - Timestamp and session context
+3. FTS5 indexes the todo content for searching
+
+### Querying Todo History
+
+```bash
+# Search todos mentioning "refactor"
+curl "http://127.0.0.1:8080/api/lifestats/todos?q=refactor"
+
+# Last 7 days
+curl "http://127.0.0.1:8080/api/lifestats/todos?q=test&days=7"
+```
+
+Use cases:
+- Recall task lists from previous sessions
+- Find what you were working on before compaction
+- Track patterns in your work
+
+---
+
+## Context Recovery Detection
+
+Aspy detects when Claude Code automatically "crunches" tool results to recover context space, separate from manual `/compact` operations.
+
+### What It Detects
+
+When you're working, Claude Code may silently trim tool_result content (replacing large outputs with summaries). Aspy detects this by monitoring context size drops between requests:
+
+```
+ContextRecovery detected:
+  tokens_before: 180,000
+  tokens_after: 150,000
+  percent_recovered: 16.7%
+```
+
+This is different from `/compact`:
+- **ContextRecovery**: Automatic trimming by Claude Code (crunches tool outputs)
+- **ContextCompact**: Manual `/compact` command (creates summary, resets context)
+
+### Event Details
+
+The `ContextRecovery` event includes:
+- `tokens_before` / `tokens_after`: Context size before and after
+- `percent_recovered`: How much context was freed
+
+This visibility helps you understand why context behavior changes unexpectedly.
+
+---
+
 ## Multi-Client Routing
 
 <!-- TODO: Add diagram -->
@@ -268,6 +373,7 @@ claude mcp add aspy -- npx -y aspy-mcp
 | `aspy_lifestats_search_thinking` | Search thinking blocks only |
 | `aspy_lifestats_search_prompts` | Search user prompts only |
 | `aspy_lifestats_search_responses` | Search assistant responses only |
+| `aspy_lifestats_todos` | Search todo snapshots from past sessions |
 | `aspy_lifestats_embeddings_status` | Check embedding indexer status |
 
 ## Keyboard Navigation

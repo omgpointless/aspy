@@ -90,8 +90,9 @@ Once you see the full picture—which tools get called, how tokens flow, when ca
       <li><a href="{{ '/api-reference' | relative_url }}">API Reference</a> — REST endpoints</li>
       <li><a href="{{ '/log-analysis' | relative_url }}">Log Analysis</a> — jq queries and session recovery</li>
       <li><a href="{{ '/semantic-search-guide' | relative_url }}">Semantic Search</a> — Embedding providers and hybrid search</li>
-      <li><a href="{{ '/transformers' | relative_url }}">Request Transformers</a> — Edit XML tags, inject context conditionally</li>
+      <li><a href="{{ '/transformers' | relative_url }}">Request Transformers</a> — Edit XML tags, system prompts, inject context</li>
       <li><a href="{{ '/api-translation-guide' | relative_url }}">API Translation</a> — Use Claude Code with any OpenAI-compatible backend</li>
+      <li><a href="{{ '/otel-guide' | relative_url }}">OpenTelemetry</a> — Export to Azure Application Insights</li>
       <li><a href="{{ '/architecture' | relative_url }}">Architecture</a> — Design patterns and internals</li>
     </ul>
   </div>

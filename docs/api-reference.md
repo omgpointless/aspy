@@ -110,7 +110,14 @@ Returns recent events with optional filtering. Events are returned most recent f
 - `ApiUsage` - Token usage report
 - `Thinking` - Thinking block content
 - `ContextCompact` - Context window compaction detected
+- `ContextRecovery` - Automatic context recovery (tool_result crunching)
 - `ThinkingStarted` - Thinking block started
+- `UserPrompt` - User's prompt extracted from request
+- `AssistantResponse` - Claude's text response
+- `RequestTransformed` - Request was modified by a transformer
+- `ResponseAugmented` - Response was augmented with injected content
+- `PreCompactHook` - PreCompact hook was triggered
+- `TodoSnapshot` - Todo list snapshot from TodoWrite
 
 **Response:**
 
@@ -251,6 +258,112 @@ Returns information about all tracked sessions.
 
 ```bash
 curl http://127.0.0.1:8080/api/sessions
+```
+
+---
+
+### GET /api/whoami
+
+Returns the current user's identity and session information. Useful for discovering your user ID and verifying session detection is working.
+
+**Identification Priority:**
+1. `?user=` query param (supports ASPY_CLIENT_ID / URL path routing)
+2. `x-api-key` header (hashed)
+3. `Authorization: Bearer` header (hashed)
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `user` | string | User identifier (client_id or api_key_hash) |
+
+**Response:**
+
+```json
+{
+  "user_id": "b0acf41e12907b7b",
+  "session_id": "session:abc123",
+  "claude_session_id": "session-xyz-789",
+  "session_started": "2025-12-01T10:30:00Z",
+  "session_source": "hook",
+  "session_status": "active",
+  "transcript_path": "/home/user/.claude/projects/.../session.jsonl"
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `user_id` | First 16 chars of SHA-256 hash of API key, or client_id if using URL routing |
+| `session_id` | Aspy's internal session key |
+| `claude_session_id` | Claude Code's session ID (from hook) |
+| `session_started` | When the session started (ISO 8601) |
+| `session_source` | How session was detected: `hook`, `implicit`, `reconnected` |
+| `session_status` | Current status: `active`, `idle`, `ended` |
+| `transcript_path` | Path to Claude Code's transcript file (if available) |
+
+**Example:**
+
+```bash
+# Discover your user ID and session
+curl http://127.0.0.1:8080/api/whoami -H "x-api-key: $ANTHROPIC_API_KEY"
+
+# Using client_id
+curl "http://127.0.0.1:8080/api/whoami?user=dev-1"
+```
+
+---
+
+### GET /api/session-history
+
+Returns session history for the current user, including both in-memory history and persisted sessions from the database.
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `user` | string | - | User identifier (required via param or header) |
+| `limit` | integer | 20 | Max sessions to return (max: 100) |
+| `offset` | integer | 0 | Skip first N sessions |
+| `after` | string | - | Only sessions after this timestamp (ISO 8601) |
+| `before` | string | - | Only sessions before this timestamp (ISO 8601) |
+
+**Response:**
+
+```json
+{
+  "user_id": "b0acf41e12907b7b",
+  "count": 5,
+  "has_more": true,
+  "sessions": [
+    {
+      "session_id": "session:abc123",
+      "user_id": "b0acf41e12907b7b",
+      "claude_session_id": "session-xyz-789",
+      "started": "2025-12-01T10:30:00Z",
+      "ended": "2025-12-01T12:45:00Z",
+      "source": "hook",
+      "end_reason": "prompt_input_exit",
+      "transcript_path": "/home/user/.claude/projects/.../session.jsonl",
+      "stats": {
+        "requests": 25,
+        "tool_calls": 58,
+        "input_tokens": 50000,
+        "output_tokens": 15000,
+        "cost_usd": 0.0234
+      }
+    }
+  ]
+}
+```
+
+**Example:**
+
+```bash
+# Get last 10 sessions
+curl "http://127.0.0.1:8080/api/session-history?user=b0acf41e12907b7b&limit=10"
+
+# Sessions from last week
+curl "http://127.0.0.1:8080/api/session-history?user=dev-1&after=2025-11-24T00:00:00Z"
 ```
 
 ---
@@ -553,6 +666,60 @@ Trigger a full reindex of embeddings. Use after changing embedding providers/mod
 ### POST /api/lifestats/embeddings/poll
 
 Force the indexer to check for new content immediately (instead of waiting for poll interval).
+
+---
+
+### GET /api/lifestats/todos
+
+Search todo snapshots captured from Claude's TodoWrite tool calls. Useful for recalling task lists from past sessions.
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `q` | string | - | Search query (FTS on todo content) |
+| `limit` | integer | 10 | Max results (max: 100) |
+| `days` | integer | - | Days to look back (default: all time) |
+| `mode` | string | `phrase` | FTS mode: `phrase`, `natural`, `raw` |
+
+**Response:**
+
+```json
+{
+  "query": "authentication",
+  "count": 3,
+  "results": [
+    {
+      "timestamp": "2025-12-01T14:30:00Z",
+      "session_id": "session-abc123",
+      "pending_count": 2,
+      "in_progress_count": 1,
+      "completed_count": 5,
+      "todos": [
+        {
+          "content": "Implement JWT authentication",
+          "status": "completed"
+        },
+        {
+          "content": "Add refresh token support",
+          "status": "in_progress"
+        }
+      ],
+      "rank_score": -12.34
+    }
+  ]
+}
+```
+
+**Example:**
+
+```bash
+# Search for todos mentioning "refactor"
+curl "http://127.0.0.1:8080/api/lifestats/todos?q=refactor"
+
+# Last 7 days, limit 20
+curl "http://127.0.0.1:8080/api/lifestats/todos?q=test&days=7&limit=20"
+```
 
 ---
 

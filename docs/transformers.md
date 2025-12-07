@@ -41,7 +41,8 @@ when = { has_tool_results = "=0" }
 Request → [Transformation Pipeline] → [Translation Pipeline] → Provider
               ↓
          TagEditor (XML tag manipulation)
-         (more transformers planned)
+         SystemEditor (system prompt modification)
+         CompactEnhancer (compaction guidance)
 ```
 
 Transformers run **before** translation, when the request is in known Anthropic format. This ensures consistent behavior regardless of target provider format.
@@ -309,6 +310,121 @@ content = "You are connected to the development environment."
 when = { client_id = "dev-1|dev-2" }  # Pipe = OR
 ```
 
+## System Editor
+
+Modifies the `system` field in Claude API requests. Use this to append, prepend, or replace content in system prompts—useful for adding global context, branding, or modifying Claude Code's base behavior.
+
+### Rule Types
+
+| Type | Purpose | Example |
+|------|---------|---------|
+| `append` | Add text to the end of the last system block | Augmentation notices |
+| `prepend` | Add text to the beginning of the first system block | Priority instructions |
+| `replace` | Find and replace text in all system blocks | Update references |
+
+Rules are applied in order as defined in config.
+
+### Configuration
+
+```toml
+[transformers]
+enabled = true
+
+[transformers.system-editor]
+enabled = true
+
+# Append a notice to the system prompt
+[[transformers.system-editor.rules]]
+type = "append"
+content = "\n\nYou are augmented by Aspy observability."
+
+# Prepend priority instructions
+[[transformers.system-editor.rules]]
+type = "prepend"
+content = "[ENHANCED MODE] "
+
+# Replace references (regex supported)
+[[transformers.system-editor.rules]]
+type = "replace"
+pattern = "Claude Code"
+replacement = "Claude Code (Aspy-enhanced)"
+```
+
+### Append and Prepend
+
+**Append** adds content to the **last** text block in the system array:
+
+```toml
+[[transformers.system-editor.rules]]
+type = "append"
+content = """
+
+## Aspy Active
+Recovery tools available via aspy_lifestats_context_hybrid.
+"""
+```
+
+**Prepend** adds content to the **first** text block:
+
+```toml
+[[transformers.system-editor.rules]]
+type = "prepend"
+content = "[Session tracked by Aspy] "
+```
+
+### Replace with Regex
+
+The `replace` rule uses regex patterns and applies to **all** system blocks:
+
+```toml
+# Update version references
+[[transformers.system-editor.rules]]
+type = "replace"
+pattern = "v\\d+\\.\\d+\\.\\d+"
+replacement = "v2.0.0"
+
+# Capture groups work
+[[transformers.system-editor.rules]]
+type = "replace"
+pattern = "(Claude) (Code)"
+replacement = "$1 $2 (enhanced)"
+```
+
+### String vs Array System Format
+
+The System Editor handles both system prompt formats:
+
+- **String format:** `"system": "You are Claude."`
+- **Array format:** `"system": [{"type": "text", "text": "You are Claude."}]`
+
+String format is automatically converted to array format when modified, then the rules are applied.
+
+### Use Cases
+
+**Add global context:**
+```toml
+[[transformers.system-editor.rules]]
+type = "append"
+content = "\n\nThis project uses Rust 2021 edition with async/await patterns."
+```
+
+**Branding/identification:**
+```toml
+[[transformers.system-editor.rules]]
+type = "prepend"
+content = "[MyCompany Dev Environment] "
+```
+
+**Update outdated references:**
+```toml
+[[transformers.system-editor.rules]]
+type = "replace"
+pattern = "api\\.old-domain\\.com"
+replacement = "api.new-domain.com"
+```
+
+---
+
 ## Compact Enhancer
 
 Detects Anthropic's compaction prompts and enhances them with continuity guidance. When Claude Code's context window fills up, Anthropic sends a special prompt asking Claude to summarize the conversation. This transformer appends instructions to improve what gets preserved.
@@ -368,6 +484,7 @@ Planned additions:
 - **ContextEnricher** - Inject RAG context from embeddings
 - **ModelRouter** - Route requests based on content/model
 - **ContentFilter** - Block requests matching policy rules
+- **CostEstimator** - Detect expensive operations, inject warnings
 
 ## Future Conditions
 

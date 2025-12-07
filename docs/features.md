@@ -30,13 +30,13 @@ Press `s` to switch to Stats view, `Tab` to cycle through tabs.
 
 ![Stats dashboard](images/features/stats-001.png)
 
-## Context Recall & Lifestats
+## Context Recall & Cortex
 
 Search across all your past sessions. When compaction wipes context, the logs remain—indexed and searchable.
 
 ### SQLite-Backed Storage
 
-All session data is stored in a local SQLite database (`~/.local/share/aspy/lifestats.db`) with FTS5 full-text indexing. This enables:
+All session data is stored in a local SQLite database (`~/.local/share/aspy/cortex.db`) with FTS5 full-text indexing. This enables:
 
 - **Fast full-text search** across thinking blocks, prompts, and responses
 - **Lifetime statistics** — token usage, costs, and tool breakdowns across all sessions
@@ -52,7 +52,7 @@ Use MCP tools to search your history without leaving Claude Code:
 "Search my past sessions for discussions about authentication"
 ```
 
-Claude uses `aspy_lifestats_context_hybrid` to find relevant thinking blocks, prompts, and responses—even if you used different terminology.
+Claude uses `aspy_recall` to find relevant thinking blocks, prompts, and responses—even if you used different terminology.
 
 ![Context Recall](images/features/context-recall-001.gif)
 
@@ -65,7 +65,7 @@ Track your Claude Code usage across all sessions:
 - **Tool usage patterns** — which tools you use most, success rates
 - **Session history** — when you started, how many sessions
 
-Use `/aspy:lifestats` or the `aspy_lifestats_stats` MCP tool.
+Use `/aspy:lifestats` or the `aspy_lifetime` MCP tool.
 
 ## Semantic Search
 
@@ -206,10 +206,10 @@ Track Claude's task lists across sessions. When Claude uses the TodoWrite tool, 
 
 ```bash
 # Search todos mentioning "refactor"
-curl "http://127.0.0.1:8080/api/lifestats/todos?q=refactor"
+curl "http://127.0.0.1:8080/api/cortex/todos?q=refactor"
 
 # Last 7 days
-curl "http://127.0.0.1:8080/api/lifestats/todos?q=test&days=7"
+curl "http://127.0.0.1:8080/api/cortex/todos?q=test&days=7"
 ```
 
 Use cases:
@@ -364,17 +364,16 @@ claude mcp add aspy -- npx -y aspy-mcp
 | `aspy_sessions` | List all active sessions |
 | `aspy_search` | Search JSONL logs (current session, real-time) |
 
-### Lifestats Tools (All Sessions)
+### Cortex Tools (All Sessions)
 | Tool | Description |
 |------|-------------|
-| `aspy_lifestats_stats` | Lifetime token usage, costs, tool breakdown |
-| `aspy_lifestats_context_hybrid` | **Best** — Hybrid semantic + FTS search |
-| `aspy_lifestats_context` | FTS-only combined search (fallback) |
-| `aspy_lifestats_search_thinking` | Search thinking blocks only |
-| `aspy_lifestats_search_prompts` | Search user prompts only |
-| `aspy_lifestats_search_responses` | Search assistant responses only |
-| `aspy_lifestats_todos` | Search todo snapshots from past sessions |
-| `aspy_lifestats_embeddings_status` | Check embedding indexer status |
+| `aspy_lifetime` | Lifetime token usage, costs, tool breakdown |
+| `aspy_recall` | **Best** — Hybrid semantic + FTS search |
+| `aspy_recall_thinking` | Search thinking blocks only |
+| `aspy_recall_prompts` | Search user prompts only |
+| `aspy_recall_responses` | Search assistant responses only |
+| `aspy_todos_history` | Search todo snapshots from past sessions |
+| `aspy_embeddings` | Check embedding indexer status |
 
 ## Keyboard Navigation
 

@@ -4,12 +4,12 @@ Read this when basic searches aren't finding what you need.
 
 ## Hybrid vs FTS-Only
 
-**Hybrid search** (`aspy_lifestats_context_hybrid`) should be your first choice:
+**Hybrid search** (`aspy_recall`) should be your first choice:
 - Combines semantic embeddings (understands meaning) with FTS5 (matches keywords)
 - Finds results even when terminology differs from what you're searching
 - Uses Reciprocal Rank Fusion (RRF) to merge both result sets
 
-**Fall back to FTS-only** (`aspy_lifestats_context`) when:
+**Fall back to FTS-only** (`aspy_recall_thinking`, `aspy_recall_prompts`, `aspy_recall_responses`) when:
 - Embeddings aren't available or not yet indexed
 - You need exact phrase matching with specific operators
 - Debugging why certain results aren't appearing
@@ -77,4 +77,4 @@ If searches return empty:
 1. Ask user for ANY keyword they remember
 2. Try broader terms (component names, file names)
 3. Check if Aspy proxy was running during that session
-4. Consider the work might predate lifestats storage
+4. Consider the work might predate cortex storage

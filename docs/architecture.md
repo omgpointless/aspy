@@ -81,8 +81,8 @@ src/
 │
 ├── pipeline/                # Data processing pipeline (core)
 │   ├── mod.rs               # Pipeline orchestration
-│   ├── lifestats.rs         # SQLite storage for lifetime stats
-│   ├── lifestats_query.rs   # Query interface (FTS5, stats)
+│   ├── cortex.rs            # SQLite storage (sessions, thinking, todos)
+│   ├── cortex_query/        # Query interface (FTS5, stats, semantic)
 │   ├── embeddings.rs        # Embedding provider abstraction
 │   ├── embedding_indexer.rs # Background embedding indexer
 │   └── transformation/      # Request transformations (extension)
@@ -162,7 +162,7 @@ Claude Code Request
 └───────────────────┘
         ↓
 ┌───────────────────┐     ┌───────────────────┐
-│  JSONL Storage    │     │  Lifestats        │
+│  JSONL Storage    │     │  Cortex           │
 │  (real-time)      │     │  (SQLite + FTS5)  │
 └───────────────────┘     └───────────────────┘
                                   ↓
@@ -178,8 +178,8 @@ Claude Code Request
 | Layer | Purpose | Query Tool |
 |-------|---------|------------|
 | **JSONL** | Real-time logs, `jq` analysis, portability | `aspy_search` |
-| **Lifestats (SQLite)** | Lifetime stats, FTS5 full-text search | `aspy_lifestats_*` |
-| **Embeddings (SQLite)** | Vector storage for semantic similarity | `aspy_lifestats_context_hybrid` |
+| **Cortex (SQLite)** | Sessions, thinking, todos, FTS5 search | `aspy_recall_*` |
+| **Embeddings (SQLite)** | Vector storage for semantic similarity | `aspy_recall` |
 
 ### Embedding Indexer
 
@@ -608,11 +608,11 @@ The MCP server (`mcp-server/`) is a **separate Node.js process** that queries th
 - MCP server is stateless — all data comes from REST API calls
 - Proxy must be running for MCP tools to work
 - MCP tools map 1:1 to REST endpoints (e.g., `aspy_stats` → `GET /api/stats`)
-- Lifestats tools query SQLite directly via proxy API
+- Cortex tools query SQLite directly via proxy API
 
 **MCP tool categories:**
 | Category | Tools | Data Source |
 |----------|-------|-------------|
 | Current session | `aspy_stats`, `aspy_events`, `aspy_context` | Proxy memory |
-| Lifetime search | `aspy_lifestats_*` | SQLite (FTS5 + embeddings) |
+| Lifetime search | `aspy_recall_*`, `aspy_lifetime` | SQLite (FTS5 + embeddings) |
 | Real-time logs | `aspy_search` | JSONL files |

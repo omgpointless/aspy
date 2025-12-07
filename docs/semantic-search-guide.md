@@ -204,7 +204,7 @@ Embeddings Status (Live)
 
 ```bash
 # Direct API check (while proxy running)
-curl http://127.0.0.1:8080/api/lifestats/embeddings/status | jq
+curl http://127.0.0.1:8080/api/cortex/embeddings/status | jq
 ```
 
 **Expected:**
@@ -225,7 +225,7 @@ curl http://127.0.0.1:8080/api/lifestats/embeddings/status | jq
 
 ```bash
 # Once some embeddings exist, test hybrid context recovery
-curl "http://127.0.0.1:8080/api/lifestats/context/hybrid/user/YOUR_USER_ID?topic=authentication&limit=5" | jq
+curl "http://127.0.0.1:8080/api/cortex/context/hybrid/user/YOUR_USER_ID?topic=authentication&limit=5" | jq
 ```
 
 **Response includes `search_type`:**
@@ -278,10 +278,10 @@ aspy embeddings --reindex
 | Check | Command | Expected |
 |-------|---------|----------|
 | Config loaded | `aspy config --show` | Shows `[embeddings]` with your values |
-| DB exists | `ls ~/.local/share/aspy/lifestats.db` | File exists |
+| DB exists | `ls ~/.local/share/aspy/cortex.db` | File exists |
 | Offline status | `aspy embeddings --status` | Shows "(Offline)", correct provider |
 | Live status | `aspy embeddings --status` (proxy running) | Shows "(Live)", indexer RUNNING |
-| API responds | `curl .../api/lifestats/embeddings/status` | JSON with `running: true` |
+| API responds | `curl .../api/cortex/embeddings/status` | JSON with `running: true` |
 | Indexing progresses | Check status twice, 30s apart | `documents_indexed` increases |
 | Hybrid search works | `curl .../context/hybrid/user/...` | `search_type: "hybrid"` |
 
@@ -310,8 +310,8 @@ aspy embeddings --status
 aspy embeddings --reindex
 
 # API endpoints (while proxy running)
-GET  /api/lifestats/embeddings/status     # Indexer status
-POST /api/lifestats/embeddings/reindex    # Trigger reindex
-POST /api/lifestats/embeddings/poll       # Force check for new content
-GET  /api/lifestats/context/hybrid/user/:id?topic=X  # Hybrid search
+GET  /api/cortex/embeddings/status     # Indexer status
+POST /api/cortex/embeddings/reindex    # Trigger reindex
+POST /api/cortex/embeddings/poll       # Force check for new content
+GET  /api/cortex/context/hybrid/user/:id?topic=X  # Hybrid search
 ```

@@ -44,8 +44,8 @@ title: Home
     <h3>32 Themes & Custom</h3>
     <p>Make your terminal beautiful. Built-in themes from Dracula to Solarized, plus full TOML custom theme support.</p>
   </a>
-  <a href="{{ '/features#context-recall--lifestats' | relative_url }}" class="feature-card">
-    <h3>Context Recall & Lifestats</h3>
+  <a href="{{ '/features#context-recall--cortex' | relative_url }}" class="feature-card">
+    <h3>Context Recall & Cortex</h3>
     <p>SQLite-backed search across all sessions. Hybrid semantic + keyword search lets Claude recall what it forgot—even with different wording.</p>
   </a>
 </div>

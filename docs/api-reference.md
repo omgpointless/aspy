@@ -491,11 +491,11 @@ curl -X POST http://127.0.0.1:8080/api/search \
 
 ---
 
-## Lifestats API
+## Cortex API
 
-The Lifestats API provides access to historical data across all sessions, stored in SQLite with FTS5 indexing.
+The Cortex API provides access to historical data across all sessions, stored in SQLite with FTS5 indexing.
 
-### GET /api/lifestats/stats
+### GET /api/cortex/stats
 
 Returns lifetime statistics across all sessions.
 
@@ -533,7 +533,7 @@ Returns lifetime statistics across all sessions.
 
 ---
 
-### GET /api/lifestats/context/hybrid/user/:user_id
+### GET /api/cortex/context/hybrid/user/:user_id
 
 **Best quality** — Hybrid search combining semantic embeddings with FTS5 keyword matching using Reciprocal Rank Fusion (RRF).
 
@@ -583,7 +583,7 @@ Returns lifetime statistics across all sessions.
 
 ---
 
-### GET /api/lifestats/context/user/:user_id
+### GET /api/cortex/context/user/:user_id
 
 FTS-only context search (fallback when embeddings unavailable).
 
@@ -591,7 +591,7 @@ Same parameters and response as hybrid, but `search_type` is always `"fts_only"`
 
 ---
 
-### GET /api/lifestats/search/thinking/user/:user_id
+### GET /api/cortex/search/thinking/user/:user_id
 
 Search only Claude's thinking blocks.
 
@@ -615,19 +615,19 @@ Search only Claude's thinking blocks.
 
 ---
 
-### GET /api/lifestats/search/prompts/user/:user_id
+### GET /api/cortex/search/prompts/user/:user_id
 
 Search only user prompts.
 
 ---
 
-### GET /api/lifestats/search/responses/user/:user_id
+### GET /api/cortex/search/responses/user/:user_id
 
 Search only assistant responses.
 
 ---
 
-### GET /api/lifestats/embeddings/status
+### GET /api/cortex/embeddings/status
 
 Check embedding indexer status.
 
@@ -648,7 +648,7 @@ Check embedding indexer status.
 
 ---
 
-### POST /api/lifestats/embeddings/reindex
+### POST /api/cortex/embeddings/reindex
 
 Trigger a full reindex of embeddings. Use after changing embedding providers/models.
 
@@ -663,13 +663,13 @@ Trigger a full reindex of embeddings. Use after changing embedding providers/mod
 
 ---
 
-### POST /api/lifestats/embeddings/poll
+### POST /api/cortex/embeddings/poll
 
 Force the indexer to check for new content immediately (instead of waiting for poll interval).
 
 ---
 
-### GET /api/lifestats/todos
+### GET /api/cortex/todos
 
 Search todo snapshots captured from Claude's TodoWrite tool calls. Useful for recalling task lists from past sessions.
 
@@ -715,10 +715,10 @@ Search todo snapshots captured from Claude's TodoWrite tool calls. Useful for re
 
 ```bash
 # Search for todos mentioning "refactor"
-curl "http://127.0.0.1:8080/api/lifestats/todos?q=refactor"
+curl "http://127.0.0.1:8080/api/cortex/todos?q=refactor"
 
 # Last 7 days, limit 20
-curl "http://127.0.0.1:8080/api/lifestats/todos?q=test&days=7&limit=20"
+curl "http://127.0.0.1:8080/api/cortex/todos?q=test&days=7&limit=20"
 ```
 
 ---

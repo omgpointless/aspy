@@ -360,7 +360,7 @@ type = "append"
 content = """
 
 ## Aspy Active
-Recovery tools available via aspy_lifestats_context_hybrid.
+Recovery tools available via aspy_recall.
 """
 ```
 
@@ -438,7 +438,7 @@ Detects Anthropic's compaction prompts and enhances them with continuity guidanc
 2. **Injection** - Appends continuity guidance to the compaction prompt:
    - Prompts for active work tracks, key decisions, current mental model
    - Suggests searchable keywords for post-compaction recovery
-   - Mentions `aspy_lifestats_context_hybrid` for context lookup
+   - Mentions `aspy_recall` for context lookup
 
 ### Configuration
 
@@ -462,7 +462,7 @@ When a compaction request is detected, this text is appended:
 - **Key Decisions Made:** Important choices that shouldn't be revisited
 - **Current Mental Model:** The user's goals and approach being taken
 
-**Post-compaction recovery:** The continuing Claude has `aspy_lifestats_context_hybrid` to search
+**Post-compaction recovery:** The continuing Claude has `aspy_recall` to search
 the full pre-compaction conversation. Include 3-5 searchable keywords (feature names, concepts,
 file paths) that would help locate detailed context.
 ```

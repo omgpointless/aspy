@@ -58,7 +58,7 @@ claude mcp add aspy -- npx -y aspy-mcp
 
 This gives Claude Code access to:
 - **Current session**: `aspy_stats`, `aspy_events`, `aspy_context`
-- **Lifetime history**: `aspy_lifestats_stats`, `aspy_lifestats_context_hybrid` (semantic + keyword search)
+- **Lifetime history**: `aspy_recall`, `aspy_lifetime` (semantic + keyword search)
 - **Context recovery**: Search past thinking blocks, prompts, and responses across all sessions
 
 > **Note**: Requires the TUI proxy running to collect data.

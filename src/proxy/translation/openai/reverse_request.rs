@@ -34,25 +34,12 @@ impl AnthropicToOpenAiRequest {
             model_mapping: Arc::new(model_mapping),
         }
     }
-}
 
-impl RequestTranslator for AnthropicToOpenAiRequest {
-    fn name(&self) -> &'static str {
-        "anthropic-to-openai-request"
-    }
-
-    fn source_format(&self) -> ApiFormat {
-        ApiFormat::Anthropic
-    }
-
-    fn target_format(&self) -> ApiFormat {
-        ApiFormat::OpenAI
-    }
-
-    fn translate(
+    /// Internal translation logic that accepts a ModelMapping reference
+    fn translate_internal(
         &self,
         body: &[u8],
-        _headers: &HeaderMap,
+        effective_mapping: &ModelMapping,
     ) -> Result<(Vec<u8>, TranslationContext)> {
         let anthropic_request: AnthropicRequest = serde_json::from_slice(body).map_err(|e| {
             // Log a sample of the body to help debug parsing failures
@@ -96,8 +83,8 @@ impl RequestTranslator for AnthropicToOpenAiRequest {
             openai_messages.extend(convert_message(msg));
         }
 
-        // Map model name
-        let openai_model = self.model_mapping.to_openai(&anthropic_request.model);
+        // Map model name using effective mapping (may be provider-specific override)
+        let openai_model = effective_mapping.to_openai(&anthropic_request.model);
 
         // Convert thinking to reasoning for OpenRouter passthrough
         let reasoning = anthropic_request
@@ -128,11 +115,11 @@ impl RequestTranslator for AnthropicToOpenAiRequest {
         let translated_body =
             serde_json::to_vec(&openai_request).context("Failed to serialize OpenAI request")?;
 
-        // Create translation context
+        // Create translation context with the effective mapping
         let ctx = TranslationContext::new(
             ApiFormat::Anthropic,
             ApiFormat::OpenAI,
-            self.model_mapping.clone(),
+            Arc::new(effective_mapping.clone()),
             anthropic_request.stream.unwrap_or(false),
         )
         .with_original_model(anthropic_request.model.clone());
@@ -145,6 +132,40 @@ impl RequestTranslator for AnthropicToOpenAiRequest {
         );
 
         Ok((translated_body, ctx))
+    }
+}
+
+impl RequestTranslator for AnthropicToOpenAiRequest {
+    fn name(&self) -> &'static str {
+        "anthropic-to-openai-request"
+    }
+
+    fn source_format(&self) -> ApiFormat {
+        ApiFormat::Anthropic
+    }
+
+    fn target_format(&self) -> ApiFormat {
+        ApiFormat::OpenAI
+    }
+
+    fn translate(
+        &self,
+        body: &[u8],
+        _headers: &HeaderMap,
+    ) -> Result<(Vec<u8>, TranslationContext)> {
+        self.translate_internal(body, &self.model_mapping)
+    }
+
+    fn translate_with_mapping(
+        &self,
+        body: &[u8],
+        _headers: &HeaderMap,
+        mapping_override: Option<&ModelMapping>,
+    ) -> Result<(Vec<u8>, TranslationContext)> {
+        match mapping_override {
+            Some(override_mapping) => self.translate_internal(body, override_mapping),
+            None => self.translate_internal(body, &self.model_mapping),
+        }
     }
 }
 

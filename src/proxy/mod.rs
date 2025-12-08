@@ -44,7 +44,7 @@ use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use translation::TranslationPipeline;
+use translation::{ModelMapping, TranslationPipeline};
 
 /// Maximum request body size (50MB) - prevents DoS via huge uploads
 const MAX_REQUEST_BODY_SIZE: usize = 50 * 1024 * 1024;
@@ -871,10 +871,24 @@ async fn proxy_handler(
         })
         .unwrap_or(translation::ApiFormat::Anthropic);
 
+    // Get provider-specific model mapping (if configured)
+    // This takes precedence over global [translation.model_mapping]
+    let provider_model_mapping = routing
+        .client_id
+        .as_ref()
+        .and_then(|cid| state.clients.get_client_model_mapping(cid))
+        .map(ModelMapping::from_config);
+
     // Apply translation if enabled, targeting the provider's expected format
     let (translated_body, translation_ctx, translated_path) = state
         .translation
-        .translate_request_for_target(&routing.api_path, &headers, &body_bytes, target_format)
+        .translate_request_for_target_with_mapping(
+            &routing.api_path,
+            &headers,
+            &body_bytes,
+            target_format,
+            provider_model_mapping.as_ref(),
+        )
         .map_err(|e| ProxyError::BodyRead(format!("Translation failed: {}", e)))?;
 
     // Get provider's custom api_path if configured (overrides default /v1/messages or /v1/chat/completions)
@@ -2068,6 +2082,7 @@ mod tests {
                 api_format: crate::config::ApiFormat::Anthropic,
                 api_path: None,
                 auth: None,
+                model_mapping: HashMap::new(),
             },
         );
         providers.insert(
@@ -2078,6 +2093,7 @@ mod tests {
                 api_format: crate::config::ApiFormat::Anthropic,
                 api_path: None,
                 auth: None,
+                model_mapping: HashMap::new(),
             },
         );
 

@@ -35,25 +35,12 @@ impl OpenAiToAnthropicRequest {
             model_mapping: Arc::new(model_mapping),
         }
     }
-}
 
-impl RequestTranslator for OpenAiToAnthropicRequest {
-    fn name(&self) -> &'static str {
-        "openai-to-anthropic-request"
-    }
-
-    fn source_format(&self) -> ApiFormat {
-        ApiFormat::OpenAI
-    }
-
-    fn target_format(&self) -> ApiFormat {
-        ApiFormat::Anthropic
-    }
-
-    fn translate(
+    /// Internal translation logic that accepts a ModelMapping reference
+    fn translate_internal(
         &self,
         body: &[u8],
-        _headers: &HeaderMap,
+        effective_mapping: &ModelMapping,
     ) -> Result<(Vec<u8>, TranslationContext)> {
         let openai_request: OpenAiChatRequest =
             serde_json::from_slice(body).context("Failed to parse OpenAI request")?;
@@ -61,8 +48,8 @@ impl RequestTranslator for OpenAiToAnthropicRequest {
         // Extract system message if present
         let (system, messages) = extract_system_message(&openai_request.messages);
 
-        // Map model name
-        let anthropic_model = self.model_mapping.to_anthropic(&openai_request.model);
+        // Map model name using effective mapping (may be provider-specific override)
+        let anthropic_model = effective_mapping.to_anthropic(&openai_request.model);
 
         // Convert messages
         let anthropic_messages: Vec<AnthropicMessage> =
@@ -90,11 +77,11 @@ impl RequestTranslator for OpenAiToAnthropicRequest {
         let translated_body = serde_json::to_vec(&anthropic_request)
             .context("Failed to serialize Anthropic request")?;
 
-        // Create translation context
+        // Create translation context with the effective mapping
         let ctx = TranslationContext::new(
             ApiFormat::OpenAI,
             ApiFormat::Anthropic,
-            self.model_mapping.clone(),
+            Arc::new(effective_mapping.clone()),
             openai_request.stream.unwrap_or(false),
         )
         .with_original_model(openai_request.model);
@@ -107,6 +94,40 @@ impl RequestTranslator for OpenAiToAnthropicRequest {
         );
 
         Ok((translated_body, ctx))
+    }
+}
+
+impl RequestTranslator for OpenAiToAnthropicRequest {
+    fn name(&self) -> &'static str {
+        "openai-to-anthropic-request"
+    }
+
+    fn source_format(&self) -> ApiFormat {
+        ApiFormat::OpenAI
+    }
+
+    fn target_format(&self) -> ApiFormat {
+        ApiFormat::Anthropic
+    }
+
+    fn translate(
+        &self,
+        body: &[u8],
+        _headers: &HeaderMap,
+    ) -> Result<(Vec<u8>, TranslationContext)> {
+        self.translate_internal(body, &self.model_mapping)
+    }
+
+    fn translate_with_mapping(
+        &self,
+        body: &[u8],
+        _headers: &HeaderMap,
+        mapping_override: Option<&ModelMapping>,
+    ) -> Result<(Vec<u8>, TranslationContext)> {
+        match mapping_override {
+            Some(override_mapping) => self.translate_internal(body, override_mapping),
+            None => self.translate_internal(body, &self.model_mapping),
+        }
     }
 }
 

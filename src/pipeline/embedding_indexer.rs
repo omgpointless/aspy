@@ -537,8 +537,34 @@ impl EmbeddingIndexer {
 
         tracing::debug!("Processing {} documents for embedding", documents.len());
 
+        // Filter out empty/whitespace-only documents (OpenAI API rejects empty strings)
+        // Keep track of which documents have valid content for embedding
+        let (valid_docs, empty_docs): (Vec<_>, Vec<_>) = documents.into_iter().partition(|d| {
+            let trimmed = d.content.trim();
+            !trimmed.is_empty()
+        });
+
+        // Mark empty documents as "embedded" with zero-vector to avoid re-processing
+        if !empty_docs.is_empty() {
+            tracing::debug!(
+                "Skipping {} empty/whitespace documents, marking as processed",
+                empty_docs.len()
+            );
+            Self::mark_empty_as_processed(conn, &empty_docs)?;
+            metrics
+                .documents_embedded
+                .fetch_add(empty_docs.len() as u64, Ordering::Relaxed);
+        }
+
+        // If all documents were empty, we're done
+        if valid_docs.is_empty() {
+            let pending = Self::count_pending(conn)?;
+            metrics.documents_pending.store(pending, Ordering::Relaxed);
+            return Ok(());
+        }
+
         // Prepare texts for batch embedding (safely truncated to avoid UTF-8 boundary issues)
-        let texts: Vec<&str> = documents
+        let texts: Vec<&str> = valid_docs
             .iter()
             .map(|d| truncate_utf8_safe(&d.content, config.max_content_length))
             .collect();
@@ -547,12 +573,12 @@ impl EmbeddingIndexer {
         match provider.embed_batch(&texts) {
             Ok(result) => {
                 // Store embeddings
-                Self::store_embeddings(conn, &documents, &result)?;
+                Self::store_embeddings(conn, &valid_docs, &result)?;
 
                 // Update metrics
                 metrics
                     .documents_embedded
-                    .fetch_add(documents.len() as u64, Ordering::Relaxed);
+                    .fetch_add(valid_docs.len() as u64, Ordering::Relaxed);
                 metrics.batches_processed.fetch_add(1, Ordering::Relaxed);
 
                 let pending = Self::count_pending(conn)?;
@@ -560,7 +586,7 @@ impl EmbeddingIndexer {
 
                 tracing::info!(
                     "Embedded {} documents, {} pending",
-                    documents.len(),
+                    valid_docs.len(),
                     pending
                 );
             }
@@ -639,6 +665,30 @@ impl EmbeddingIndexer {
                     doc.content_type.embedding_table()
                 ),
                 params![doc.id, embedding_blob, now],
+            )?;
+        }
+
+        conn.execute("COMMIT", [])?;
+        Ok(())
+    }
+
+    /// Mark empty/whitespace-only documents as processed
+    ///
+    /// Inserts a zero-length embedding blob so these documents won't be re-fetched.
+    /// This prevents the embedding API from failing on empty inputs.
+    fn mark_empty_as_processed(conn: &Connection, documents: &[Document]) -> anyhow::Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let empty_blob: Vec<u8> = Vec::new();
+
+        conn.execute("BEGIN TRANSACTION", [])?;
+
+        for doc in documents {
+            conn.execute(
+                &format!(
+                    "INSERT OR REPLACE INTO {} (content_id, embedding, embedded_at) VALUES (?1, ?2, ?3)",
+                    doc.content_type.embedding_table()
+                ),
+                params![doc.id, &empty_blob, now],
             )?;
         }
 

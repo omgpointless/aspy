@@ -10,6 +10,7 @@
 #   ./claude.sh openrouter         # OpenRouter provider via /openrouter route
 #   ./claude.sh local              # Local Ollama via /local route
 #   ./claude.sh zai                # Zai provider via /zai route
+#   ./claude.sh kimi               # Kimi provider via /kimi route
 #   ./claude.sh --resume           # Resume most recent session
 #   ./claude.sh dev-1 --resume     # Resume most recent with client
 #   ./claude.sh dev-1 -r abc123    # Resume specific session
@@ -20,6 +21,7 @@
 #   openrouter - Uses ANTHROPIC_BASE_URL, unsets ANTHROPIC_FOUNDRY_RESOURCE
 #   ollama     - Uses ANTHROPIC_BASE_URL for local Ollama server
 #   zai        - Uses ANTHROPIC_BASE_URL for Zai provider
+#   kimi       - Uses ANTHROPIC_BASE_URL for Kimi provider
 #
 # Resume Options:
 #   --resume, -r              Resume most recent session
@@ -33,6 +35,7 @@
 #   ./claude.sh openrouter         # → ANTHROPIC_BASE_URL=http://localhost:8080/openrouter
 #   ./claude.sh local              # → ANTHROPIC_BASE_URL=http://localhost:8080/local (Ollama)
 #   ./claude.sh zai                # → ANTHROPIC_BASE_URL=http://localhost:8080/zai
+#   ./claude.sh kimi               # → ANTHROPIC_BASE_URL=http://localhost:8080/kimi
 #   ./claude.sh --resume           # Resume most recent session (bare proxy)
 #   ./claude.sh dev-1 --resume     # Resume most recent session via dev-1
 #   ./claude.sh dev-1 -r abc123    # Resume session abc123 via dev-1
@@ -57,13 +60,13 @@ while [[ $# -gt 0 ]]; do
         --resume|-r)
             RESUME_FLAG="--resume"
             # Check if next arg is a session ID (not another flag or provider)
-            if [[ -n "${2:-}" && ! "$2" =~ ^- && ! "$2" =~ ^(foundry|anthropic|openrouter|ollama|zai)$ ]]; then
+            if [[ -n "${2:-}" && ! "$2" =~ ^- && ! "$2" =~ ^(foundry|anthropic|openrouter|ollama|zai|kimi)$ ]]; then
                 RESUME_SESSION="$2"
                 shift
             fi
             shift
             ;;
-        foundry|anthropic|openrouter|ollama|zai)
+        foundry|anthropic|openrouter|ollama|zai|kimi)
             # Explicit provider type
             if [[ -z "$CLIENT_ID" ]]; then
                 CLIENT_ID="$1"
@@ -99,6 +102,9 @@ if [[ -z "$PROVIDER_TYPE" ]]; then
             ;;
         zai*)
             PROVIDER_TYPE="zai"
+            ;;
+        kimi*)
+            PROVIDER_TYPE="kimi"
             ;;
         local*|ollama*)
             PROVIDER_TYPE="ollama"
@@ -144,26 +150,45 @@ case "$PROVIDER_TYPE" in
         claude "${CLAUDE_ARGS[@]}"
         ;;
     openrouter)
-        # OpenRouter: use base URL, ensure foundry resource is unset
+        # OpenRouter: use base URL
         ANTHROPIC_BASE_URL="${PROXY_URL}" \
-        ANTHROPIC_FOUNDRY_RESOURCE= \
         ASPY_CLIENT_ID="${CLIENT_ID}" \
         claude "${CLAUDE_ARGS[@]}"
+        # Can set models here if needed/wanted:
+        # ANTHROPIC_DEFAULT_HAIKU_MODEL=
+        # ANTHROPIC_DEFAULT_SONNET_MODEL=
+        # ANTHROPIC_DEFAULT_OPUS_MODEL=
         ;;
     ollama)
-        # Local Ollama: use base URL, ensure foundry resource is unset
+        # Local Ollama: use base URL
         ANTHROPIC_BASE_URL="${PROXY_URL}" \
-        ANTHROPIC_FOUNDRY_RESOURCE= \
         ASPY_CLIENT_ID="${CLIENT_ID}" \
         claude "${CLAUDE_ARGS[@]}"
+        # Can set models here if needed/wanted:
+        # ANTHROPIC_DEFAULT_HAIKU_MODEL=
+        # ANTHROPIC_DEFAULT_SONNET_MODEL=
+        # ANTHROPIC_DEFAULT_OPUS_MODEL=
         ;;
     zai)
-        # Zai: use base URL, ensure foundry resource is unset
+        # Zai: use base URL
         ANTHROPIC_BASE_URL="${PROXY_URL}" \
-        ANTHROPIC_FOUNDRY_RESOURCE= \
         ASPY_CLIENT_ID="${CLIENT_ID}" \
         claude "${CLAUDE_ARGS[@]}"
+        # Can set models here if needed/wanted:
+        # ANTHROPIC_DEFAULT_HAIKU_MODEL=
+        # ANTHROPIC_DEFAULT_SONNET_MODEL=
+        # ANTHROPIC_DEFAULT_OPUS_MODEL=
         ;;
+    kimi)
+        # Kimi: use base URL
+        ANTHROPIC_BASE_URL="${PROXY_URL}" \
+        ASPY_CLIENT_ID="${CLIENT_ID}" \
+        claude "${CLAUDE_ARGS[@]}"
+        # Can set models here if needed/wanted:
+        # ANTHROPIC_DEFAULT_HAIKU_MODEL=
+        # ANTHROPIC_DEFAULT_SONNET_MODEL=
+        # ANTHROPIC_DEFAULT_OPUS_MODEL=
+        ;; 
     anthropic|*)
         # Standard Anthropic API
         ANTHROPIC_BASE_URL="${PROXY_URL}" \

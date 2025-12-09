@@ -141,8 +141,9 @@ where
 
         // Extract the message using a visitor
         let mut message = String::new();
-        let mut visitor = MessageVisitor(&mut message);
+        let mut visitor = MessageVisitor::new(&mut message);
         event.record(&mut visitor);
+        visitor.finalize();
 
         let entry = LogEntry {
             timestamp: Utc::now(),
@@ -168,16 +169,73 @@ where
 }
 
 /// Visitor to extract the message from a tracing event
-struct MessageVisitor<'a>(&'a mut String);
+///
+/// Tracing events can have their message in different forms:
+/// - `tracing::info!("literal")` → field "message" via record_debug (fmt::Arguments)
+/// - `tracing::info!(message = "value")` → field "message" via record_str
+/// - `tracing::info!(key = value, "format {}", arg)` → "message" + other fields
+///
+/// We prioritize the "message" field but collect all fields for fallback.
+struct MessageVisitor<'a> {
+    message: &'a mut String,
+    fields: Vec<String>,
+}
 
-impl<'a> tracing::field::Visit for MessageVisitor<'a> {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "message" {
-            *self.0 = format!("{:?}", value);
-            // Remove the quotes that Debug adds
-            if self.0.starts_with('"') && self.0.ends_with('"') {
-                *self.0 = self.0[1..self.0.len() - 1].to_string();
-            }
+impl<'a> MessageVisitor<'a> {
+    fn new(message: &'a mut String) -> Self {
+        Self {
+            message,
+            fields: Vec::new(),
         }
+    }
+
+    /// Finalize: if no message was found, join all captured fields
+    fn finalize(self) {
+        if self.message.is_empty() && !self.fields.is_empty() {
+            *self.message = self.fields.join(" ");
+        }
+    }
+
+    /// Clean up debug format quotes
+    fn clean_debug_quotes(s: &str) -> String {
+        if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+            s[1..s.len() - 1].to_string()
+        } else {
+            s.to_string()
+        }
+    }
+}
+
+impl tracing::field::Visit for MessageVisitor<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        let formatted = format!("{:?}", value);
+        let cleaned = Self::clean_debug_quotes(&formatted);
+
+        if field.name() == "message" {
+            *self.message = cleaned;
+        } else {
+            // Capture other fields for context
+            self.fields.push(format!("{}={}", field.name(), cleaned));
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            *self.message = value.to_string();
+        } else {
+            self.fields.push(format!("{}={}", field.name(), value));
+        }
+    }
+
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        self.fields.push(format!("{}={}", field.name(), value));
+    }
+
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.fields.push(format!("{}={}", field.name(), value));
+    }
+
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.fields.push(format!("{}={}", field.name(), value));
     }
 }

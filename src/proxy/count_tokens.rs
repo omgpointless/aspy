@@ -270,6 +270,17 @@ pub fn is_count_tokens_path(path: &str) -> bool {
     path.ends_with("/count_tokens")
 }
 
+/// Generate a synthetic count_tokens response
+///
+/// Returns a minimal valid response for providers that don't support count_tokens
+/// (e.g., OpenAI-compatible APIs). The response format matches Anthropic's schema:
+/// `{"input_tokens": 0}`
+///
+/// This is used when a provider's `count_tokens` handling is set to `Synthetic`.
+pub fn synthetic_response() -> Bytes {
+    Bytes::from_static(b"{\"input_tokens\":0}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,5 +383,15 @@ mod tests {
             cache.check(Some("user"), b"body"),
             CacheResult::Miss
         ));
+    }
+
+    #[test]
+    fn test_synthetic_response_is_valid_json() {
+        let response = super::synthetic_response();
+        let json: serde_json::Value =
+            serde_json::from_slice(&response).expect("synthetic response should be valid JSON");
+
+        // Verify it has the expected structure
+        assert_eq!(json["input_tokens"], 0);
     }
 }

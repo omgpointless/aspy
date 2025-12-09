@@ -18,7 +18,7 @@ pub mod translation;
 
 use std::error::Error as StdError;
 
-use crate::config::{ClientsConfig, Config};
+use crate::config::{ClientsConfig, Config, CountTokensHandling};
 use crate::events::{generate_id, ProxyEvent, TrackedEvent};
 use crate::parser::models::CapturedHeaders;
 use crate::parser::Parser;
@@ -204,12 +204,14 @@ pub async fn start_proxy(
     let api_url = config.api_url.clone();
 
     // Build the HTTP client with timeout and connection pooling
+    // NOTE: No default User-Agent set - we forward the original User-Agent from the client.
+    // This is critical for Claude Max credentials which require the request to appear
+    // as coming from Claude Code (Anthropic validates User-Agent for Claude Max auth).
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300)) // 5 minute timeout for API calls
         .pool_max_idle_per_host(10)
         // Force HTTP/1.1 to avoid HTTP/2 connection reset issues with some providers
         .http1_only()
-        .user_agent("aspy/0.2.0")
         .build()
         .context("Failed to create HTTP client")?;
 
@@ -657,42 +659,79 @@ async fn proxy_handler(
         routing.api_path.contains("/messages") || routing.api_path.contains("/chat/completions");
 
     // ─────────────────────────────────────────────────────────────────────────
-    // COUNT TOKENS DEDUPLICATION AND RATE LIMITING
+    // COUNT TOKENS HANDLING (provider-aware)
     // ─────────────────────────────────────────────────────────────────────────
-    // Claude Code spams count_tokens at startup. This prevents overwhelming
-    // rate-limited backends or backends that don't support this endpoint.
+    // Claude Code spams count_tokens at startup. Different providers need
+    // different handling:
+    // - Anthropic: passthrough (endpoint exists, forward as-is)
+    // - OpenAI: synthetic (endpoint doesn't exist, return synthetic response)
+    // - Dedupe: rate-limit and cache (legacy behavior)
+    //
+    // Non-client requests default to Passthrough (assumes Anthropic backend).
+    let count_tokens_handling = if count_tokens::is_count_tokens_path(&routing.api_path) {
+        routing
+            .client_id
+            .as_ref()
+            .and_then(|cid| state.clients.get_client_count_tokens(cid))
+            .unwrap_or(CountTokensHandling::Passthrough)
+    } else {
+        CountTokensHandling::Passthrough // Not a count_tokens request
+    };
+
+    // Handle count_tokens based on provider mode
     if count_tokens::is_count_tokens_path(&routing.api_path) {
-        match state
-            .count_tokens_cache
-            .check(user_id.as_deref(), &body_bytes)
-        {
-            count_tokens::CacheResult::Hit { body, status } => {
-                tracing::debug!("count_tokens cache hit, returning cached response");
+        match count_tokens_handling {
+            CountTokensHandling::Passthrough => {
+                // Forward to backend as-is (no caching, no special handling)
+                tracing::trace!("count_tokens passthrough, forwarding to backend");
+            }
+            CountTokensHandling::Synthetic => {
+                // Return synthetic response immediately (for providers without count_tokens)
+                tracing::debug!("count_tokens synthetic, returning synthetic response");
                 return Response::builder()
-                    .status(status)
+                    .status(200)
                     .header("content-type", "application/json")
-                    .header("x-aspy-cache", "hit")
-                    .body(Body::from(body))
+                    .header("x-aspy-cache", "synthetic")
+                    .body(Body::from(count_tokens::synthetic_response()))
                     .map_err(|e| ProxyError::ResponseBuild(e.to_string()));
             }
-            count_tokens::CacheResult::RateLimited { body, status } => {
-                tracing::debug!("count_tokens rate limited, returning fallback response");
-                return Response::builder()
-                    .status(status)
-                    .header("content-type", "application/json")
-                    .header("x-aspy-cache", "rate-limited")
-                    .body(Body::from(body))
-                    .map_err(|e| ProxyError::ResponseBuild(e.to_string()));
-            }
-            count_tokens::CacheResult::Miss => {
-                // Proceed with normal handling, but we'll cache the response
-                tracing::trace!("count_tokens cache miss, forwarding to backend");
+            CountTokensHandling::Dedupe => {
+                // Use deduplication and rate limiting (legacy behavior)
+                match state
+                    .count_tokens_cache
+                    .check(user_id.as_deref(), &body_bytes)
+                {
+                    count_tokens::CacheResult::Hit { body, status } => {
+                        tracing::debug!("count_tokens cache hit, returning cached response");
+                        return Response::builder()
+                            .status(status)
+                            .header("content-type", "application/json")
+                            .header("x-aspy-cache", "hit")
+                            .body(Body::from(body))
+                            .map_err(|e| ProxyError::ResponseBuild(e.to_string()));
+                    }
+                    count_tokens::CacheResult::RateLimited { body, status } => {
+                        tracing::debug!("count_tokens rate limited, returning fallback response");
+                        return Response::builder()
+                            .status(status)
+                            .header("content-type", "application/json")
+                            .header("x-aspy-cache", "rate-limited")
+                            .body(Body::from(body))
+                            .map_err(|e| ProxyError::ResponseBuild(e.to_string()));
+                    }
+                    count_tokens::CacheResult::Miss => {
+                        // Proceed with normal handling, but we'll cache the response
+                        tracing::trace!("count_tokens cache miss, forwarding to backend");
+                    }
+                }
             }
         }
     }
 
-    // Track count_tokens request body for caching the response later
-    let count_tokens_request_body = if count_tokens::is_count_tokens_path(&routing.api_path) {
+    // Track count_tokens request body for caching the response later (only for Dedupe mode)
+    let count_tokens_request_body = if count_tokens::is_count_tokens_path(&routing.api_path)
+        && count_tokens_handling == CountTokensHandling::Dedupe
+    {
         Some(Bytes::copy_from_slice(&body_bytes))
     } else {
         None
@@ -2068,6 +2107,7 @@ mod tests {
                 api_format: crate::config::ApiFormat::Anthropic,
                 api_path: None,
                 auth: None,
+                count_tokens: None,
             },
         );
         providers.insert(
@@ -2078,6 +2118,7 @@ mod tests {
                 api_format: crate::config::ApiFormat::Anthropic,
                 api_path: None,
                 auth: None,
+                count_tokens: None,
             },
         );
 

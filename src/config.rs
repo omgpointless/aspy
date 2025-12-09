@@ -375,6 +375,35 @@ impl ApiFormat {
     }
 }
 
+/// How to handle count_tokens requests for a provider
+///
+/// Claude Code aggressively calls `/v1/messages/count_tokens` at startup.
+/// Different providers need different handling:
+/// - Anthropic: supports count_tokens natively, pass through
+/// - OpenAI-compatible: no count_tokens endpoint, return synthetic response
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CountTokensHandling {
+    /// Forward to provider as-is (default for Anthropic providers)
+    #[default]
+    Passthrough,
+    /// Return synthetic response immediately (default for OpenAI providers)
+    Synthetic,
+    /// Use deduplication and rate limiting (legacy behavior)
+    Dedupe,
+}
+
+impl CountTokensHandling {
+    /// Convert to string for TOML serialization
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Passthrough => "passthrough",
+            Self::Synthetic => "synthetic",
+            Self::Dedupe => "dedupe",
+        }
+    }
+}
+
 /// Provider backend configuration
 ///
 /// Defines where to forward API requests for a given provider.
@@ -409,6 +438,14 @@ pub struct ProviderConfig {
     /// If not specified, uses passthrough (client's auth headers forwarded)
     #[serde(default)]
     pub auth: Option<ProviderAuth>,
+
+    /// How to handle count_tokens requests for this provider
+    ///
+    /// If not specified, defaults based on api_format:
+    /// - Anthropic: passthrough (forward to provider)
+    /// - OpenAI: synthetic (return synthetic response, endpoint doesn't exist)
+    #[serde(default)]
+    pub count_tokens: Option<CountTokensHandling>,
 }
 
 impl ProviderConfig {
@@ -433,6 +470,19 @@ impl ProviderConfig {
                 ApiFormat::Openai => "/v1/chat/completions",
             }
         }
+    }
+
+    /// Get the effective count_tokens handling for this provider
+    ///
+    /// If `count_tokens` is set, returns that. Otherwise returns the default
+    /// based on api_format:
+    /// - Anthropic: passthrough (endpoint exists, forward as-is)
+    /// - OpenAI: synthetic (endpoint doesn't exist, return synthetic response)
+    pub fn effective_count_tokens(&self) -> CountTokensHandling {
+        self.count_tokens.clone().unwrap_or(match self.api_format {
+            ApiFormat::Anthropic => CountTokensHandling::Passthrough,
+            ApiFormat::Openai => CountTokensHandling::Synthetic,
+        })
     }
 }
 
@@ -622,6 +672,15 @@ impl ClientsConfig {
     pub fn get_client_api_path(&self, client_id: &str) -> Option<&str> {
         self.get_client_provider(client_id)
             .map(|p| p.effective_api_path())
+    }
+
+    /// Get the effective count_tokens handling for a client's provider
+    ///
+    /// Returns the provider's count_tokens setting (or its default based on api_format).
+    /// Returns None if client not found.
+    pub fn get_client_count_tokens(&self, client_id: &str) -> Option<CountTokensHandling> {
+        self.get_client_provider(client_id)
+            .map(|p| p.effective_count_tokens())
     }
 
     /// Get the effective authentication config for a client
@@ -964,12 +1023,15 @@ impl Config {
             return r#"
 # [providers.anthropic]
 # base_url = "https://api.anthropic.com"
+# # count_tokens defaults to "passthrough" for anthropic api_format
 #
 # # Provider with OpenAI-compatible API (e.g., OpenRouter)
 # [providers.openrouter]
 # base_url = "https://openrouter.ai/api/v1"
 # api_format = "openai"  # Translate Anthropic <-> OpenAI format
 # api_path = "/chat/completions"  # Optional: custom path (default: /v1/chat/completions)
+# # count_tokens defaults to "synthetic" for openai api_format (endpoint doesn't exist)
+# # count_tokens = "dedupe"  # Override: use rate-limited deduplication
 # [providers.openrouter.auth]
 # method = "bearer"
 # key_env = "OPENROUTER_API_KEY"
@@ -1008,6 +1070,17 @@ impl Config {
             // Serialize custom api_path if set
             if let Some(api_path) = &provider.api_path {
                 output.push_str(&format!("api_path = \"{}\"\n", api_path));
+            }
+
+            // Serialize count_tokens if explicitly set AND differs from api_format default
+            if let Some(ref ct) = provider.count_tokens {
+                let default_for_format = match provider.api_format {
+                    ApiFormat::Anthropic => CountTokensHandling::Passthrough,
+                    ApiFormat::Openai => CountTokensHandling::Synthetic,
+                };
+                if ct != &default_for_format {
+                    output.push_str(&format!("count_tokens = \"{}\"\n", ct.as_str()));
+                }
             }
 
             // Serialize auth config if present
@@ -2411,6 +2484,7 @@ mod tests {
             api_format: ApiFormat::Anthropic,
             api_path: None,
             auth: None,
+            count_tokens: None,
         };
         assert_eq!(provider.effective_api_path(), "/v1/messages");
     }
@@ -2423,6 +2497,7 @@ mod tests {
             api_format: ApiFormat::Openai,
             api_path: None,
             auth: None,
+            count_tokens: None,
         };
         assert_eq!(provider.effective_api_path(), "/v1/chat/completions");
     }
@@ -2436,6 +2511,7 @@ mod tests {
             api_format: ApiFormat::Openai,
             api_path: Some("/chat/completions".to_string()),
             auth: None,
+            count_tokens: None,
         };
         assert_eq!(provider.effective_api_path(), "/chat/completions");
     }
@@ -2449,6 +2525,7 @@ mod tests {
             api_format: ApiFormat::Anthropic,
             api_path: Some("/messages".to_string()),
             auth: None,
+            count_tokens: None,
         };
         assert_eq!(provider.effective_api_path(), "/messages");
     }
@@ -2475,6 +2552,7 @@ mod tests {
                 api_format: ApiFormat::Openai,
                 api_path: Some("/chat/completions".to_string()),
                 auth: None,
+                count_tokens: None,
             },
         );
 
@@ -2500,6 +2578,7 @@ mod tests {
                 api_format: ApiFormat::Openai,
                 api_path: Some("/chat/completions".to_string()),
                 auth: None,
+                count_tokens: None,
             },
         );
 
@@ -2522,5 +2601,185 @@ mod tests {
             .get("zai")
             .expect("zai provider should exist");
         assert_eq!(provider.api_path, Some("/chat/completions".to_string()));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Provider count_tokens tests
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_provider_effective_count_tokens_default_anthropic() {
+        let provider = ProviderConfig {
+            base_url: "https://api.anthropic.com".to_string(),
+            name: None,
+            api_format: ApiFormat::Anthropic,
+            api_path: None,
+            auth: None,
+            count_tokens: None,
+        };
+        // Anthropic defaults to Passthrough
+        assert_eq!(
+            provider.effective_count_tokens(),
+            CountTokensHandling::Passthrough
+        );
+    }
+
+    #[test]
+    fn test_provider_effective_count_tokens_default_openai() {
+        let provider = ProviderConfig {
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            name: None,
+            api_format: ApiFormat::Openai,
+            api_path: None,
+            auth: None,
+            count_tokens: None,
+        };
+        // OpenAI defaults to Synthetic
+        assert_eq!(
+            provider.effective_count_tokens(),
+            CountTokensHandling::Synthetic
+        );
+    }
+
+    #[test]
+    fn test_provider_effective_count_tokens_explicit_override() {
+        // OpenAI provider can override to Dedupe
+        let provider = ProviderConfig {
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            name: None,
+            api_format: ApiFormat::Openai,
+            api_path: None,
+            auth: None,
+            count_tokens: Some(CountTokensHandling::Dedupe),
+        };
+        assert_eq!(
+            provider.effective_count_tokens(),
+            CountTokensHandling::Dedupe
+        );
+    }
+
+    #[test]
+    fn test_clients_config_get_client_count_tokens() {
+        let mut clients = HashMap::new();
+        clients.insert(
+            "anthropic-client".to_string(),
+            ClientConfig {
+                name: "Anthropic".to_string(),
+                provider: "anthropic".to_string(),
+                tags: vec![],
+                auth: None,
+            },
+        );
+        clients.insert(
+            "openai-client".to_string(),
+            ClientConfig {
+                name: "OpenAI".to_string(),
+                provider: "openai".to_string(),
+                tags: vec![],
+                auth: None,
+            },
+        );
+
+        let mut providers = HashMap::new();
+        providers.insert(
+            "anthropic".to_string(),
+            ProviderConfig {
+                base_url: "https://api.anthropic.com".to_string(),
+                name: None,
+                api_format: ApiFormat::Anthropic,
+                api_path: None,
+                auth: None,
+                count_tokens: None,
+            },
+        );
+        providers.insert(
+            "openai".to_string(),
+            ProviderConfig {
+                base_url: "https://openrouter.ai/api/v1".to_string(),
+                name: None,
+                api_format: ApiFormat::Openai,
+                api_path: None,
+                auth: None,
+                count_tokens: None,
+            },
+        );
+
+        let config = ClientsConfig { clients, providers };
+
+        // Anthropic client gets Passthrough
+        assert_eq!(
+            config.get_client_count_tokens("anthropic-client"),
+            Some(CountTokensHandling::Passthrough)
+        );
+
+        // OpenAI client gets Synthetic
+        assert_eq!(
+            config.get_client_count_tokens("openai-client"),
+            Some(CountTokensHandling::Synthetic)
+        );
+
+        // Unknown client returns None
+        assert_eq!(config.get_client_count_tokens("unknown"), None);
+    }
+
+    #[test]
+    fn test_count_tokens_handling_serialization() {
+        assert_eq!(CountTokensHandling::Passthrough.as_str(), "passthrough");
+        assert_eq!(CountTokensHandling::Synthetic.as_str(), "synthetic");
+        assert_eq!(CountTokensHandling::Dedupe.as_str(), "dedupe");
+    }
+
+    #[test]
+    fn test_provider_count_tokens_toml_only_serializes_non_default() {
+        let mut config = Config::default();
+
+        // Add an Anthropic provider with default count_tokens (should NOT serialize)
+        config.clients.providers.insert(
+            "anthropic".to_string(),
+            ProviderConfig {
+                base_url: "https://api.anthropic.com".to_string(),
+                name: None,
+                api_format: ApiFormat::Anthropic,
+                api_path: None,
+                auth: None,
+                count_tokens: None, // Default for Anthropic is Passthrough
+            },
+        );
+
+        // Add an OpenAI provider with explicit Dedupe (SHOULD serialize)
+        config.clients.providers.insert(
+            "openrouter".to_string(),
+            ProviderConfig {
+                base_url: "https://openrouter.ai/api/v1".to_string(),
+                name: None,
+                api_format: ApiFormat::Openai,
+                api_path: None,
+                auth: None,
+                count_tokens: Some(CountTokensHandling::Dedupe), // Non-default
+            },
+        );
+
+        let toml_str = config.to_toml();
+
+        // Anthropic provider should NOT have count_tokens (it's the default)
+        // OpenRouter should have count_tokens = "dedupe" (non-default)
+        assert!(
+            toml_str.contains(r#"count_tokens = "dedupe""#),
+            "Non-default count_tokens should be serialized.\nTOML:\n{}",
+            toml_str
+        );
+
+        // Verify the anthropic section doesn't have count_tokens
+        let anthropic_section = toml_str
+            .split("[providers.anthropic]")
+            .nth(1)
+            .and_then(|s| s.split("[providers.").next());
+        if let Some(section) = anthropic_section {
+            assert!(
+                !section.contains("count_tokens"),
+                "Anthropic section should not have count_tokens (it's default).\nSection:\n{}",
+                section
+            );
+        }
     }
 }

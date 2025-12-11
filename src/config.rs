@@ -446,6 +446,20 @@ pub struct ProviderConfig {
     /// - OpenAI: synthetic (return synthetic response, endpoint doesn't exist)
     #[serde(default)]
     pub count_tokens: Option<CountTokensHandling>,
+
+    /// Model name mappings for this provider (Anthropic pattern → target model)
+    ///
+    /// When set, these mappings take precedence over global `[translation.model_mapping]`.
+    /// Supports partial matching: "haiku" matches "claude-haiku-4-5-20251001".
+    ///
+    /// Example:
+    /// ```toml
+    /// [providers.openrouter.model_mapping]
+    /// "haiku" = "anthropic/claude-3-haiku"
+    /// "sonnet" = "anthropic/claude-sonnet-4"
+    /// ```
+    #[serde(default)]
+    pub model_mapping: HashMap<String, String>,
 }
 
 impl ProviderConfig {
@@ -701,6 +715,16 @@ impl ClientsConfig {
         self.providers
             .get(&client.provider)
             .and_then(|p| p.auth.as_ref())
+    }
+
+    /// Get the model mapping for a client's provider
+    ///
+    /// Returns the provider's model_mapping if configured and non-empty,
+    /// otherwise None (caller should fall back to global mapping).
+    pub fn get_client_model_mapping(&self, client_id: &str) -> Option<&HashMap<String, String>> {
+        self.get_client_provider(client_id)
+            .map(|p| &p.model_mapping)
+            .filter(|m| !m.is_empty())
     }
 }
 
@@ -1036,12 +1060,19 @@ impl Config {
 # method = "bearer"
 # key_env = "OPENROUTER_API_KEY"
 # strip_incoming = true
+# # Per-provider model mapping (overrides global [translation.model_mapping])
+# [providers.openrouter.model_mapping]
+# "haiku" = "anthropic/claude-3-haiku"
+# "sonnet" = "anthropic/claude-sonnet-4"
 #
 # # Provider with non-standard path (e.g., z.ai)
 # [providers.zai]
 # base_url = "https://api.z.ai/api/coding/paas/v4"
 # api_format = "openai"
 # api_path = "/chat/completions"  # Path appended to base_url (no /v1 prefix)
+# [providers.zai.model_mapping]
+# "haiku" = "grok-3-mini-beta"
+# "sonnet" = "grok-3-beta"
 "#
             .to_string();
         }
@@ -1098,6 +1129,18 @@ impl Config {
                 }
                 if let Some(strip) = auth.strip_incoming {
                     output.push_str(&format!("strip_incoming = {}\n", strip));
+                }
+            }
+
+            // Serialize model_mapping if non-empty
+            if !provider.model_mapping.is_empty() {
+                output.push_str(&format!("\n[providers.{}.model_mapping]\n", provider_id));
+                // Sort keys for deterministic output
+                let mut mapping_keys: Vec<_> = provider.model_mapping.keys().collect();
+                mapping_keys.sort();
+                for key in mapping_keys {
+                    let value = &provider.model_mapping[key];
+                    output.push_str(&format!("\"{}\" = \"{}\"\n", key, value));
                 }
             }
 
@@ -2485,6 +2528,7 @@ mod tests {
             api_path: None,
             auth: None,
             count_tokens: None,
+            model_mapping: HashMap::new(),
         };
         assert_eq!(provider.effective_api_path(), "/v1/messages");
     }
@@ -2498,6 +2542,7 @@ mod tests {
             api_path: None,
             auth: None,
             count_tokens: None,
+            model_mapping: HashMap::new(),
         };
         assert_eq!(provider.effective_api_path(), "/v1/chat/completions");
     }
@@ -2511,6 +2556,7 @@ mod tests {
             api_format: ApiFormat::Openai,
             api_path: Some("/chat/completions".to_string()),
             auth: None,
+            model_mapping: HashMap::new(),
             count_tokens: None,
         };
         assert_eq!(provider.effective_api_path(), "/chat/completions");
@@ -2526,6 +2572,7 @@ mod tests {
             api_path: Some("/messages".to_string()),
             auth: None,
             count_tokens: None,
+            model_mapping: HashMap::new(),
         };
         assert_eq!(provider.effective_api_path(), "/messages");
     }
@@ -2552,6 +2599,7 @@ mod tests {
                 api_format: ApiFormat::Openai,
                 api_path: Some("/chat/completions".to_string()),
                 auth: None,
+                model_mapping: HashMap::new(),
                 count_tokens: None,
             },
         );
@@ -2578,6 +2626,7 @@ mod tests {
                 api_format: ApiFormat::Openai,
                 api_path: Some("/chat/completions".to_string()),
                 auth: None,
+                model_mapping: HashMap::new(),
                 count_tokens: None,
             },
         );

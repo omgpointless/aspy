@@ -149,6 +149,24 @@ pub trait RequestTranslator: Send + Sync {
         body: &[u8],
         headers: &HeaderMap,
     ) -> anyhow::Result<(Vec<u8>, TranslationContext)>;
+
+    /// Translate with optional model mapping override
+    ///
+    /// Allows per-provider model mapping to take precedence over the translator's
+    /// default mapping. Implementors should use `mapping_override` if provided,
+    /// falling back to their internal mapping otherwise.
+    ///
+    /// Default implementation ignores the override and calls `translate()`.
+    fn translate_with_mapping(
+        &self,
+        body: &[u8],
+        headers: &HeaderMap,
+        mapping_override: Option<&ModelMapping>,
+    ) -> anyhow::Result<(Vec<u8>, TranslationContext)> {
+        // Default: ignore override, use internal mapping
+        let _ = mapping_override;
+        self.translate(body, headers)
+    }
 }
 
 /// Trait for response translators (backend format → client format)
@@ -401,6 +419,21 @@ impl TranslationPipeline {
         body: &[u8],
         target: ApiFormat,
     ) -> anyhow::Result<(Vec<u8>, TranslationContext, String)> {
+        self.translate_request_for_target_with_mapping(path, headers, body, target, None)
+    }
+
+    /// Translate a request to a specific target format with optional model mapping override
+    ///
+    /// When `mapping_override` is provided, it takes precedence over the translator's
+    /// default model mapping. This enables per-provider model mappings.
+    pub fn translate_request_for_target_with_mapping(
+        &self,
+        path: &str,
+        headers: &HeaderMap,
+        body: &[u8],
+        target: ApiFormat,
+        mapping_override: Option<&ModelMapping>,
+    ) -> anyhow::Result<(Vec<u8>, TranslationContext, String)> {
         if !self.enabled {
             return Ok((
                 body.to_vec(),
@@ -432,13 +465,19 @@ impl TranslationPipeline {
             })?;
 
         tracing::debug!(
-            "Translating request: {} → {} (using {})",
+            "Translating request: {} → {} (using {}{})",
             detected,
             target,
-            translator.name()
+            translator.name(),
+            if mapping_override.is_some() {
+                ", with provider mapping"
+            } else {
+                ""
+            }
         );
 
-        let (translated_body, ctx) = translator.translate(body, headers)?;
+        let (translated_body, ctx) =
+            translator.translate_with_mapping(body, headers, mapping_override)?;
 
         // Map the path to target endpoint
         let translated_path = target.endpoint_path().to_string();

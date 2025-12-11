@@ -96,6 +96,15 @@ impl AnthropicToOpenAiRequest {
 
         // Build OpenAI request
         // Note: max_tokens is optional in Anthropic API, passthrough as-is to OpenAI
+        let stream_options = if anthropic_request.stream == Some(true) {
+            // Request usage in streaming responses for accurate token tracking
+            Some(StreamOptions {
+                include_usage: true,
+            })
+        } else {
+            None
+        };
+
         let openai_request = OpenAiChatRequest {
             model: openai_model,
             messages: openai_messages,
@@ -105,6 +114,7 @@ impl AnthropicToOpenAiRequest {
             top_p: anthropic_request.top_p,
             stop: anthropic_request.stop_sequences,
             stream: anthropic_request.stream,
+            stream_options,
             tools: anthropic_request
                 .tools
                 .map(|tools| tools.into_iter().map(convert_tool).collect()),
@@ -328,11 +338,20 @@ struct OpenAiChatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenAiTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<OpenAiToolChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<ReasoningConfig>,
+}
+
+/// OpenAI streaming options
+#[derive(Debug, Serialize)]
+struct StreamOptions {
+    /// Include usage statistics in streaming response
+    include_usage: bool,
 }
 
 #[derive(Debug, Serialize)]

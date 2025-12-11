@@ -153,41 +153,40 @@ case "$PROVIDER_TYPE" in
         # OpenRouter: use base URL
         ANTHROPIC_BASE_URL="${PROXY_URL}" \
         ASPY_CLIENT_ID="${CLIENT_ID}" \
-        claude "${CLAUDE_ARGS[@]}"
-        # Can set models here if needed/wanted:
-        # ANTHROPIC_DEFAULT_HAIKU_MODEL=
-        # ANTHROPIC_DEFAULT_SONNET_MODEL=
-        # ANTHROPIC_DEFAULT_OPUS_MODEL=
+        ANTHROPIC_DEFAULT_HAIKU_MODEL="mistralai/devstral-2512:free" \
+        ANTHROPIC_DEFAULT_SONNET_MODEL="mistralai/devstral-2512:free" \
+        ANTHROPIC_DEFAULT_OPUS_MODEL="mistralai/devstral-2512:free" \
+        claude "${CLAUDE_ARGS[@]}" \
         ;;
     ollama)
         # Local Ollama: use base URL
         ANTHROPIC_BASE_URL="${PROXY_URL}" \
         ASPY_CLIENT_ID="${CLIENT_ID}" \
-        claude "${CLAUDE_ARGS[@]}"
         # Can set models here if needed/wanted:
-        # ANTHROPIC_DEFAULT_HAIKU_MODEL=
-        # ANTHROPIC_DEFAULT_SONNET_MODEL=
-        # ANTHROPIC_DEFAULT_OPUS_MODEL=
+        # ANTHROPIC_DEFAULT_HAIKU_MODEL="" \
+        # ANTHROPIC_DEFAULT_SONNET_MODEL="" \
+        # ANTHROPIC_DEFAULT_OPUS_MODEL="" \
+        claude "${CLAUDE_ARGS[@]}"
         ;;
     zai)
         # Zai: use base URL
         ANTHROPIC_BASE_URL="${PROXY_URL}" \
         ASPY_CLIENT_ID="${CLIENT_ID}" \
-        claude "${CLAUDE_ARGS[@]}"
         # Can set models here if needed/wanted:
-        # ANTHROPIC_DEFAULT_HAIKU_MODEL=
-        # ANTHROPIC_DEFAULT_SONNET_MODEL=
-        # ANTHROPIC_DEFAULT_OPUS_MODEL=
+        # ANTHROPIC_DEFAULT_HAIKU_MODEL="" \
+        # ANTHROPIC_DEFAULT_SONNET_MODEL="" \
+        # ANTHROPIC_DEFAULT_OPUS_MODEL="" \
+        claude "${CLAUDE_ARGS[@]}"
         ;;
     kimi)
         # Kimi: use base URL
         ANTHROPIC_BASE_URL="${PROXY_URL}" \
         ASPY_CLIENT_ID="${CLIENT_ID}" \
-        claude "${CLAUDE_ARGS[@]}"
         # Can set models here if needed/wanted:
-        # ANTHROPIC_DEFAULT_HAIKU_MODEL=
-        # ANTHROPIC_DEFAULT_SONNET_MODEL=
-        # ANTHROPIC_DEFAULT_OPUS_MODEL=
+        # ANTHROPIC_DEFAULT_HAIKU_MODEL="" \
+        # ANTHROPIC_DEFAULT_SONNET_MODEL="" \
+        # ANTHROPIC_DEFAULT_OPUS_MODEL="" \
+        claude "${CLAUDE_ARGS[@]}"
         ;; 
     anthropic|*)
         # Standard Anthropic API

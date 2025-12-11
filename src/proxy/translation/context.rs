@@ -214,6 +214,12 @@ pub struct TranslationContext {
     ///
     /// Used for reverse mapping if `original_model` wasn't captured.
     pub response_model: Option<String>,
+
+    /// Whether we're currently inside a content block (text or tool_use)
+    ///
+    /// Used for OpenAI→Anthropic translation to know when to emit
+    /// `content_block_stop` before starting a new block.
+    pub in_content_block: bool,
 }
 
 impl TranslationContext {
@@ -238,6 +244,7 @@ impl TranslationContext {
             sent_initial: false,
             finish_reason: None,
             response_model: None,
+            in_content_block: false,
         }
     }
 
@@ -257,6 +264,7 @@ impl TranslationContext {
             sent_initial: false,
             finish_reason: None,
             response_model: None,
+            in_content_block: false,
         }
     }
 

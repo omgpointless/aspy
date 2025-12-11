@@ -80,8 +80,8 @@ impl ResponseTranslator for OpenAiToAnthropicResponse {
                 continue;
             }
 
-            // Parse SSE line
-            if let Some(data) = line.strip_prefix("data: ") {
+            // Parse SSE line (strip "data:" prefix then trim whitespace, like assembler)
+            if let Some(data) = line.strip_prefix("data:").map(|s| s.trim()) {
                 if data == "[DONE]" {
                     // OpenAI stream end - emit message_stop
                     output.extend(format_sse_event(
@@ -120,6 +120,15 @@ impl OpenAiToAnthropicResponse {
     ) -> Result<Option<Vec<u8>>> {
         let chunk: OpenAiStreamChunk =
             serde_json::from_str(data).context("Failed to parse OpenAI SSE data")?;
+
+        // Debug: Log when we see usage data in a chunk
+        if let Some(usage) = &chunk.usage {
+            tracing::debug!(
+                "OpenAI->Anthropic: Received usage in chunk: completion_tokens={}, choices_len={}",
+                usage.completion_tokens,
+                chunk.choices.len()
+            );
+        }
 
         let mut output = Vec::new();
 
@@ -161,19 +170,17 @@ impl OpenAiToAnthropicResponse {
             // Handle text content
             if let Some(content) = &choice.delta.content {
                 if !content.is_empty() {
-                    // If we haven't started a text block yet, start one
-                    if ctx.chunk_index == 0 {
-                        // Start text block if this is first content
-                        if ctx.accumulated_content.is_empty() {
-                            let block_start = ContentBlockStartEvent {
-                                event_type: "content_block_start".to_string(),
-                                index: ctx.chunk_index,
-                                content_block: ContentBlockPayload::Text {
-                                    text: String::new(),
-                                },
-                            };
-                            output.extend(format_sse_event("content_block_start", &block_start)?);
-                        }
+                    // Start text block if we haven't started any content block yet
+                    if !ctx.in_content_block {
+                        let block_start = ContentBlockStartEvent {
+                            event_type: "content_block_start".to_string(),
+                            index: ctx.chunk_index,
+                            content_block: ContentBlockPayload::Text {
+                                text: String::new(),
+                            },
+                        };
+                        output.extend(format_sse_event("content_block_start", &block_start)?);
+                        ctx.in_content_block = true;
                     }
 
                     ctx.accumulated_content.push_str(content);
@@ -204,8 +211,8 @@ impl OpenAiToAnthropicResponse {
                         .unwrap_or(false);
 
                     if has_new_id || has_new_name {
-                        // Close previous block if we were in text
-                        if !ctx.accumulated_content.is_empty() {
+                        // Close previous block if we were in one (text or tool_use)
+                        if ctx.in_content_block {
                             let block_stop = ContentBlockStopEvent {
                                 event_type: "content_block_stop".to_string(),
                                 index: ctx.chunk_index,
@@ -213,6 +220,7 @@ impl OpenAiToAnthropicResponse {
                             output.extend(format_sse_event("content_block_stop", &block_stop)?);
                             ctx.chunk_index += 1;
                             ctx.accumulated_content.clear();
+                            ctx.in_content_block = false;
                         }
 
                         // Start tool_use block
@@ -230,6 +238,7 @@ impl OpenAiToAnthropicResponse {
                             },
                         };
                         output.extend(format_sse_event("content_block_start", &block_start)?);
+                        ctx.in_content_block = true;
                     }
 
                     // Streaming arguments
@@ -254,15 +263,30 @@ impl OpenAiToAnthropicResponse {
             // Handle finish reason
             if let Some(finish_reason) = &choice.finish_reason {
                 // Close any open content block
-                let block_stop = ContentBlockStopEvent {
-                    event_type: "content_block_stop".to_string(),
-                    index: ctx.chunk_index,
-                };
-                output.extend(format_sse_event("content_block_stop", &block_stop)?);
+                if ctx.in_content_block {
+                    let block_stop = ContentBlockStopEvent {
+                        event_type: "content_block_stop".to_string(),
+                        index: ctx.chunk_index,
+                    };
+                    output.extend(format_sse_event("content_block_stop", &block_stop)?);
+                    ctx.in_content_block = false;
+                }
 
                 // Send message_delta with stop_reason
                 let stop_reason = convert_finish_reason(finish_reason);
                 ctx.finish_reason = Some(stop_reason.clone());
+
+                // Extract output_tokens from OpenAI usage if available
+                let output_tokens = chunk
+                    .usage
+                    .as_ref()
+                    .map(|u| u.completion_tokens)
+                    .unwrap_or(0);
+
+                tracing::debug!(
+                    "OpenAI->Anthropic: Emitting message_delta with finish_reason, output_tokens={}",
+                    output_tokens
+                );
 
                 let message_delta = MessageDeltaEvent {
                     event_type: "message_delta".to_string(),
@@ -270,9 +294,39 @@ impl OpenAiToAnthropicResponse {
                         stop_reason,
                         stop_sequence: None,
                     },
-                    usage: DeltaUsage { output_tokens: 0 },
+                    usage: DeltaUsage { output_tokens },
                 };
                 output.extend(format_sse_event("message_delta", &message_delta)?);
+            }
+        }
+
+        // Handle usage chunk that arrives AFTER finish_reason was already sent
+        // OpenRouter sends usage in a separate chunk (with or without choices) after finish_reason
+        // Only emit if we've already sent finish_reason but this chunk has usage we haven't used
+        if ctx.finish_reason.is_some() {
+            if let Some(usage) = &chunk.usage {
+                // Check if any choice in this chunk has finish_reason (meaning we'd handle it above)
+                let has_finish_reason_in_chunk =
+                    chunk.choices.iter().any(|c| c.finish_reason.is_some());
+
+                if !has_finish_reason_in_chunk {
+                    tracing::debug!(
+                        "OpenAI->Anthropic: Late usage chunk (after finish_reason), output_tokens={}",
+                        usage.completion_tokens
+                    );
+                    // Emit message_delta with just usage
+                    let message_delta = MessageDeltaEvent {
+                        event_type: "message_delta".to_string(),
+                        delta: MessageDelta {
+                            stop_reason: ctx.finish_reason.clone().unwrap_or_default(),
+                            stop_sequence: None,
+                        },
+                        usage: DeltaUsage {
+                            output_tokens: usage.completion_tokens,
+                        },
+                    };
+                    output.extend(format_sse_event("message_delta", &message_delta)?);
+                }
             }
         }
 
@@ -358,7 +412,6 @@ struct OpenAiStreamChunk {
     model: String,
     choices: Vec<OpenAiStreamChoice>,
     #[serde(default)]
-    #[allow(dead_code)]
     usage: Option<OpenAiUsage>,
 }
 

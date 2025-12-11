@@ -201,6 +201,20 @@ pub fn assemble_to_json(body: &str) -> Option<serde_json::Value> {
                                 obj.insert("text".to_string(), json!(text));
                             }
                         }
+                        // Accumulate input_json_delta for tool inputs
+                        if let Some(partial_json) =
+                            delta.get("partial_json").and_then(|v| v.as_str())
+                        {
+                            if let Some(obj) = last_block.as_object_mut() {
+                                // Get or create the accumulated JSON string
+                                let accumulated = obj
+                                    .entry("_input_json_str".to_string())
+                                    .or_insert_with(|| json!(""));
+                                if let Some(s) = accumulated.as_str() {
+                                    *accumulated = json!(format!("{}{}", s, partial_json));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -216,6 +230,24 @@ pub fn assemble_to_json(body: &str) -> Option<serde_json::Value> {
                 }
             }
             _ => {}
+        }
+    }
+
+    // Post-process: convert accumulated JSON strings to input objects for tool_use blocks
+    for block in &mut content_blocks {
+        if let Some(obj) = block.as_object_mut() {
+            if obj.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                if let Some(json_str) = obj.remove("_input_json_str") {
+                    if let Some(s) = json_str.as_str() {
+                        if !s.is_empty() {
+                            // Parse the accumulated JSON string into an object
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s) {
+                                obj.insert("input".to_string(), parsed);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

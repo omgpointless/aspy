@@ -86,8 +86,8 @@ impl ResponseTranslator for AnthropicToOpenAiResponse {
                 continue;
             }
 
-            // Parse SSE line
-            if let Some(data) = line.strip_prefix("data: ") {
+            // Parse SSE line (strip "data:" prefix then trim whitespace, like assembler)
+            if let Some(data) = line.strip_prefix("data:").map(|s| s.trim()) {
                 if let Some(translated) = self.translate_sse_data(data, ctx)? {
                     output.extend(translated);
                 }

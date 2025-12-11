@@ -2665,6 +2665,7 @@ mod tests {
             api_path: None,
             auth: None,
             count_tokens: None,
+            model_mapping: HashMap::new(),
         };
         // Anthropic defaults to Passthrough
         assert_eq!(
@@ -2682,6 +2683,7 @@ mod tests {
             api_path: None,
             auth: None,
             count_tokens: None,
+            model_mapping: HashMap::new(),
         };
         // OpenAI defaults to Synthetic
         assert_eq!(
@@ -2700,6 +2702,7 @@ mod tests {
             api_path: None,
             auth: None,
             count_tokens: Some(CountTokensHandling::Dedupe),
+            model_mapping: HashMap::new(),
         };
         assert_eq!(
             provider.effective_count_tokens(),
@@ -2739,6 +2742,7 @@ mod tests {
                 api_path: None,
                 auth: None,
                 count_tokens: None,
+                model_mapping: HashMap::new(),
             },
         );
         providers.insert(
@@ -2750,6 +2754,7 @@ mod tests {
                 api_path: None,
                 auth: None,
                 count_tokens: None,
+                model_mapping: HashMap::new(),
             },
         );
 
@@ -2792,6 +2797,7 @@ mod tests {
                 api_path: None,
                 auth: None,
                 count_tokens: None, // Default for Anthropic is Passthrough
+                model_mapping: HashMap::new(),
             },
         );
 
@@ -2805,6 +2811,7 @@ mod tests {
                 api_path: None,
                 auth: None,
                 count_tokens: Some(CountTokensHandling::Dedupe), // Non-default
+                model_mapping: HashMap::new(),
             },
         );
 
